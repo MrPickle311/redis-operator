@@ -1,0 +1,9 @@
+apiVersion: cache.cache.example/v1
+kind: RedisInstance
+metadata:
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: redisinstance-sample
+spec:
+  # TODO(user): Add fields here
