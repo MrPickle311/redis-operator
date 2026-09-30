@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	cachev1 "github.com/twojlogin/redis-operator/api/v1"
+	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -59,7 +59,7 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = cachev1.AddToScheme(scheme.Scheme)
+	err = redisv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme

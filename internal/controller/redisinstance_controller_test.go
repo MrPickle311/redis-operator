@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cachev1 "github.com/twojlogin/redis-operator/api/v1"
+	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
 
 var _ = Describe("RedisInstance Controller", func() {
@@ -43,18 +43,22 @@ var _ = Describe("RedisInstance Controller", func() {
 			Name:      resourceName,
 			Namespace: resourceNamespace,
 		}
-		redisinstance := &cachev1.RedisInstance{}
+		redisinstance := &redisv1.RedisInstance{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind RedisInstance")
 			err := k8sClient.Get(ctx, typeNamespacedName, redisinstance)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &cachev1.RedisInstance{
+				resource := &redisv1.RedisInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: redisv1.RedisInstanceSpec{
+						Instances: 1,
+						Image:     "redis:7.2",
+						Storage:   redisv1.StorageSpec{Size: "1Gi"},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -62,7 +66,7 @@ var _ = Describe("RedisInstance Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &cachev1.RedisInstance{}
+			resource := &redisv1.RedisInstance{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 

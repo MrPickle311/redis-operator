@@ -1,9 +1,12 @@
-apiVersion: cache.cache.example/v1
+apiVersion: redis.operator.com/v1
 kind: RedisInstance
 metadata:
   labels:
     app.kubernetes.io/name: redis-operator
     app.kubernetes.io/managed-by: kustomize
-  name: redisinstance-sample
+  name: my-redis
 spec:
-  # TODO(user): Add fields here
+  instances: 3
+  image: redis:7.4
+  storage:
+    size: 1Gi

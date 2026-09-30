@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	cachev1 "github.com/twojlogin/redis-operator/api/v1"
+	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
 
 // RedisInstanceReconciler reconciles a RedisInstance object
@@ -43,14 +43,14 @@ type RedisInstanceReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=cache.cache.example,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.cache.example,resources=redisinstances/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.cache.example,resources=redisinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 
-func buildRedisPod(instance *cachev1.RedisInstance, ordinal int32) *corev1.Pod {
+func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 	runAsNonRoot := true
 	runAsUser := int64(999)
 	allowPrivEsc := false
@@ -109,7 +109,7 @@ func buildRedisPod(instance *cachev1.RedisInstance, ordinal int32) *corev1.Pod {
 	}
 }
 
-func (r *RedisInstanceReconciler) cleanupExcessPods(ctx context.Context, instance *cachev1.RedisInstance) error {
+func (r *RedisInstanceReconciler) cleanupExcessPods(ctx context.Context, instance *redisv1.RedisInstance) error {
 	logger := logf.FromContext(ctx)
 
 	var podList corev1.PodList
@@ -159,7 +159,7 @@ func ordinalFromPodName(podName, instanceName string) (int32, error) {
 	return int32(n), nil
 }
 
-func buildRedisService(instance *cachev1.RedisInstance) *corev1.Service {
+func buildRedisService(instance *redisv1.RedisInstance) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name,
@@ -176,7 +176,7 @@ func buildRedisService(instance *cachev1.RedisInstance) *corev1.Service {
 	}
 }
 
-func buildRedisPVC(instance *cachev1.RedisInstance, ordinal int32) (*corev1.PersistentVolumeClaim, error) {
+func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) (*corev1.PersistentVolumeClaim, error) {
 	size, err := resource.ParseQuantity(instance.Spec.Storage.Size)
 	if err != nil {
 		return nil, fmt.Errorf("not valid storage.size %q: %w", instance.Spec.Storage.Size, err)
@@ -211,7 +211,7 @@ func buildRedisPVC(instance *cachev1.RedisInstance, ordinal int32) (*corev1.Pers
 func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 
-	var instance cachev1.RedisInstance
+	var instance redisv1.RedisInstance
 	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -344,7 +344,7 @@ func ignoreAlreadyExists(err error) error {
 // SetupWithManager sets up the controller with the Manager.
 func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cachev1.RedisInstance{}).
+		For(&redisv1.RedisInstance{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).

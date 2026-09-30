@@ -3,19 +3,19 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.16.0
-domain: cache.example
+domain: operator.com
 layout:
 - go.kubebuilder.io/v4
 projectName: redis-operator
-repo: github.com/twojlogin/redis-operator
+repo: github.com/MrPickle311/redis-operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: cache.example
-  group: cache
+  domain: operator.com
+  group: redis
   kind: RedisInstance
-  path: github.com/twojlogin/redis-operator/api/v1
+  path: github.com/MrPickle311/redis-operator/api/v1
   version: v1
 version: "3"

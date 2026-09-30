@@ -1,4 +1,4 @@
-module github.com/twojlogin/redis-operator
+module github.com/MrPickle311/redis-operator
 
 go 1.26.0
 

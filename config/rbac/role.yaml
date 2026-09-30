@@ -19,7 +19,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cache.cache.example
+  - redis.operator.com
   resources:
   - redisinstances
   verbs:
@@ -31,13 +31,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cache.cache.example
+  - redis.operator.com
   resources:
   - redisinstances/finalizers
   verbs:
   - update
 - apiGroups:
-  - cache.cache.example
+  - redis.operator.com
   resources:
   - redisinstances/status
   verbs:

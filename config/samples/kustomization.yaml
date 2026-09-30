@@ -1,4 +1,4 @@
 ## Append samples of your project ##
 resources:
-- cache_v1_redisinstance.yaml
+- redis_v1_redisinstance.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
