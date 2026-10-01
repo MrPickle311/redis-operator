@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -43,13 +44,13 @@ var _ = Describe("RedisInstance Controller", func() {
 			Name:      resourceName,
 			Namespace: resourceNamespace,
 		}
-		redisinstance := &redisv1.RedisInstance{}
+		redisInstance := &redisv1.RedisInstance{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind RedisInstance")
-			err := k8sClient.Get(ctx, typeNamespacedName, redisinstance)
+			err := k8sClient.Get(ctx, typeNamespacedName, redisInstance)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &redisv1.RedisInstance{
+				ri := &redisv1.RedisInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: resourceNamespace,
@@ -57,22 +58,26 @@ var _ = Describe("RedisInstance Controller", func() {
 					Spec: redisv1.RedisInstanceSpec{
 						Instances: 1,
 						Image:     "redis:7.2",
-						Storage:   redisv1.StorageSpec{Size: "1Gi"},
+						Storage: redisv1.StorageSpec{
+							VolumeClaimTemplate: &redisv1.VolumeClaimTemplateSpec{
+								Size: resource.MustParse("1Gi"),
+							},
+						},
 					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, ri)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &redisv1.RedisInstance{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			ri := &redisv1.RedisInstance{}
+			err := k8sClient.Get(ctx, typeNamespacedName, ri)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance RedisInstance")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, ri)).To(Succeed())
 		})
+
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &RedisInstanceReconciler{
@@ -84,8 +89,49 @@ var _ = Describe("RedisInstance Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+	})
+
+	Context("When validating the spec with CEL rules", func() {
+		ctx := context.Background()
+
+		newInstance := func(name string, storage redisv1.StorageSpec) *redisv1.RedisInstance {
+			return &redisv1.RedisInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+				Spec: redisv1.RedisInstanceSpec{
+					Instances: 2,
+					Image:     "redis:7.2",
+					Storage:   storage,
+				},
+			}
+		}
+
+		It("rejects a spec without volumeClaimTemplate when existingClaims do not cover all instances", func() {
+			ri := newInstance("cel-missing-template", redisv1.StorageSpec{
+				ExistingClaims: []redisv1.ExistingClaim{{InstanceOrdinal: 0, ClaimName: "pvc-0"}},
+			})
+			err := k8sClient.Create(ctx, ri)
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+		})
+
+		It("rejects existingClaims with an ordinal outside of instances", func() {
+			ri := newInstance("cel-ordinal-out-of-range", redisv1.StorageSpec{
+				VolumeClaimTemplate: &redisv1.VolumeClaimTemplateSpec{Size: resource.MustParse("1Gi")},
+				ExistingClaims:      []redisv1.ExistingClaim{{InstanceOrdinal: 5, ClaimName: "pvc-5"}},
+			})
+			err := k8sClient.Create(ctx, ri)
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
+		})
+
+		It("accepts existingClaims covering every instance without volumeClaimTemplate", func() {
+			ri := newInstance("cel-all-external", redisv1.StorageSpec{
+				ExistingClaims: []redisv1.ExistingClaim{
+					{InstanceOrdinal: 0, ClaimName: "pvc-0"},
+					{InstanceOrdinal: 1, ClaimName: "pvc-1"},
+				},
+			})
+			Expect(k8sClient.Create(ctx, ri)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, ri)).To(Succeed())
 		})
 	})
 })

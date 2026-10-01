@@ -48,17 +48,63 @@ spec:
                 type: integer
               storage:
                 properties:
-                  size:
-                    type: string
-                  storageClassName:
-                    type: string
-                required:
-                - size
+                  existingClaims:
+                    description: |-
+                      ExistingClaims binds instances to PVCs created outside of the operator.
+                      The operator never deletes these PVCs.
+                    items:
+                      description: ExistingClaim binds one instance to an existing
+                        PVC.
+                      properties:
+                        claimName:
+                          minLength: 1
+                          type: string
+                        instanceOrdinal:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                      required:
+                      - claimName
+                      - instanceOrdinal
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - instanceOrdinal
+                    x-kubernetes-list-type: map
+                  volumeClaimTemplate:
+                    description: |-
+                      VolumeClaimTemplate is used to generate a PVC for every instance
+                      not listed in ExistingClaims. Generated PVCs are owned by the operator.
+                    properties:
+                      size:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      storageClassName:
+                        type: string
+                        x-kubernetes-validations:
+                        - message: storageClassName is immutable
+                          rule: self == oldSelf
+                    required:
+                    - size
+                    type: object
                 type: object
             required:
             - image
             - storage
             type: object
+            x-kubernetes-validations:
+            - message: storage.existingClaims[].instanceOrdinal must be lower than
+                instances
+              rule: '!has(self.storage.existingClaims) || self.storage.existingClaims.all(c,
+                c.instanceOrdinal < self.instances)'
+            - message: storage.volumeClaimTemplate is required unless storage.existingClaims
+                cover every instance
+              rule: has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims)
+                && size(self.storage.existingClaims) >= self.instances)
           status:
             description: status defines the observed state of RedisInstance
             properties:

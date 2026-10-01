@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -25,6 +26,8 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // RedisInstanceSpec defines the desired state of RedisInstance
+// +kubebuilder:validation:XValidation:rule="!has(self.storage.existingClaims) || self.storage.existingClaims.all(c, c.instanceOrdinal < self.instances)",message="storage.existingClaims[].instanceOrdinal must be lower than instances"
+// +kubebuilder:validation:XValidation:rule="has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims) && size(self.storage.existingClaims) >= self.instances)",message="storage.volumeClaimTemplate is required unless storage.existingClaims cover every instance"
 type RedisInstanceSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
@@ -34,8 +37,34 @@ type RedisInstanceSpec struct {
 }
 
 type StorageSpec struct {
-	Size             string  `json:"size"`
+	// VolumeClaimTemplate is used to generate a PVC for every instance
+	// not listed in ExistingClaims. Generated PVCs are owned by the operator.
+	// +optional
+	VolumeClaimTemplate *VolumeClaimTemplateSpec `json:"volumeClaimTemplate,omitempty"`
+	// ExistingClaims binds instances to PVCs created outside of the operator.
+	// The operator never deletes these PVCs.
+	// +optional
+	// +listType=map
+	// +listMapKey=instanceOrdinal
+	// +kubebuilder:validation:MaxItems=64
+	ExistingClaims []ExistingClaim `json:"existingClaims,omitempty"`
+}
+
+type VolumeClaimTemplateSpec struct {
+	Size resource.Quantity `json:"size"`
+
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClassName is immutable"
 	StorageClassName *string `json:"storageClassName,omitempty"`
+}
+
+// ExistingClaim binds one instance to an existing PVC.
+type ExistingClaim struct {
+	// +kubebuilder:validation:Minimum=0
+	InstanceOrdinal int32 `json:"instanceOrdinal"`
+
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
 }
 
 // RedisInstanceStatus defines the observed state of RedisInstance.

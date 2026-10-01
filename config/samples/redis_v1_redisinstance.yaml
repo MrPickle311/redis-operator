@@ -9,4 +9,5 @@ spec:
   instances: 3
   image: redis:7.4
   storage:
-    size: 1Gi
+    volumeClaimTemplate:
+      size: 1Gi

@@ -25,7 +25,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -54,7 +53,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 	runAsNonRoot := true
 	runAsUser := int64(999)
 	allowPrivEsc := false
-	pvcName := fmt.Sprintf("%s-%d-data", instance.Name, ordinal)
+	claimName, _ := pvcName(instance, ordinal)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -100,7 +99,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 					Name: "data",
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: pvcName,
+							ClaimName: claimName,
 						},
 					},
 				},
@@ -176,27 +175,44 @@ func buildRedisService(instance *redisv1.RedisInstance) *corev1.Service {
 	}
 }
 
-func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) (*corev1.PersistentVolumeClaim, error) {
-	size, err := resource.ParseQuantity(instance.Spec.Storage.Size)
-	if err != nil {
-		return nil, fmt.Errorf("not valid storage.size %q: %w", instance.Spec.Storage.Size, err)
-	}
+func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) *corev1.PersistentVolumeClaim {
+	volumeClaimTemplate := instance.Spec.Storage.VolumeClaimTemplate
+	name, _ := pvcName(instance, ordinal)
 
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%d-data", instance.Name, ordinal),
+			Name:      name,
 			Namespace: instance.Namespace,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: size,
+					corev1.ResourceStorage: volumeClaimTemplate.Size,
 				},
 			},
-			StorageClassName: instance.Spec.Storage.StorageClassName,
+			StorageClassName: volumeClaimTemplate.StorageClassName,
 		},
-	}, nil
+	}
+}
+
+func (r *RedisInstanceReconciler) ensurePVC(ctx context.Context, instance *redisv1.RedisInstance, ordinal int32) error {
+	if instance.Spec.Storage.VolumeClaimTemplate == nil {
+		return fmt.Errorf("instance %d has no existing claim and storage.volumeClaimTemplate is not set", ordinal)
+	}
+
+	desiredPVC := buildRedisPVC(instance, ordinal)
+	if err := ctrl.SetControllerReference(instance, desiredPVC, r.Scheme); err != nil {
+		return err
+	}
+
+	var existing corev1.PersistentVolumeClaim
+	err := r.Get(ctx, client.ObjectKeyFromObject(desiredPVC), &existing)
+	if apierrors.IsNotFound(err) {
+		logf.FromContext(ctx).Info("creating PVC", "name", desiredPVC.Name)
+		return ignoreAlreadyExists(r.Create(ctx, desiredPVC))
+	}
+	return err
 }
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -219,24 +235,10 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	var readyCount int32 = 0
 
 	for ordinal := int32(0); ordinal < instance.Spec.Instances; ordinal++ {
-		desiredPVC, err := buildRedisPVC(&instance, ordinal)
-
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := ctrl.SetControllerReference(&instance, desiredPVC, r.Scheme); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		var existingPVC corev1.PersistentVolumeClaim
-		err = r.Get(ctx, types.NamespacedName{Name: desiredPVC.Name, Namespace: desiredPVC.Namespace}, &existingPVC)
-		if apierrors.IsNotFound(err) {
-			logger.Info("creating PVC", "name", desiredPVC.Name)
-			if err := r.Create(ctx, desiredPVC); err != nil {
-				return ctrl.Result{}, ignoreAlreadyExists(err)
+		if _, external := pvcName(&instance, ordinal); !external {
+			if err := r.ensurePVC(ctx, &instance, ordinal); err != nil {
+				return ctrl.Result{}, err
 			}
-		} else if err != nil {
-			return ctrl.Result{}, err
 		}
 
 		desiredPod := buildRedisPod(&instance, ordinal)
@@ -246,7 +248,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 
 		var existingPod corev1.Pod
-		err = r.Get(ctx, types.NamespacedName{
+		err := r.Get(ctx, types.NamespacedName{
 			Name:      desiredPod.Name,
 			Namespace: desiredPod.Namespace,
 		}, &existingPod)
@@ -323,6 +325,17 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// pvcName returns the PVC name used by the instance with the given ordinal.
+// The second value is true when the PVC comes from spec.storage.existingClaims.
+func pvcName(instance *redisv1.RedisInstance, ordinal int32) (string, bool) {
+	for _, c := range instance.Spec.Storage.ExistingClaims {
+		if c.InstanceOrdinal == ordinal {
+			return c.ClaimName, true
+		}
+	}
+	return fmt.Sprintf("%s-%d-data", instance.Name, ordinal), false
 }
 
 func isPodReady(pod *corev1.Pod) bool {
