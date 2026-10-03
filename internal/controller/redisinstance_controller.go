@@ -65,6 +65,8 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 			},
 		},
 		Spec: corev1.PodSpec{
+			Hostname:  instancePodName(instance, ordinal),
+			Subdomain: headlessServiceName(instance),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsUser:    &runAsUser,
 				FSGroup:      &runAsUser,
@@ -78,7 +80,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 					Name:  "redis",
 					Image: instance.Spec.Image,
 					Ports: []corev1.ContainerPort{
-						{ContainerPort: 6379, Name: "redis"},
+						{ContainerPort: redisPort, Name: "redis"},
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
@@ -169,10 +171,49 @@ func buildRedisService(instance *redisv1.RedisInstance) *corev1.Service {
 				"app.kubernetes.io/instance": instance.Name,
 			},
 			Ports: []corev1.ServicePort{
-				{Port: 6379, TargetPort: intstr.FromInt32(6379), Name: "redis"},
+				{Port: redisPort, TargetPort: intstr.FromInt32(redisPort), Name: "redis"},
 			},
 		},
 	}
+}
+
+func buildHeadlessService(instance *redisv1.RedisInstance) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      headlessServiceName(instance),
+			Namespace: instance.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			// DNS records must exist before Pods are Ready: a replica has to
+			// resolve the primary while it is still syncing.
+			PublishNotReadyAddresses: true,
+			Selector: map[string]string{
+				"app.kubernetes.io/instance": instance.Name,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Port:       redisPort,
+					TargetPort: intstr.FromInt32(redisPort),
+					Name:       "redis",
+				},
+			},
+		},
+	}
+}
+
+func (r *RedisInstanceReconciler) ensureService(ctx context.Context, instance *redisv1.RedisInstance, desired *corev1.Service) error {
+	if err := ctrl.SetControllerReference(instance, desired, r.Scheme); err != nil {
+		return err
+	}
+
+	var existing corev1.Service
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	if apierrors.IsNotFound(err) {
+		logf.FromContext(ctx).Info("creating Service", "name", desired.Name)
+		return ignoreAlreadyExists(r.Create(ctx, desired))
+	}
+	return err
 }
 
 func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) *corev1.PersistentVolumeClaim {
@@ -234,6 +275,15 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var readyCount int32 = 0
 
+	for _, svc := range []*corev1.Service{
+		buildRedisService(&instance),
+		buildHeadlessService(&instance),
+	} {
+		if err := r.ensureService(ctx, &instance, svc); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	for ordinal := int32(0); ordinal < instance.Spec.Instances; ordinal++ {
 		if _, external := pvcName(&instance, ordinal); !external {
 			if err := r.ensurePVC(ctx, &instance, ordinal); err != nil {
@@ -267,29 +317,13 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	desiredSvc := buildRedisService(&instance)
-	if err := ctrl.SetControllerReference(&instance, desiredSvc, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	var existingSvc corev1.Service
-	err := r.Get(ctx, types.NamespacedName{Name: desiredSvc.Name, Namespace: desiredSvc.Namespace}, &existingSvc)
-	if apierrors.IsNotFound(err) {
-		logger.Info("creating Service", "name", desiredSvc.Name)
-		if err := r.Create(ctx, desiredSvc); err != nil {
-			return ctrl.Result{}, ignoreAlreadyExists(err)
-		}
-	} else if err != nil {
-		return ctrl.Result{}, err
-	}
-
 	if err := r.cleanupExcessPods(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	var primaryPod corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{
-		Name:      fmt.Sprintf("%s-0", instance.Name),
+		Name:      instancePodName(&instance, 0),
 		Namespace: instance.Namespace,
 	}, &primaryPod); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -299,16 +333,17 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
+	primaryHost := podFQDN(&instance, 0)
 	for ordinal := int32(1); ordinal < instance.Spec.Instances; ordinal++ {
-		replicaName := fmt.Sprintf("%s-%d", instance.Name, ordinal)
+		replicaName := instancePodName(&instance, ordinal)
 		var replicaPod corev1.Pod
 		if err := r.Get(ctx, types.NamespacedName{Name: replicaName, Namespace: instance.Namespace}, &replicaPod); err != nil {
 			continue
 		}
-		if !isPodReady(&replicaPod) || replicaPod.Status.PodIP == "" {
+		if !isPodReady(&replicaPod) {
 			continue
 		}
-		if err := setReplicaOf(ctx, replicaPod.Status.PodIP, primaryPod.Status.PodIP); err != nil {
+		if err := setReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost); err != nil {
 			logger.Error(err, "could not set replication", "pod", replicaName)
 			continue
 		}
@@ -325,17 +360,6 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// pvcName returns the PVC name used by the instance with the given ordinal.
-// The second value is true when the PVC comes from spec.storage.existingClaims.
-func pvcName(instance *redisv1.RedisInstance, ordinal int32) (string, bool) {
-	for _, c := range instance.Spec.Storage.ExistingClaims {
-		if c.InstanceOrdinal == ordinal {
-			return c.ClaimName, true
-		}
-	}
-	return fmt.Sprintf("%s-%d-data", instance.Name, ordinal), false
 }
 
 func isPodReady(pod *corev1.Pod) bool {

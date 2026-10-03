@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
@@ -89,6 +90,22 @@ var _ = Describe("RedisInstance Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
+
+			By("creating a headless Service")
+			var hl corev1.Service
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-hl", Namespace: resourceNamespace,
+			}, &hl)).To(Succeed())
+			Expect(hl.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+			Expect(hl.Spec.PublishNotReadyAddresses).To(BeTrue())
+
+			By("setting hostname and subdomain on the Pod")
+			var pod corev1.Pod
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-0", Namespace: resourceNamespace,
+			}, &pod)).To(Succeed())
+			Expect(pod.Spec.Hostname).To(Equal(resourceName + "-0"))
+			Expect(pod.Spec.Subdomain).To(Equal(resourceName + "-hl"))
 		})
 	})
 
