@@ -94,6 +94,26 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# Fast e2e loop: the Kind cluster is kept between runs and only specs matching
+# E2E_FOCUS run (set E2E_FOCUS= to run everything). The cluster's kubeconfig is
+# written to E2E_KUBECONFIG, so ~/.kube/config and its current context are never touched.
+# make deploy rewrites the image in config/manager/kustomization.yaml; it is restored afterwards.
+# Remove the cluster with: make cleanup-test-e2e
+E2E_KUBECONFIG ?= $(LOCALBIN)/kind-e2e.kubeconfig
+E2E_FOCUS ?= RedisInstance
+
+.PHONY: test-e2e-fast
+test-e2e-fast: manifests generate fmt vet ## Run e2e tests against a persistent Kind cluster with an isolated kubeconfig.
+	@mkdir -p $(LOCALBIN)
+	@KUBECONFIG=$(E2E_KUBECONFIG) $(MAKE) --no-print-directory setup-test-e2e
+	@$(KIND) export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(E2E_KUBECONFIG)
+	@cp config/manager/kustomization.yaml $(LOCALBIN)/manager-kustomization.yaml.bak
+	@KUBECONFIG=$(E2E_KUBECONFIG) KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
+		go test -tags=e2e ./test/e2e/ -v -ginkgo.v $(if $(E2E_FOCUS),-ginkgo.focus="$(E2E_FOCUS)"); \
+		status=$$?; \
+		cp $(LOCALBIN)/manager-kustomization.yaml.bak config/manager/kustomization.yaml; \
+		exit $$status
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run

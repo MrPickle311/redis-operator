@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -64,9 +65,11 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	deployOperator()
 })
 
 var _ = AfterSuite(func() {
+	undeployOperator()
 	teardownCertManager()
 })
 
@@ -116,4 +119,53 @@ func teardownCertManager() {
 
 	By("uninstalling CertManager")
 	utils.UninstallCertManager()
+}
+
+// deployOperator installs the CRDs and deploys the controller-manager once for all specs.
+func deployOperator() {
+	By("creating manager namespace with the restricted Pod Security level")
+	Expect(ensureRestrictedNamespace(namespace)).To(Succeed(), "Failed to create namespace")
+
+	By("installing CRDs")
+	cmd := exec.Command("make", "install")
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("deploying the controller-manager")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+}
+
+// undeployOperator removes everything deployOperator created.
+func undeployOperator() {
+	By("undeploying the controller-manager")
+	_, _ = utils.Run(exec.Command("make", "undeploy"))
+
+	By("uninstalling CRDs")
+	_, _ = utils.Run(exec.Command("make", "uninstall"))
+
+	By("removing manager namespace")
+	_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found", "--timeout=2m"))
+}
+
+// ensureRestrictedNamespace creates the namespace if needed and enforces the restricted
+// Pod Security level. It is idempotent, so a persistent Kind cluster can be reused
+// even after an interrupted run.
+func ensureRestrictedNamespace(name string) error {
+	return kubectlApply(fmt.Sprintf(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+`, name))
+}
+
+// kubectlApply applies a manifest passed on stdin.
+func kubectlApply(manifest string) error {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(manifest)
+	_, err := utils.Run(cmd)
+	return err
 }
