@@ -86,9 +86,21 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 	esac
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
+# Both e2e targets talk to Kind only through E2E_KUBECONFIG, so ~/.kube/config and its
+# current context (e.g. a real cluster) are never used or modified.
+E2E_KUBECONFIG ?= $(LOCALBIN)/kind-e2e.kubeconfig
+
+test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+	@mkdir -p $(LOCALBIN)
+	@KUBECONFIG=$(E2E_KUBECONFIG) $(MAKE) --no-print-directory setup-test-e2e
+	@$(KIND) export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(E2E_KUBECONFIG)
+	@cp config/manager/kustomization.yaml $(LOCALBIN)/manager-kustomization.yaml.bak
+	@KUBECONFIG=$(E2E_KUBECONFIG) KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) \
+		go test -tags=e2e ./test/e2e/ -v -ginkgo.v; \
+		status=$$?; \
+		cp $(LOCALBIN)/manager-kustomization.yaml.bak config/manager/kustomization.yaml; \
+		$(MAKE) --no-print-directory cleanup-test-e2e; \
+		exit $$status
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
@@ -99,7 +111,6 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 # written to E2E_KUBECONFIG, so ~/.kube/config and its current context are never touched.
 # make deploy rewrites the image in config/manager/kustomization.yaml; it is restored afterwards.
 # Remove the cluster with: make cleanup-test-e2e
-E2E_KUBECONFIG ?= $(LOCALBIN)/kind-e2e.kubeconfig
 E2E_FOCUS ?= RedisInstance
 
 .PHONY: test-e2e-fast

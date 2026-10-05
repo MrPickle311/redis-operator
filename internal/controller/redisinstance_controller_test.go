@@ -18,137 +18,119 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
 
-var _ = Describe("RedisInstance Controller", func() {
-	Context("When reconciling a resource", func() {
-		const (
-			resourceName      = "test-resource"
-			resourceNamespace = "default"
-		)
+const testNamespace = "default"
 
-		ctx := context.Background()
+var _ = Describe("RedisInstance controller", func() {
+	ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: resourceNamespace,
-		}
-		redisInstance := &redisv1.RedisInstance{}
+	Context("when reconciling a RedisInstance", func() {
+		const name = "reconcile-test"
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind RedisInstance")
-			err := k8sClient.Get(ctx, typeNamespacedName, redisInstance)
-			if err != nil && errors.IsNotFound(err) {
-				ri := &redisv1.RedisInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: resourceNamespace,
-					},
-					Spec: redisv1.RedisInstanceSpec{
-						Instances: 1,
-						Image:     "redis:7.2",
-						Storage: redisv1.StorageSpec{
-							VolumeClaimTemplate: &redisv1.VolumeClaimTemplateSpec{
-								Size: resource.MustParse("1Gi"),
-							},
-						},
-					},
-				}
-				Expect(k8sClient.Create(ctx, ri)).To(Succeed())
-			}
+			By("creating a RedisInstance with one instance")
+			instance := newRedisInstance(name, 1, redisv1.StorageSpec{
+				VolumeClaimTemplate: volumeClaimTemplate("1Gi"),
+			})
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			By("running a single reconcile")
+			Expect(reconcileOnce(ctx, objectKey(name))).To(Succeed())
 		})
 
 		AfterEach(func() {
-			ri := &redisv1.RedisInstance{}
-			err := k8sClient.Get(ctx, typeNamespacedName, ri)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance RedisInstance")
-			Expect(k8sClient.Delete(ctx, ri)).To(Succeed())
+			// envtest has no garbage collector: Pods and Services owned by the
+			// RedisInstance stay behind and are reused by the next reconcile.
+			instance := &redisv1.RedisInstance{}
+			Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 		})
 
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &RedisInstanceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
+		It("creates a headless Service that publishes not-ready Pods", func() {
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-hl"), svc)).To(Succeed())
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+			Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
+		})
 
-			By("creating a headless Service")
-			var hl corev1.Service
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: resourceName + "-hl", Namespace: resourceNamespace,
-			}, &hl)).To(Succeed())
-			Expect(hl.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
-			Expect(hl.Spec.PublishNotReadyAddresses).To(BeTrue())
+		It("gives the Pod a stable DNS name through hostname and subdomain", func() {
+			pod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
 
-			By("setting hostname and subdomain on the Pod")
-			var pod corev1.Pod
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: resourceName + "-0", Namespace: resourceNamespace,
-			}, &pod)).To(Succeed())
-			Expect(pod.Spec.Hostname).To(Equal(resourceName + "-0"))
-			Expect(pod.Spec.Subdomain).To(Equal(resourceName + "-hl"))
+			Expect(pod.Spec.Hostname).To(Equal(name + "-0"))
+			Expect(pod.Spec.Subdomain).To(Equal(name + "-hl"))
 		})
 	})
 
-	Context("When validating the spec with CEL rules", func() {
-		ctx := context.Background()
+	DescribeTable("validating spec.storage with CEL rules",
+		func(storage redisv1.StorageSpec, accepted bool) {
+			instance := newRedisInstance("cel-test", 2, storage)
+			err := k8sClient.Create(ctx, instance)
 
-		newInstance := func(name string, storage redisv1.StorageSpec) *redisv1.RedisInstance {
-			return &redisv1.RedisInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-				Spec: redisv1.RedisInstanceSpec{
-					Instances: 2,
-					Image:     "redis:7.2",
-					Storage:   storage,
-				},
+			if accepted {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+				return
 			}
-		}
-
-		It("rejects a spec without volumeClaimTemplate when existingClaims do not cover all instances", func() {
-			ri := newInstance("cel-missing-template", redisv1.StorageSpec{
-				ExistingClaims: []redisv1.ExistingClaim{{InstanceOrdinal: 0, ClaimName: "pvc-0"}},
-			})
-			err := k8sClient.Create(ctx, ri)
-			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
-		})
-
-		It("rejects existingClaims with an ordinal outside of instances", func() {
-			ri := newInstance("cel-ordinal-out-of-range", redisv1.StorageSpec{
-				VolumeClaimTemplate: &redisv1.VolumeClaimTemplateSpec{Size: resource.MustParse("1Gi")},
-				ExistingClaims:      []redisv1.ExistingClaim{{InstanceOrdinal: 5, ClaimName: "pvc-5"}},
-			})
-			err := k8sClient.Create(ctx, ri)
-			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected Invalid error, got: %v", err)
-		})
-
-		It("accepts existingClaims covering every instance without volumeClaimTemplate", func() {
-			ri := newInstance("cel-all-external", redisv1.StorageSpec{
-				ExistingClaims: []redisv1.ExistingClaim{
-					{InstanceOrdinal: 0, ClaimName: "pvc-0"},
-					{InstanceOrdinal: 1, ClaimName: "pvc-1"},
-				},
-			})
-			Expect(k8sClient.Create(ctx, ri)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, ri)).To(Succeed())
-		})
-	})
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+		},
+		Entry("rejects a missing volumeClaimTemplate when existingClaims do not cover every instance",
+			redisv1.StorageSpec{ExistingClaims: existingClaims(0)},
+			false),
+		Entry("rejects an existingClaims ordinal outside of instances",
+			redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate("1Gi"), ExistingClaims: existingClaims(5)},
+			false),
+		Entry("accepts existingClaims covering every instance without a volumeClaimTemplate",
+			redisv1.StorageSpec{ExistingClaims: existingClaims(0, 1)},
+			true),
+	)
 })
+
+// reconcileOnce runs the reconciler for the given RedisInstance exactly once.
+func reconcileOnce(ctx context.Context, key types.NamespacedName) error {
+	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+	return err
+}
+
+func objectKey(name string) types.NamespacedName {
+	return types.NamespacedName{Name: name, Namespace: testNamespace}
+}
+
+func newRedisInstance(name string, instances int32, storage redisv1.StorageSpec) *redisv1.RedisInstance {
+	return &redisv1.RedisInstance{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec: redisv1.RedisInstanceSpec{
+			Instances: instances,
+			Image:     "redis:7.2",
+			Storage:   storage,
+		},
+	}
+}
+
+func volumeClaimTemplate(size string) *redisv1.VolumeClaimTemplateSpec {
+	return &redisv1.VolumeClaimTemplateSpec{Size: resource.MustParse(size)}
+}
+
+// existingClaims binds each given ordinal to a PVC named pvc-<ordinal>.
+func existingClaims(ordinals ...int32) []redisv1.ExistingClaim {
+	claims := make([]redisv1.ExistingClaim, 0, len(ordinals))
+	for _, o := range ordinals {
+		claims = append(claims, redisv1.ExistingClaim{InstanceOrdinal: o, ClaimName: fmt.Sprintf("pvc-%d", o)})
+	}
+	return claims
+}
