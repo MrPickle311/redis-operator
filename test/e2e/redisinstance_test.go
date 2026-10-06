@@ -22,7 +22,6 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -165,10 +164,6 @@ func replicaPods() []string {
 // --- Cluster access: everything goes through kubectl, because Pod IPs inside
 // Kind are not reachable from the machine running the tests.
 
-func kubectl(args ...string) (string, error) {
-	return utils.Run(exec.Command("kubectl", args...))
-}
-
 func podReady(name string) bool {
 	out, err := kubectl("get", "pod", name, "-n", redisNamespace,
 		"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
@@ -180,11 +175,11 @@ func podIP(name string) string {
 	return out
 }
 
-// redisCLI runs redis-cli inside the given Pod and returns its trimmed output.
+// redisCLI runs redis-cli inside the given Pod and returns its output.
 func redisCLI(g Gomega, pod string, args ...string) string {
 	out, err := kubectl(append([]string{"exec", pod, "-n", redisNamespace, "--", "redis-cli"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
-	return strings.TrimSpace(out)
+	return out
 }
 
 // loadImageIntoKind pulls the image only when it is missing locally;

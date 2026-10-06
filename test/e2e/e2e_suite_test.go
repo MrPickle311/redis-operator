@@ -146,7 +146,7 @@ func undeployOperator() {
 	_, _ = utils.Run(exec.Command("make", "uninstall"))
 
 	By("removing manager namespace")
-	_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found", "--timeout=2m"))
+	_, _ = kubectl("delete", "ns", namespace, "--ignore-not-found", "--timeout=2m")
 }
 
 // ensureRestrictedNamespace creates the namespace if needed and enforces the restricted
@@ -160,6 +160,12 @@ metadata:
   labels:
     pod-security.kubernetes.io/enforce: restricted
 `, name))
+}
+
+// kubectl runs kubectl with the given arguments and returns its trimmed output.
+func kubectl(args ...string) (string, error) {
+	out, err := utils.Run(exec.Command("kubectl", args...))
+	return strings.TrimSpace(out), err
 }
 
 // kubectlApply applies a manifest passed on stdin.

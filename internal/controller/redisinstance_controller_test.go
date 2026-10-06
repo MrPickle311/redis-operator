@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"context"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -35,8 +34,6 @@ import (
 const testNamespace = "default"
 
 var _ = Describe("RedisInstance controller", func() {
-	ctx := context.Background()
-
 	Context("when reconciling a RedisInstance", func() {
 		const name = "reconcile-test"
 
@@ -48,7 +45,7 @@ var _ = Describe("RedisInstance controller", func() {
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
 			By("running a single reconcile")
-			Expect(reconcileOnce(ctx, objectKey(name))).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -101,7 +98,7 @@ var _ = Describe("RedisInstance controller", func() {
 })
 
 // reconcileOnce runs the reconciler for the given RedisInstance exactly once.
-func reconcileOnce(ctx context.Context, key types.NamespacedName) error {
+func reconcileOnce(key types.NamespacedName) error {
 	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 	return err
