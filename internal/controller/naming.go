@@ -8,6 +8,18 @@ import (
 
 const redisPort = 6379
 
+// Labels set on every Pod. Services select Pods by them, and users can rely on
+// them in their own NetworkPolicies, so they are part of the public contract.
+const (
+	labelName     = "app.kubernetes.io/name"
+	labelInstance = "app.kubernetes.io/instance"
+	labelRole     = "redis.operator.com/role"
+
+	rolePrimary = "primary"
+	roleReplica = "replica"
+	appName     = "redis"
+)
+
 // instancePodName returns the name of the Pod for the given ordinal.
 func instancePodName(instance *redisv1.RedisInstance, ordinal int32) string {
 	return fmt.Sprintf("%s-%d", instance.Name, ordinal)
@@ -35,4 +47,19 @@ func pvcName(instance *redisv1.RedisInstance, ordinal int32) (string, bool) {
 		}
 	}
 	return fmt.Sprintf("%s-%d-data", instance.Name, ordinal), false
+}
+
+// podRole returns the role of the instance with the given ordinal.
+// For now ordinal 0 is always the primary; failover (step 4) will take the
+// primary from status.currentPrimary instead.
+func podRole(ordinal int32) string {
+	if ordinal == 0 {
+		return rolePrimary
+	}
+	return roleReplica
+}
+
+// instanceSelector matches every Pod of the RedisInstance.
+func instanceSelector(instance *redisv1.RedisInstance) map[string]string {
+	return map[string]string{labelInstance: instance.Name}
 }

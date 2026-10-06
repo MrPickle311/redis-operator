@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -60,8 +61,9 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 			Name:      fmt.Sprintf("%s-%d", instance.Name, ordinal),
 			Namespace: instance.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":     "redis",
-				"app.kubernetes.io/instance": instance.Name,
+				labelName:     appName,
+				labelInstance: instance.Name,
+				labelRole:     podRole(ordinal),
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -77,10 +79,10 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 			},
 			Containers: []corev1.Container{
 				{
-					Name:  "redis",
+					Name:  appName,
 					Image: instance.Spec.Image,
 					Ports: []corev1.ContainerPort{
-						{ContainerPort: redisPort, Name: "redis"},
+						{ContainerPort: redisPort, Name: appName},
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
@@ -117,7 +119,7 @@ func (r *RedisInstanceReconciler) cleanupExcessPods(ctx context.Context, instanc
 
 	if err := r.List(ctx, &podList,
 		client.InNamespace(instance.Namespace),
-		client.MatchingLabels{"app.kubernetes.io/instance": instance.Name},
+		client.MatchingLabels(instanceSelector(instance)),
 	); err != nil {
 		return err
 	}
@@ -160,18 +162,22 @@ func ordinalFromPodName(podName, instanceName string) (int32, error) {
 	return int32(n), nil
 }
 
-func buildRedisService(instance *redisv1.RedisInstance) *corev1.Service {
+// buildClientService returns the ClusterIP Service <name>-<suffix> for clients.
+// It selects the Pods of the instance, narrowed down by the extra labels.
+func buildClientService(instance *redisv1.RedisInstance, suffix string, extra map[string]string) *corev1.Service {
+	selector := instanceSelector(instance)
+	maps.Copy(selector, extra)
+
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name,
+			Name:      instance.Name + "-" + suffix,
 			Namespace: instance.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				"app.kubernetes.io/instance": instance.Name,
-			},
+			Type:     corev1.ServiceTypeClusterIP,
+			Selector: selector,
 			Ports: []corev1.ServicePort{
-				{Port: redisPort, TargetPort: intstr.FromInt32(redisPort), Name: "redis"},
+				{Port: redisPort, TargetPort: intstr.FromInt32(redisPort), Name: appName},
 			},
 		},
 	}
@@ -188,14 +194,12 @@ func buildHeadlessService(instance *redisv1.RedisInstance) *corev1.Service {
 			// DNS records must exist before Pods are Ready: a replica has to
 			// resolve the primary while it is still syncing.
 			PublishNotReadyAddresses: true,
-			Selector: map[string]string{
-				"app.kubernetes.io/instance": instance.Name,
-			},
+			Selector:                 instanceSelector(instance),
 			Ports: []corev1.ServicePort{
 				{
 					Port:       redisPort,
 					TargetPort: intstr.FromInt32(redisPort),
-					Name:       "redis",
+					Name:       appName,
 				},
 			},
 		},
@@ -256,6 +260,23 @@ func (r *RedisInstanceReconciler) ensurePVC(ctx context.Context, instance *redis
 	return err
 }
 
+// ensureRoleLabel sets the role label on an existing Pod. The -rw and -ro
+// Services select Pods by this label, so it decides where client traffic goes.
+func (r *RedisInstanceReconciler) ensureRoleLabel(ctx context.Context, pod *corev1.Pod, role string) error {
+	if pod.Labels[labelRole] == role {
+		return nil
+	}
+
+	patch := client.MergeFrom(pod.DeepCopy())
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[labelRole] = role
+
+	logf.FromContext(ctx).Info("Updated Pod role label", "name", pod.Name, "role", role)
+	return r.Patch(ctx, pod, patch)
+}
+
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
@@ -276,8 +297,10 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	var readyCount int32 = 0
 
 	for _, svc := range []*corev1.Service{
-		buildRedisService(&instance),
 		buildHeadlessService(&instance),
+		buildClientService(&instance, "rw", map[string]string{labelRole: rolePrimary}),
+		buildClientService(&instance, "ro", map[string]string{labelRole: roleReplica}),
+		buildClientService(&instance, "r", nil),
 	} {
 		if err := r.ensureService(ctx, &instance, svc); err != nil {
 			return ctrl.Result{}, err
@@ -312,6 +335,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		} else if err != nil {
 			return ctrl.Result{}, err
 		}
+
+		if err := r.ensureRoleLabel(ctx, &existingPod, podRole(ordinal)); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		if isPodReady(&existingPod) {
 			readyCount++
 		}

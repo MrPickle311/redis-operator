@@ -38,8 +38,8 @@ var _ = Describe("RedisInstance controller", func() {
 		const name = "reconcile-test"
 
 		BeforeEach(func() {
-			By("creating a RedisInstance with one instance")
-			instance := newRedisInstance(name, 1, redisv1.StorageSpec{
+			By("creating a RedisInstance with a primary and one replica")
+			instance := newRedisInstance(name, 2, redisv1.StorageSpec{
 				VolumeClaimTemplate: volumeClaimTemplate("1Gi"),
 			})
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -71,6 +71,28 @@ var _ = Describe("RedisInstance controller", func() {
 			Expect(pod.Spec.Hostname).To(Equal(name + "-0"))
 			Expect(pod.Spec.Subdomain).To(Equal(name + "-hl"))
 		})
+
+		It("labels the first Pod as primary and the others as replicas", func() {
+			for pod, role := range map[string]string{name + "-0": rolePrimary, name + "-1": roleReplica} {
+				Expect(podLabels(objectKey(pod))).To(HaveKeyWithValue(labelRole, role), "Pod %s", pod)
+			}
+		})
+
+		DescribeTable("creates a client Service per access mode",
+			func(suffix string, wantSelector map[string]string) {
+				svc := &corev1.Service{}
+				Expect(k8sClient.Get(ctx, objectKey(name+suffix), svc)).To(Succeed())
+
+				Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+				Expect(svc.Spec.Selector).To(Equal(wantSelector))
+			},
+			Entry("-rw sends reads and writes to the primary", "-rw",
+				map[string]string{labelInstance: name, labelRole: rolePrimary}),
+			Entry("-ro sends reads to replicas only", "-ro",
+				map[string]string{labelInstance: name, labelRole: roleReplica}),
+			Entry("-r sends reads to every instance", "-r",
+				map[string]string{labelInstance: name}),
+		)
 	})
 
 	DescribeTable("validating spec.storage with CEL rules",
@@ -96,6 +118,12 @@ var _ = Describe("RedisInstance controller", func() {
 			true),
 	)
 })
+
+func podLabels(key types.NamespacedName) map[string]string {
+	pod := &corev1.Pod{}
+	Expect(k8sClient.Get(ctx, key, pod)).To(Succeed())
+	return pod.Labels
+}
 
 // reconcileOnce runs the reconciler for the given RedisInstance exactly once.
 func reconcileOnce(key types.NamespacedName) error {

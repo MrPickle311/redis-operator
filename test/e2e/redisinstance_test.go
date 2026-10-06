@@ -119,6 +119,21 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}
 	})
 
+	It("accepts writes through -rw and rejects them through -ro", func() {
+		Eventually(func(g Gomega) {
+			g.Expect(redisCLI(g, primary, "-h", redisName+"-rw", "SET", "rw-key", "via-rw")).To(Equal("OK"))
+		}).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(redisCLI(g, primary, "-h", redisName+"-ro", "GET", "rw-key")).To(Equal("via-rw"))
+		}).Should(Succeed(), "a replica behind -ro did not serve the read")
+
+		// redis-cli may exit with 0 on an error reply, so only the output is checked.
+		out, _ := kubectl("exec", primary, "-n", redisNamespace, "--",
+			"redis-cli", "-h", redisName+"-ro", "SET", "rw-key", "via-ro")
+		Expect(out).To(ContainSubstring("READONLY"))
+	})
+
 	It("reconnects the replicas after the primary Pod is recreated", func() {
 		oldIP := podIP(primary)
 
