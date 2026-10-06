@@ -78,6 +78,13 @@ var _ = Describe("RedisInstance controller", func() {
 			}
 		})
 
+		It("owns the PVCs it creates, so they are deleted with the RedisInstance", func() {
+			pvc := &corev1.PersistentVolumeClaim{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-0-data"), pvc)).To(Succeed())
+			Expect(metav1.GetControllerOf(pvc)).NotTo(BeNil())
+			Expect(metav1.GetControllerOf(pvc).Name).To(Equal(name))
+		})
+
 		DescribeTable("creates a client Service per access mode",
 			func(suffix string, wantSelector map[string]string) {
 				svc := &corev1.Service{}
@@ -93,6 +100,69 @@ var _ = Describe("RedisInstance controller", func() {
 			Entry("-r sends reads to every instance", "-r",
 				map[string]string{labelInstance: name}),
 		)
+	})
+
+	Context("with storage.existingClaims", func() {
+		const name = "existing-claims-test"
+
+		BeforeEach(func() {
+			instance := newRedisInstance(name, 1, redisv1.StorageSpec{ExistingClaims: existingClaims(0)})
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+		})
+
+		AfterEach(func() {
+			Expect(k8sClient.Delete(ctx, newRedisInstance(name, 1, redisv1.StorageSpec{}))).To(Succeed())
+		})
+
+		It("mounts the external PVC and does not create one of its own", func() {
+			pod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
+			Expect(pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("pvc-0"))
+
+			Expect(pvcDeleted(name+"-0-data")).To(BeTrue(), "operator created a PVC although an external one was given")
+		})
+	})
+
+	// Ordered with BeforeAll: envtest has no garbage collector, so Pods and PVCs
+	// from a second run of the setup would collide with the first one.
+	Context("when scaling down", Ordered, func() {
+		const name = "scale-down-test"
+
+		BeforeAll(func() {
+			By("pre-creating a PVC for ordinal 2 that the operator does not own")
+			Expect(k8sClient.Create(ctx, newPVC(name+"-2-data"))).To(Succeed())
+
+			By("creating 3 instances")
+			instance := newRedisInstance(name, 3, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate("1Gi")})
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+
+			By("scaling down to 1 instance")
+			Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+			instance.Spec.Instances = 1
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+		})
+
+		AfterAll(func() {
+			Expect(k8sClient.Delete(ctx, newRedisInstance(name, 1, redisv1.StorageSpec{}))).To(Succeed())
+		})
+
+		It("deletes the Pods of removed instances", func() {
+			for _, pod := range []string{name + "-1", name + "-2"} {
+				err := k8sClient.Get(ctx, objectKey(pod), &corev1.Pod{})
+				Expect(errors.IsNotFound(err)).To(BeTrue(), "Pod %s still exists", pod)
+			}
+		})
+
+		It("deletes the PVC it created for a removed instance", func() {
+			Expect(pvcDeleted(name + "-1-data")).To(BeTrue())
+		})
+
+		It("keeps a PVC it does not own, even when the name matches", func() {
+			Expect(pvcDeleted(name + "-2-data")).To(BeFalse())
+		})
 	})
 
 	DescribeTable("validating spec.storage with CEL rules",
@@ -118,6 +188,31 @@ var _ = Describe("RedisInstance controller", func() {
 			true),
 	)
 })
+
+// pvcDeleted reports whether the PVC is gone or being deleted. envtest runs no
+// controller that removes the pvc-protection finalizer, so a deleted PVC may linger.
+func pvcDeleted(name string) bool {
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := k8sClient.Get(ctx, objectKey(name), pvc)
+	if errors.IsNotFound(err) {
+		return true
+	}
+	Expect(err).NotTo(HaveOccurred())
+	return pvc.DeletionTimestamp != nil
+}
+
+// newPVC returns a PVC that is not owned by any RedisInstance.
+func newPVC(name string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			},
+		},
+	}
+}
 
 func podLabels(key types.NamespacedName) map[string]string {
 	pod := &corev1.Pod{}

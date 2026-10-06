@@ -136,12 +136,8 @@ func (r *RedisInstanceReconciler) cleanupExcessPods(ctx context.Context, instanc
 				return err
 			}
 
-			var pvc corev1.PersistentVolumeClaim
-			pvcName := fmt.Sprintf("%s-%d-data", instance.Name, ordinal)
-			if err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: instance.Namespace}, &pvc); err == nil {
-				if err := r.Delete(ctx, &pvc); err != nil && !apierrors.IsNotFound(err) {
-					return err
-				}
+			if err := r.deleteOwnedPVC(ctx, instance, ordinal); err != nil {
+				return err
 			}
 		}
 	}
@@ -275,6 +271,24 @@ func (r *RedisInstanceReconciler) ensureRoleLabel(ctx context.Context, pod *core
 
 	logf.FromContext(ctx).Info("Updated Pod role label", "name", pod.Name, "role", role)
 	return r.Patch(ctx, pod, patch)
+}
+
+// deleteOwnedPVC deletes the PVC of the given ordinal, but only when the
+// RedisInstance owns it. A PVC created by the user, even one with a matching
+// name, holds data the operator must never touch.
+func (r *RedisInstanceReconciler) deleteOwnedPVC(ctx context.Context, instance *redisv1.RedisInstance, ordinal int32) error {
+	currentPvcName, _ := pvcName(instance, ordinal)
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, types.NamespacedName{Name: currentPvcName, Namespace: instance.Namespace}, &pvc); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(&pvc, instance) {
+		return nil
+	}
+
+	logf.FromContext(ctx).Info("Deleting PVC of removed instance", "name", pvc.Name)
+	return client.IgnoreNotFound(r.Delete(ctx, &pvc))
 }
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
