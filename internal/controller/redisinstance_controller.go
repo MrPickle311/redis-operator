@@ -376,6 +376,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	primaryHost := podFQDN(&instance, 0)
+	replicationPending := false
 	for ordinal := int32(1); ordinal < instance.Spec.Instances; ordinal++ {
 		replicaName := instancePodName(&instance, ordinal)
 		var replicaPod corev1.Pod
@@ -385,11 +386,16 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if !isPodReady(&replicaPod) {
 			continue
 		}
-		if err := setReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost); err != nil {
-			logger.Error(err, "could not set replication", "pod", replicaName)
+
+		changed, err := ensureReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost)
+		if err != nil {
+			logger.Error(err, "Failed to configure replication", "pod", replicaName)
+			replicationPending = true
 			continue
 		}
-		logger.Info("replication configured", "pod", replicaName)
+		if changed {
+			logger.Info("Configured replication", "pod", replicaName, "primary", primaryHost)
+		}
 	}
 
 	if instance.Status.ReadyInstances != readyCount || instance.Status.CurrentPrimary != primaryPod.Name {
@@ -399,6 +405,10 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Status().Update(ctx, &instance); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	if replicationPending {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	return ctrl.Result{}, nil

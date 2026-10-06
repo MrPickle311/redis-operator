@@ -22,6 +22,7 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -134,6 +135,22 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		Expect(out).To(ContainSubstring("READONLY"))
 	})
 
+	It("does not resync the replicas when reconciling again", func() {
+		var before string
+		Eventually(func(g Gomega) { before = infoField(redisCLI(g, primary, "INFO", "stats"), "sync_full") }).Should(Succeed())
+
+		By("triggering a few reconciles by touching the RedisInstance")
+		for i := range 3 {
+			_, err := kubectl("annotate", "redisinstance", redisName, "-n", redisNamespace,
+				fmt.Sprintf("e2e/touch=%d", i), "--overwrite")
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		Consistently(func(g Gomega) string {
+			return infoField(redisCLI(g, primary, "INFO", "stats"), "sync_full")
+		}, 15*time.Second).Should(Equal(before), "a reconcile triggered a full resync of a replica")
+	})
+
 	It("reconnects the replicas after the primary Pod is recreated", func() {
 		oldIP := podIP(primary)
 
@@ -195,6 +212,16 @@ func redisCLI(g Gomega, pod string, args ...string) string {
 	out, err := kubectl(append([]string{"exec", pod, "-n", redisNamespace, "--", "redis-cli"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
+}
+
+// infoField returns the value of a "field:value" line from Redis INFO output.
+func infoField(info, field string) string {
+	for line := range strings.Lines(info) {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), field+":"); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // loadImageIntoKind pulls the image only when it is missing locally;
