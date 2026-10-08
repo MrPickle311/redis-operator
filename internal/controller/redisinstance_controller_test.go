@@ -31,7 +31,10 @@ import (
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
 
-const testNamespace = "default"
+const (
+	testNamespace     = "default"
+	testOperatorImage = "example.com/redis-operator:test"
+)
 
 var _ = Describe("RedisInstance controller", func() {
 	Context("when reconciling a RedisInstance", func() {
@@ -70,6 +73,25 @@ var _ = Describe("RedisInstance controller", func() {
 
 			Expect(pod.Spec.Hostname).To(Equal(name + "-0"))
 			Expect(pod.Spec.Subdomain).To(Equal(name + "-hl"))
+		})
+
+		It("runs redis-server under the Instance Manager copied by an initContainer", func() {
+			pod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
+
+			Expect(pod.Spec.InitContainers).To(HaveLen(1))
+			bootstrap := pod.Spec.InitContainers[0]
+			Expect(bootstrap.Image).To(Equal(testOperatorImage))
+			Expect(bootstrap.Command).To(Equal([]string{"/manager", "bootstrap", "/controller/manager"}))
+
+			redis := pod.Spec.Containers[0]
+			Expect(redis.Command).To(Equal([]string{"/controller/manager", "instance", "run"}))
+
+			By("sharing the binary through an emptyDir mounted in both containers")
+			Expect(pod.Spec.Volumes).To(ContainElement(HaveField("Name", "controller")))
+			for _, c := range []corev1.Container{bootstrap, redis} {
+				Expect(c.VolumeMounts).To(ContainElement(HaveField("MountPath", "/controller")), "container %s", c.Name)
+			}
 		})
 
 		It("labels the first Pod as primary and the others as replicas", func() {
@@ -118,7 +140,7 @@ var _ = Describe("RedisInstance controller", func() {
 		It("mounts the external PVC and does not create one of its own", func() {
 			pod := &corev1.Pod{}
 			Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
-			Expect(pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("pvc-0"))
+			Expect(dataClaimName(pod)).To(Equal("pvc-0"))
 
 			Expect(pvcDeleted(name+"-0-data")).To(BeTrue(), "operator created a PVC although an external one was given")
 		})
@@ -189,6 +211,16 @@ var _ = Describe("RedisInstance controller", func() {
 	)
 })
 
+// dataClaimName returns the PVC mounted as the "data" volume of the Pod.
+func dataClaimName(pod *corev1.Pod) string {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "data" && v.PersistentVolumeClaim != nil {
+			return v.PersistentVolumeClaim.ClaimName
+		}
+	}
+	return ""
+}
+
 // pvcDeleted reports whether the PVC is gone or being deleted. envtest runs no
 // controller that removes the pvc-protection finalizer, so a deleted PVC may linger.
 func pvcDeleted(name string) bool {
@@ -222,7 +254,7 @@ func podLabels(key types.NamespacedName) map[string]string {
 
 // reconcileOnce runs the reconciler for the given RedisInstance exactly once.
 func reconcileOnce(key types.NamespacedName) error {
-	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), OperatorImage: testOperatorImage}
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 	return err
 }

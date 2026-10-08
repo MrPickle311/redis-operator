@@ -6,3 +6,12 @@ images:
 - name: controller
   newName: registry.homelab/redis-operator
   newTag: dev
+replacements:
+  - source:
+      kind: Deployment
+      fieldPath: spec.template.spec.containers.[name=manager].image
+    targets:
+      - select:
+          kind: Deployment
+        fieldPaths:
+          - spec.template.spec.containers.[name=manager].env.[name=OPERATOR_IMAGE].value

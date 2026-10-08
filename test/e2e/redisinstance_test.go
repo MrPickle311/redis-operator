@@ -91,6 +91,15 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}
 	})
 
+	It("runs the Instance Manager as PID 1 with redis-server as its child", func() {
+		out, err := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "cat", "/proc/1/cmdline")
+		Expect(err).NotTo(HaveOccurred())
+		// cmdline separates the arguments with NUL bytes.
+		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run", ""))
+
+		Expect(redisCLI(Default, primary, "PING")).To(Equal("PONG"))
+	})
+
 	It("creates the headless Service", func() {
 		out, err := kubectl("get", "svc", redisName+"-hl", "-n", redisNamespace,
 			"-o", "jsonpath={.spec.clusterIP} {.spec.publishNotReadyAddresses}")
@@ -130,7 +139,7 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}).Should(Succeed(), "a replica behind -ro did not serve the read")
 
 		// redis-cli may exit with 0 on an error reply, so only the output is checked.
-		out, _ := kubectl("exec", primary, "-n", redisNamespace, "--",
+		out, _ := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--",
 			"redis-cli", "-h", redisName+"-ro", "SET", "rw-key", "via-ro")
 		Expect(out).To(ContainSubstring("READONLY"))
 	})
@@ -209,7 +218,7 @@ func podIP(name string) string {
 
 // redisCLI runs redis-cli inside the given Pod and returns its output.
 func redisCLI(g Gomega, pod string, args ...string) string {
-	out, err := kubectl(append([]string{"exec", pod, "-n", redisNamespace, "--", "redis-cli"}, args...)...)
+	out, err := kubectl(append([]string{"exec", pod, "-n", redisNamespace, "-c", "redis", "--", "redis-cli"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
 }

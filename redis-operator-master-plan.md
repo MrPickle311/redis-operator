@@ -298,6 +298,39 @@ spec:
 
 Silnik jest w IM ukryty za interfejsem `Engine` (start, konfiguracja, `INFO`, replikacja). Dzięki temu da się później podpiąć obok niego dodatkowy proces (np. syncer active-active) bez przepisywania IM.
 
+### 3.8 RBAC i tożsamości
+
+Kopiujemy sprawdzone wzorce zamiast projektować własne: tożsamość per instancja z CloudNativePG, ograniczanie zasięgu operatora ze Strimzi. Są trzy tożsamości, każda z minimalnymi uprawnieniami.
+
+#### Operator
+
+- Uprawnienia wyłącznie z markerów `+kubebuilder:rbac` → `make manifests` → `config/rbac/role.yaml`. Nowy typ zasobu = nowy marker, nigdy ręczna edycja YAML.
+- **Domyślnie cały klaster** (ClusterRole + ClusterRoleBinding), jak CNPG.
+- **Tryb ograniczony do namespace'ów** (wzorzec Strimzi): zmienna `WATCH_NAMESPACES=a,b` → cache managera obserwuje tylko te namespace'y (`cache.Options.DefaultNamespaces`), a instalacja wiąże **ten sam ClusterRole** przez **RoleBinding** w każdym obserwowanym namespace zamiast ClusterRoleBinding. Uprawnienia są wtedy fizycznie ograniczone przez RBAC, a nie tylko przez konfigurację operatora. Wtedy też Secrety całego klastra nie są czytelne dla operatora.
+- Operator **nie** dostaje `escalate`/`bind`. Tworzy Role dla IM tylko z uprawnieniami, które sam posiada (ochrona przed eskalacją w K8s wymusza to automatycznie).
+
+#### Instance Manager (wzorzec CNPG)
+
+Operator tworzy **per `RedisInstance`** trzy obiekty z ownerReference (znikają razem z instancją):
+
+| Obiekt | Nazwa | Zawartość |
+|---|---|---|
+| ServiceAccount | `<name>` | używany przez Pody instancji (`serviceAccountName`) |
+| Role | `<name>` | `redis.operator.com/redisinstances`: `get`, `list`, `watch`, `resourceNames: [<name>]` |
+| | | `secrets`: `get`, `resourceNames: [...]` tylko dla Secretów czytanych przez API (np. poświadczenia S3 backupu, sekcja 10) |
+| RoleBinding | `<name>` | Role `<name>` → SA `<name>` |
+
+- **IM tylko czyta.** Status `RedisInstance` pisze wyłącznie operator (jeden lider, sekcja 3.3). To świadomie ciaśniej niż w CNPG, gdzie instance manager aktualizuje status klastra.
+- IM obserwuje swój obiekt z `fieldSelector=metadata.name=<name>`, bo `resourceNames` przy `list`/`watch` działa tylko z takim selektorem.
+- Secrety montowane jako wolumen (TLS, ACL, `<name>-internal-auth`) **nie** wymagają RBAC, montuje je kubelet. Przez API IM czyta tylko to, czego nie da się zamontować do działającego Poda.
+- `spec.serviceAccountTemplate.metadata` (wzorzec CNPG): użytkownik może dodać adnotacje do SA, np. `eks.amazonaws.com/role-arn` (IRSA) albo `iam.gke.io/gcp-service-account` (Workload Identity). Backup do S3/GCS działa wtedy bez statycznych kluczy w Secrecie.
+- Do czasu, aż IM potrzebuje API (krok 2), Pody mają `automountServiceAccountToken: false`: w kontenerze z Redisem nie leży żaden token.
+
+#### Użytkownicy klastra
+
+- Role wygenerowane przez kubebuilder (`*_admin_role`, `*_editor_role`, `*_viewer_role`) dostają etykiety agregacji `rbac.authorization.k8s.io/aggregate-to-admin|edit|view: "true"` (jak opcja `rbac.aggregateClusterRoles` w Helm chart CNPG). Właściciel namespace'u z wbudowaną rolą `edit` może wtedy tworzyć `RedisInstance` bez dodatkowych uprawnień od admina klastra.
+- Viewer **nie** widzi Secretów `<name>-internal-auth`: wbudowana rola `view` celowo nie obejmuje Secretów.
+
 ---
 
 ## 4. Services — dostęp do danych
@@ -654,6 +687,7 @@ Webhook jest **wyłącznie warstwą UX** (szybki, czytelny błąd przy `kubectl 
 1. **Spójność point-in-time backupu RedisCluster** — `CLIENT PAUSE WRITE` na wszystkich shardach vs akceptacja niespójności rzędu sekund.
 2. **Samo-fencing przy utracie API servera** — czy domyślnie włączone. Chroni przed split-brain, ale awaria control plane zatrzymuje zapisy we wszystkich bazach. CNPG ma to jako opcję.
 3. **Zakres wsparcia Redis ≥ 7.4 / 8.x** — technicznie działa, ale licencja RSAL/SSPL/AGPL może blokować część użytkowników. Czy testujemy w CI tylko Valkey + Redis 7.2?
+4. **Dostęp do RedisCluster spoza K8s przez jeden adres** *(do uzupełnienia na koniec, przy kroku 10)*. Wewnątrz klastra wystarcza Service `<name>` jako seed. Z zewnątrz zwykły LB (L4) nie działa: klient dostaje w `MOVED`/`ASK` adresy node'ów i musi łączyć się z nimi bezpośrednio. Kierunek: opcjonalne `spec.proxy` (Deployment Envoy `redis_proxy` + Service `<name>-proxy` typu LoadBalancer). Klient widzi pojedynczego Redisa, a proxy routuje po slocie. Ograniczenia do opisania w dokumentacji: komendy wieloklawiszowe tylko w obrębie slotu (`{hashtag}`), pub/sub, `MULTI`, `SCAN` po całym klastrze, komendy blokujące. Alternatywy odrzucone: LB per node (N adresów), jeden LB z routingiem SNI (reguła per node, wymaga TLS).
 
 ---
 
@@ -751,8 +785,8 @@ redis-operator/
 ```mermaid
 graph TD
     S0["0. Porządki<br/>API group, spec.storage, headless + DNS,<br/>-rw/-ro/-r, etykiety role, PVC managed/external,<br/>CEL, idempotentny REPLICAOF"]
-    S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni"]
-    S2["2. IM v2<br/>/replicaof, /promote, /demote, /fence,<br/>epoch, bezpieczny start"]
+    S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni"]
+    S2["2. IM v2<br/>/replicaof, /promote, /demote, /fence,<br/>epoch, bezpieczny start,<br/>SA + Role + RoleBinding per instancja"]
     S3["3. Reconciler → imclient<br/>rolling update, switchover"]
     S4["4. Failover<br/>PDB, anti-affinity, węzeł NotReady, drain"]
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]

@@ -19,8 +19,10 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 
+	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -54,6 +56,23 @@ func init() {
 
 // nolint:gocyclo
 func main() {
+
+	// The same binary also runs inside every Redis Pod; see buildRedisPod.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "bootstrap":
+			exitOnError(instancemanager.CopySelf(os.Args[2]))
+		case "instance":
+			exitOnError(instancemanager.Run(ctrl.SetupSignalHandler(), "redis-server"))
+		}
+	}
+
+	operatorImage := os.Getenv("OPERATOR_IMAGE")
+	if operatorImage == "" {
+		fmt.Fprintln(os.Stderr, "OPERATOR_IMAGE must be set to the image of this operator")
+		os.Exit(1)
+	}
+
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -183,8 +202,9 @@ func main() {
 	}
 
 	if err := (&controller.RedisInstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisinstance")
 		os.Exit(1)
@@ -205,4 +225,13 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// exitOnError ends a subcommand: with status 1 and the error on failure, 0 otherwise.
+func exitOnError(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }

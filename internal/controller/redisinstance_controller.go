@@ -41,6 +41,10 @@ import (
 type RedisInstanceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// OperatorImage is the image of the operator itself. Its initContainer
+	// copies the Instance Manager binary into every Redis Pod.
+	OperatorImage string
 }
 
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
@@ -50,11 +54,17 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 
-func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
+func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage string) *corev1.Pod {
 	runAsNonRoot := true
 	runAsUser := int64(999)
 	allowPrivEsc := false
 	claimName, _ := pvcName(instance, ordinal)
+
+	containerSecurity := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowPrivEsc,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+	controllerMount := corev1.VolumeMount{Name: controllerVolume, MountPath: controllerDir}
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -77,6 +87,15 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 					Type: corev1.SeccompProfileTypeRuntimeDefault,
 				},
 			},
+			InitContainers: []corev1.Container{
+				{
+					Name:            "bootstrap",
+					Image:           operatorImage,
+					Command:         []string{"/manager", "bootstrap", managerPath},
+					VolumeMounts:    []corev1.VolumeMount{controllerMount},
+					SecurityContext: containerSecurity,
+				},
+			},
 			Containers: []corev1.Container{
 				{
 					Name:  appName,
@@ -84,21 +103,22 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32) *corev1.Pod {
 					Ports: []corev1.ContainerPort{
 						{ContainerPort: redisPort, Name: appName},
 					},
+					Command: []string{managerPath, "instance", "run"},
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",
 							MountPath: "/data",
 						},
+						controllerMount,
 					},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: &allowPrivEsc,
-						Capabilities: &corev1.Capabilities{
-							Drop: []corev1.Capability{"ALL"},
-						},
-					},
+					SecurityContext: containerSecurity,
 				},
 			},
 			Volumes: []corev1.Volume{
+				{
+					Name:         controllerVolume,
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				},
 				{
 					Name: "data",
 					VolumeSource: corev1.VolumeSource{
@@ -328,7 +348,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			}
 		}
 
-		desiredPod := buildRedisPod(&instance, ordinal)
+		desiredPod := buildRedisPod(&instance, ordinal, r.OperatorImage)
 
 		if err := ctrl.SetControllerReference(&instance, desiredPod, r.Scheme); err != nil {
 			return ctrl.Result{}, err

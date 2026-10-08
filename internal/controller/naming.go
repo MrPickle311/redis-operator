@@ -20,6 +20,14 @@ const (
 	appName     = "redis"
 )
 
+// The initContainer copies the Instance Manager binary into the controllerVolume
+// emptyDir; the redis container then runs it from managerPath.
+const (
+	controllerVolume = "controller"
+	controllerDir    = "/controller"
+	managerPath      = controllerDir + "/manager"
+)
+
 // instancePodName returns the name of the Pod for the given ordinal.
 func instancePodName(instance *redisv1.RedisInstance, ordinal int32) string {
 	return fmt.Sprintf("%s-%d", instance.Name, ordinal)
