@@ -63,7 +63,7 @@ func main() {
 		case "bootstrap":
 			exitOnError(instancemanager.CopySelf(os.Args[2]))
 		case "instance":
-			exitOnError(instancemanager.Run(ctrl.SetupSignalHandler(), "redis-server"))
+			exitOnError(instancemanager.RunInstance(ctrl.SetupSignalHandler()))
 		}
 	}
 

@@ -94,6 +94,20 @@ var _ = Describe("RedisInstance controller", func() {
 			}
 		})
 
+		It("probes the Instance Manager and mounts no ServiceAccount token", func() {
+			pod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
+			redis := pod.Spec.Containers[0]
+
+			Expect(redis.ReadinessProbe.HTTPGet.Path).To(Equal("/readyz"))
+			Expect(redis.LivenessProbe.HTTPGet.Path).To(Equal("/healthz"))
+			for _, probe := range []*corev1.Probe{redis.ReadinessProbe, redis.LivenessProbe} {
+				Expect(probe.HTTPGet.Port.IntValue()).To(Equal(8001))
+			}
+
+			Expect(pod.Spec.AutomountServiceAccountToken).To(HaveValue(BeFalse()))
+		})
+
 		It("labels the first Pod as primary and the others as replicas", func() {
 			for pod, role := range map[string]string{name + "-0": rolePrimary, name + "-1": roleReplica} {
 				Expect(podLabels(objectKey(pod))).To(HaveKeyWithValue(labelRole, role), "Pod %s", pod)

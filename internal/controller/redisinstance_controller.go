@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
+	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
 
 // RedisInstanceReconciler reconciles a RedisInstance object
@@ -56,6 +57,7 @@ type RedisInstanceReconciler struct {
 
 func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage string) *corev1.Pod {
 	runAsNonRoot := true
+	automountToken := false
 	runAsUser := int64(999)
 	allowPrivEsc := false
 	claimName, _ := pvcName(instance, ordinal)
@@ -77,8 +79,9 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 			},
 		},
 		Spec: corev1.PodSpec{
-			Hostname:  instancePodName(instance, ordinal),
-			Subdomain: headlessServiceName(instance),
+			Hostname:                     instancePodName(instance, ordinal),
+			Subdomain:                    headlessServiceName(instance),
+			AutomountServiceAccountToken: &automountToken,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsUser:    &runAsUser,
 				FSGroup:      &runAsUser,
@@ -102,8 +105,11 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 					Image: instance.Spec.Image,
 					Ports: []corev1.ContainerPort{
 						{ContainerPort: redisPort, Name: appName},
+						{ContainerPort: instancemanager.ProbePort, Name: "probes"},
 					},
-					Command: []string{managerPath, "instance", "run"},
+					ReadinessProbe: imProbe("/readyz"),
+					LivenessProbe:  imProbe("/healthz"),
+					Command:        []string{managerPath, "instance", "run"},
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",
@@ -129,6 +135,16 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 				},
 			},
 		},
+	}
+}
+
+// imProbe checks the given path on the probe port of the Instance Manager.
+func imProbe(path string) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(instancemanager.ProbePort)},
+		},
+		PeriodSeconds: 5,
 	}
 }
 

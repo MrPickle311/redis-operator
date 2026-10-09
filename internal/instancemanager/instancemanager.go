@@ -2,16 +2,42 @@ package instancemanager
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // shutdownTimeout is how long redis-server may take to stop after SIGTERM
 // (e.g. to save the dataset) before it is killed.
 const shutdownTimeout = 30 * time.Second
+
+// RunInstance runs redis-server and serves the probes until redis-server exits.
+func RunInstance(ctx context.Context) error {
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DialTimeout: time.Second})
+	defer func() { _ = rdb.Close() }()
+
+	server := &http.Server{
+		Addr:              ":" + strconv.Itoa(ProbePort),
+		Handler:           probeHandler(rdb),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(os.Stderr, "probe server stopped:", err)
+		}
+	}()
+	defer func() { _ = server.Close() }()
+
+	return Run(ctx, "redis-server")
+}
 
 // Run starts the given command (redis-server) and waits until it exits.
 // When ctx is cancelled, the process receives SIGTERM instead of the default

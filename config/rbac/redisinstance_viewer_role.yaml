@@ -11,6 +11,9 @@ metadata:
   labels:
     app.kubernetes.io/name: redis-operator
     app.kubernetes.io/managed-by: kustomize
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"   # redisinstance_admin_role.yaml
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"    # redisinstance_editor_role.yaml
+    rbac.authorization.k8s.io/aggregate-to-view: "true"    # redisinstance_viewer_role.yaml
   name: redisinstance-viewer-role
 rules:
 - apiGroups:
