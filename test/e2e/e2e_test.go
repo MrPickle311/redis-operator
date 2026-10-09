@@ -97,6 +97,28 @@ var _ = Describe("Manager", Ordered, func() {
 	// +kubebuilder:scaffold:e2e-webhooks-checks
 })
 
+// Scenario: the user-facing roles shipped with the operator aggregate into the
+// built-in view/edit/admin ClusterRoles, and only with the matching verbs.
+var _ = Describe("RBAC", func() {
+	DescribeTable("extends the built-in roles with RedisInstance permissions",
+		func(builtinRole, verb string, allowed bool) {
+			// can-i with --as checks a fresh user that is bound only to builtinRole.
+			user := "e2e-" + builtinRole
+			_, err := kubectl("create", "clusterrolebinding", user, "--clusterrole="+builtinRole, "--user="+user)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(kubectl, "delete", "clusterrolebinding", user)
+
+			out, _ := kubectl("auth", "can-i", verb, "redisinstances.redis.operator.com", "--as="+user)
+			Expect(out).To(Equal(map[bool]string{true: "yes", false: "no"}[allowed]))
+		},
+		Entry("view can read RedisInstances", "view", "get", true),
+		Entry("view cannot create RedisInstances", "view", "create", false),
+		Entry("view cannot delete RedisInstances", "view", "delete", false),
+		Entry("edit can create RedisInstances", "edit", "create", true),
+		Entry("admin can delete RedisInstances", "admin", "delete", true),
+	)
+})
+
 // curlPodOverrides returns a Pod spec that passes the restricted Pod Security level
 // and retries the metrics request for up to a minute, while the endpoint starts.
 func curlPodOverrides(token string) string {
