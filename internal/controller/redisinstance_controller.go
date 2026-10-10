@@ -110,6 +110,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 					Ports: []corev1.ContainerPort{
 						{ContainerPort: redisPort, Name: appName},
 						{ContainerPort: instancemanager.ProbePort, Name: "probes"},
+						{ContainerPort: instancemanager.StatusPort, Name: "status"},
 					},
 					ReadinessProbe: imProbe("/readyz"),
 					LivenessProbe:  imProbe("/healthz"),

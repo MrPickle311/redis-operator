@@ -28,19 +28,38 @@ func RunInstance(ctx context.Context) error {
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DialTimeout: time.Second})
 	defer func() { _ = rdb.Close() }()
 
-	server := &http.Server{
+	probes := &http.Server{
 		Addr:              ":" + strconv.Itoa(ProbePort),
 		Handler:           probeHandler(rdb),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	go func() {
-		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(os.Stderr, "probe server stopped:", err)
-		}
-	}()
-	defer func() { _ = server.Close() }()
+	status := &http.Server{
+		Addr:              ":" + strconv.Itoa(StatusPort),
+		Handler:           statusHandler(rdb),
+		TLSConfig:         serverTLSConfig(CertificatesDir),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	for _, server := range []*http.Server{probes, status} {
+		serve(server)
+		defer func() { _ = server.Close() }()
+	}
 
 	return Run(ctx, "redis-server")
+}
+
+// serve runs the server in the background, over TLS when it has a TLSConfig.
+func serve(server *http.Server) {
+	go func() {
+		var err error
+		if server.TLSConfig != nil {
+			err = server.ListenAndServeTLS("", "") // the certificates come from TLSConfig
+		} else {
+			err = server.ListenAndServe()
+		}
+		if !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(os.Stderr, "server on", server.Addr, "stopped:", err)
+		}
+	}()
 }
 
 // Run starts the given command (redis-server) and waits until it exits.
