@@ -43,7 +43,7 @@ var _ = Describe("RedisInstance controller", func() {
 		BeforeEach(func() {
 			By("creating a RedisInstance with a primary and one replica")
 			instance := newRedisInstance(name, 2, redisv1.StorageSpec{
-				VolumeClaimTemplate: volumeClaimTemplate("1Gi"),
+				VolumeClaimTemplate: volumeClaimTemplate(),
 			})
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -170,7 +170,7 @@ var _ = Describe("RedisInstance controller", func() {
 			Expect(k8sClient.Create(ctx, newPVC(name+"-2-data"))).To(Succeed())
 
 			By("creating 3 instances")
-			instance := newRedisInstance(name, 3, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate("1Gi")})
+			instance := newRedisInstance(name, 3, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 
@@ -217,7 +217,7 @@ var _ = Describe("RedisInstance controller", func() {
 			redisv1.StorageSpec{ExistingClaims: existingClaims(0)},
 			false),
 		Entry("rejects an existingClaims ordinal outside of instances",
-			redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate("1Gi"), ExistingClaims: existingClaims(5)},
+			redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate(), ExistingClaims: existingClaims(5)},
 			false),
 		Entry("accepts existingClaims covering every instance without a volumeClaimTemplate",
 			redisv1.StorageSpec{ExistingClaims: existingClaims(0, 1)},
@@ -268,7 +268,7 @@ func podLabels(key types.NamespacedName) map[string]string {
 
 // reconcileOnce runs the reconciler for the given RedisInstance exactly once.
 func reconcileOnce(key types.NamespacedName) error {
-	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), OperatorImage: testOperatorImage}
+	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), OperatorImage: testOperatorImage, CA: testCA}
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 	return err
 }
@@ -288,8 +288,8 @@ func newRedisInstance(name string, instances int32, storage redisv1.StorageSpec)
 	}
 }
 
-func volumeClaimTemplate(size string) *redisv1.VolumeClaimTemplateSpec {
-	return &redisv1.VolumeClaimTemplateSpec{Size: resource.MustParse(size)}
+func volumeClaimTemplate() *redisv1.VolumeClaimTemplateSpec {
+	return &redisv1.VolumeClaimTemplateSpec{Size: resource.MustParse("1Gi")}
 }
 
 // existingClaims binds each given ordinal to a PVC named pvc-<ordinal>.

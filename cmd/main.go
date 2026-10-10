@@ -39,6 +39,7 @@ import (
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 	"github.com/MrPickle311/redis-operator/internal/controller"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -68,8 +69,9 @@ func main() {
 	}
 
 	operatorImage := os.Getenv("OPERATOR_IMAGE")
-	if operatorImage == "" {
-		fmt.Fprintln(os.Stderr, "OPERATOR_IMAGE must be set to the image of this operator")
+	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	if operatorImage == "" || operatorNamespace == "" {
+		fmt.Fprintln(os.Stderr, "OPERATOR_IMAGE and POD_NAMESPACE must be set, see config/manager/manager.yaml")
 		os.Exit(1)
 	}
 
@@ -176,8 +178,8 @@ func main() {
 		metricsServerOptions.CertName = metricsCertName
 		metricsServerOptions.KeyName = metricsCertKey
 	}
-
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	cfg := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -201,10 +203,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx := ctrl.SetupSignalHandler()
+	// The client of the manager reads from a cache that starts with the manager,
+	// but the reconciler needs the CA before that, so it is loaded directly.
+	directClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "Failed to create client")
+		os.Exit(1)
+	}
+	ca, err := controller.EnsureCA(ctx, directClient, operatorNamespace)
+	if err != nil {
+		setupLog.Error(err, "Failed to load CA", "secret", controller.CASecretName)
+		os.Exit(1)
+	}
+
 	if err := (&controller.RedisInstanceReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		OperatorImage: operatorImage,
+		CA:            ca,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisinstance")
 		os.Exit(1)
@@ -221,7 +238,7 @@ func main() {
 	}
 
 	setupLog.Info("Starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}

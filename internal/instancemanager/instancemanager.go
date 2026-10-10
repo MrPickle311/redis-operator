@@ -19,6 +19,10 @@ import (
 // (e.g. to save the dataset) before it is killed.
 const shutdownTimeout = 30 * time.Second
 
+// CertificatesDir is where the operator mounts the TLS Secret (tls.crt,
+// tls.key, ca.crt) of the Instance Manager API.
+const CertificatesDir = "/certificates"
+
 // RunInstance runs redis-server and serves the probes until redis-server exits.
 func RunInstance(ctx context.Context) error {
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DialTimeout: time.Second})

@@ -28,6 +28,9 @@ const (
 	managerPath      = controllerDir + "/manager"
 )
 
+// certificatesVolume holds the TLS Secret of the Instance Manager API.
+const certificatesVolume = "certificates"
+
 // instancePodName returns the name of the Pod for the given ordinal.
 func instancePodName(instance *redisv1.RedisInstance, ordinal int32) string {
 	return fmt.Sprintf("%s-%d", instance.Name, ordinal)
@@ -44,6 +47,18 @@ func headlessServiceName(instance *redisv1.RedisInstance) string {
 func podFQDN(instance *redisv1.RedisInstance, ordinal int32) string {
 	return fmt.Sprintf("%s.%s.%s.svc",
 		instancePodName(instance, ordinal), headlessServiceName(instance), instance.Namespace)
+}
+
+// serverSecretName returns the name of the Secret with the TLS certificate
+// of the Instance Manager API.
+func serverSecretName(instance *redisv1.RedisInstance) string {
+	return instance.Name + "-im-tls"
+}
+
+// serverCertDNSName returns the wildcard name that matches podFQDN of every
+// ordinal, so one certificate serves the whole instance.
+func serverCertDNSName(instance *redisv1.RedisInstance) string {
+	return fmt.Sprintf("*.%s.%s.svc", headlessServiceName(instance), instance.Namespace)
 }
 
 // pvcName returns the PVC name used by the instance with the given ordinal.

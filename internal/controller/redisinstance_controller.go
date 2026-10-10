@@ -36,6 +36,7 @@ import (
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
+	"github.com/MrPickle311/redis-operator/internal/pki"
 )
 
 // RedisInstanceReconciler reconciles a RedisInstance object
@@ -46,6 +47,8 @@ type RedisInstanceReconciler struct {
 	// OperatorImage is the image of the operator itself. Its initContainer
 	// copies the Instance Manager binary into every Redis Pod.
 	OperatorImage string
+	// CA signs the certificates of the Instance Manager API; see EnsureCA.
+	CA pki.KeyPair
 }
 
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
@@ -54,6 +57,7 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 
 func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage string) *corev1.Pod {
 	runAsNonRoot := true
@@ -116,6 +120,11 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 							MountPath: "/data",
 						},
 						controllerMount,
+						{
+							Name:      certificatesVolume,
+							MountPath: instancemanager.CertificatesDir,
+							ReadOnly:  true,
+						},
 					},
 					SecurityContext: containerSecurity,
 				},
@@ -131,6 +140,12 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 							ClaimName: claimName,
 						},
+					},
+				},
+				{
+					Name: certificatesVolume,
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{SecretName: serverSecretName(instance)},
 					},
 				},
 			},
@@ -346,6 +361,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var readyCount int32 = 0
 
+	// Before the Pods: they cannot start until the Secret they mount exists.
+	if err := r.ensureServerSecret(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	for _, svc := range []*corev1.Service{
 		buildHeadlessService(&instance),
 		buildClientService(&instance, "rw", map[string]string{labelRole: rolePrimary}),
@@ -473,6 +493,7 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&corev1.Secret{}).
 		Named("redisinstance").
 		Complete(r)
 }
