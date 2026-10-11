@@ -20,7 +20,9 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 	"time"
@@ -36,6 +38,9 @@ const (
 	redisName      = "e2e-redis"
 	redisImage     = "redis:7.2"
 	redisInstances = 3
+
+	// imLocalPort is where the tests reach the Instance Manager API through kubectl port-forward.
+	imLocalPort = 18000
 )
 
 var redisInstanceManifest = fmt.Sprintf(`
@@ -115,6 +120,24 @@ var _ = Describe("RedisInstance", Ordered, func() {
 				g.Expect(info).To(ContainSubstring("master_link_status:up"))
 			}).Should(Succeed(), "replica %s is not replicating from %s", replica, podFQDN(0))
 		}
+	})
+
+	It("serves the Instance Manager API only to clients with the operator certificate", func() {
+		By("forwarding a local port to the API of the primary")
+		portForward := exec.Command("kubectl", "port-forward", "pod/"+primary, "-n", redisNamespace,
+			fmt.Sprintf("%d:8000", imLocalPort))
+		Expect(portForward.Start()).To(Succeed())
+		DeferCleanup(portForward.Process.Kill)
+
+		// The server certificate is not checked here: the test is about the
+		// server rejecting the client, which has no certificate at all.
+		client := &http.Client{Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		}}
+		Eventually(func(g Gomega) {
+			_, err := client.Get(fmt.Sprintf("https://127.0.0.1:%d/status", imLocalPort))
+			g.Expect(err).To(MatchError(ContainSubstring("certificate required")))
+		}, 30*time.Second).Should(Succeed())
 	})
 
 	It("propagates writes from the primary to the replicas", func() {

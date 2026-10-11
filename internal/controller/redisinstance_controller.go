@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
+	"github.com/MrPickle311/redis-operator/internal/imclient"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	"github.com/MrPickle311/redis-operator/internal/pki"
 )
@@ -49,6 +50,8 @@ type RedisInstanceReconciler struct {
 	OperatorImage string
 	// CA signs the certificates of the Instance Manager API; see EnsureCA.
 	CA pki.KeyPair
+	// InstanceManager reads the state of every instance over mTLS.
+	InstanceManager *imclient.Client
 }
 
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
@@ -444,7 +447,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			continue
 		}
 
-		changed, err := ensureReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost)
+		changed, err := r.ensureReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost)
 		if err != nil {
 			logger.Error(err, "Failed to configure replication", "pod", replicaName)
 			replicationPending = true

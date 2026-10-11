@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/MrPickle311/redis-operator/internal/imclient"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -217,11 +218,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	instanceManager, err := imclient.New(ca)
+	if err != nil {
+		setupLog.Error(err, "Failed to create Instance Manager client")
+		os.Exit(1)
+	}
+
 	if err := (&controller.RedisInstanceReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		OperatorImage: operatorImage,
-		CA:            ca,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		OperatorImage:   operatorImage,
+		CA:              ca,
+		InstanceManager: instanceManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisinstance")
 		os.Exit(1)

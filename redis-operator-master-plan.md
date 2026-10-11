@@ -118,12 +118,17 @@ spec:
     delay: 30s                    # ile primary może być NotReady przed failoverem
   affinity:
     podAntiAffinityType: required # required | preferred
+  resources:                      # corev1.ResourceRequirements; sekcja 3.9
+    requests: {memory: 2Gi, cpu: 500m}
+    limits:   {memory: 2Gi}
   tls: {}                         # sekcja 7
   acl: {}                         # sekcja 8
   networkPolicy: {}               # sekcja 9
   bootstrap: {}                   # sekcja 10 (restore)
   redis:
     persistence: aof              # aof | rdb | none
+    maxmemoryPolicy: noeviction   # sekcja 3.9
+    maxmemoryRatio: 75            # % limitu pamięci → maxmemory; sekcja 3.9
     modules: []                   # sekcja 3.7
 ```
 
@@ -330,6 +335,24 @@ Operator tworzy **per `RedisInstance`** trzy obiekty z ownerReference (znikają 
 
 - Role wygenerowane przez kubebuilder (`*_admin_role`, `*_editor_role`, `*_viewer_role`) dostają etykiety agregacji `rbac.authorization.k8s.io/aggregate-to-admin|edit|view: "true"` (jak opcja `rbac.aggregateClusterRoles` w Helm chart CNPG). Właściciel namespace'u z wbudowaną rolą `edit` może wtedy tworzyć `RedisInstance` bez dodatkowych uprawnień od admina klastra.
 - Viewer **nie** widzi Secretów `<name>-internal-auth`: wbudowana rola `view` celowo nie obejmuje Secretów.
+
+### 3.9 Pamięć i zasoby
+
+Redis trzyma cały dataset w RAM, więc limit kontenera i `maxmemory` muszą do siebie pasować. Bez `maxmemory` Redis rośnie aż do limitu i dostaje OOMKill zamiast kontrolowanej odmowy zapisu albo eviction. Bez `resources` Pod ma QoS BestEffort i kubelet usuwa go jako pierwszy przy braku pamięci na węźle.
+
+- **`spec.resources`** (`corev1.ResourceRequirements`) trafia 1:1 do kontenera `redis` (wzorzec CNPG). Dokumentacja zaleca requests = limits dla pamięci (QoS Guaranteed).
+- **`maxmemory` liczone z limitu** (wzorzec Strimzi, który tak samo ustawia `-Xmx` JVM): `maxmemory = limits.memory × maxmemoryRatio / 100`. IM dostaje limit przez Downward API, bez dostępu do API K8s:
+  ```yaml
+  env:
+  - name: MEMORY_LIMIT
+    valueFrom:
+      resourceFieldRef: {containerName: redis, resource: limits.memory}
+  ```
+- **`maxmemoryRatio`** domyślnie `75`. Zapas jest na copy-on-write przy fork (BGSAVE, przepisywanie AOF), bufory replikacji i klientów oraz fragmentację. Przy `persistence: none` fork nie występuje, więc można dać więcej. CEL: 10–95.
+- **Brak limitu pamięci:** `maxmemory 0` (bez limitu) plus ostrzeżenie w statusie (Condition) i Event. Nie blokujemy, bo przydaje się w środowisku deweloperskim.
+- **`maxmemoryPolicy`** domyślnie `noeviction`, bo operator traktuje Redisa jako magazyn danych i nie kasuje kluczy po cichu. Dla cache'a użytkownik wybiera `allkeys-lru`/`allkeys-lfu`. CEL: enum polityk Redisa.
+- **Zmiany:** `maxmemoryPolicy` i `maxmemoryRatio` IM stosuje przez `CONFIG SET`, bez restartu. Zmiana `resources` wymaga nowego Poda, więc idzie przez rolling update (sekcja 3.6). In-place resize Podów (K8s ≥ 1.33) to możliwe rozszerzenie później.
+- **Później (krok 3):** ogólne `spec.redis.parameters` (mapa opcji `redis.conf`, jak `postgresql.parameters` w CNPG) z czarną listą opcji zarządzanych przez operator (`dir`, `port`, `replicaof`, `user`, `maxmemory`…) i podziałem na „CONFIG SET” / „wymaga restartu”.
 
 ---
 
@@ -785,9 +808,9 @@ redis-operator/
 ```mermaid
 graph TD
     S0["0. Porządki<br/>API group, spec.storage, headless + DNS,<br/>-rw/-ro/-r, etykiety role, PVC managed/external,<br/>CEL, idempotentny REPLICAOF"]
-    S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni"]
+    S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni,<br/>spec.resources + maxmemory z limitu"]
     S2["2. IM v2<br/>/replicaof, /promote, /demote, /fence,<br/>epoch, bezpieczny start,<br/>SA + Role + RoleBinding per instancja"]
-    S3["3. Reconciler → imclient<br/>rolling update, switchover"]
+    S3["3. Reconciler → imclient<br/>rolling update, switchover,<br/>spec.redis.parameters"]
     S4["4. Failover<br/>PDB, anti-affinity, węzeł NotReady, drain"]
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]
