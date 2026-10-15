@@ -56,6 +56,9 @@ spec:
   storage:
     volumeClaimTemplate:
       size: 256Mi
+  resources:
+    requests: {memory: 128Mi}
+    limits: {memory: 128Mi}
 `, redisName, redisNamespace, redisInstances, redisImage)
 
 // Passwords of the internal users, read from the Secret the operator generates.
@@ -110,7 +113,8 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		out, err := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "cat", "/proc/1/cmdline")
 		Expect(err).NotTo(HaveOccurred())
 		// cmdline separates the arguments with NUL bytes.
-		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run", ""))
+		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run",
+			"--maxmemory-ratio=75", "--maxmemory-policy=noeviction", ""))
 
 		Expect(redisCLI(Default, primary, "PING")).To(Equal("PONG"))
 	})
@@ -123,6 +127,19 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		out, _ = kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--",
 			"redis-cli", "--user", "_replication", "--pass", replicationPassword, "--no-auth-warning", "GET", "e2e-key")
 		Expect(out).To(ContainSubstring("NOPERM"), "the replication user must not read data")
+	})
+
+	It("derives maxmemory from the memory limit of the container", func() {
+		// 75% of the 128Mi limit, read by the Instance Manager from the cgroup.
+		Expect(redisCLI(Default, primary, "CONFIG", "GET", "maxmemory")).To(Equal("maxmemory\n100663296"))
+		Expect(redisCLI(Default, primary, "CONFIG", "GET", "maxmemory-policy")).To(Equal("maxmemory-policy\nnoeviction"))
+
+		Eventually(func(g Gomega) {
+			out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace,
+				"-o", `jsonpath={.status.conditions[?(@.type=="MemoryLimited")].status}`)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("True"))
+		}).Should(Succeed())
 	})
 
 	It("creates the headless Service", func() {

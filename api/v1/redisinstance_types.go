@@ -17,10 +17,15 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
+
+// ConditionMemoryLimited is True when every redis container has a memory
+// limit, so maxmemory is set. When False, Redis grows until it is OOMKilled.
+const ConditionMemoryLimited = "MemoryLimited"
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
@@ -39,6 +44,34 @@ type RedisInstanceSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	ACL ACLSpec `json:"acl,omitzero"`
+
+	// Resources of the redis container. Set limits.memory: maxmemory is
+	// derived from it, see redis.maxmemoryRatio.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitzero"`
+
+	// Redis configures redis-server.
+	// +kubebuilder:default={}
+	// +optional
+	Redis RedisSpec `json:"redis,omitzero"`
+}
+
+type RedisSpec struct {
+	// MaxmemoryPolicy is what Redis does when it reaches maxmemory. The
+	// default noeviction rejects writes instead of silently deleting keys.
+	// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;vo-random;volatile-ttl
+	// +kubebuilder:default=noeviction
+	// +optional
+	MaxmemoryPolicy string `json:"maxmemoryPolicy,omitempty"`
+
+	// MaxmemoryRatio is the percent of the memory limit that becomes
+	// maxmemory. The rest is left for fork copy-on-write, replication and
+	// client buffers, and fragmentation.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=95
+	// +kubebuilder:default=75
+	// +optional
+	MaxmemoryRatio int32 `json:"maxmemoryRatio,omitempty"`
 }
 
 // DefaultUserMode tells whether the default user of Redis is enabled.
@@ -94,6 +127,11 @@ type RedisInstanceStatus struct {
 	ReadyInstances int32  `json:"readyInstances,omitempty"`
 	Phase          string `json:"phase,omitempty"`
 	CurrentPrimary string `json:"currentPrimary,omitempty"`
+	// Conditions of the instance, e.g. MemoryLimited.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

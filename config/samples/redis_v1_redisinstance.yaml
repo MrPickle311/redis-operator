@@ -11,3 +11,6 @@ spec:
   storage:
     volumeClaimTemplate:
       size: 1Gi
+  resources:
+    requests: {memory: 256Mi, cpu: 100m}
+    limits: {memory: 256Mi}

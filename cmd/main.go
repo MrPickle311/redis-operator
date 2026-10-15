@@ -236,6 +236,7 @@ func main() {
 		OperatorImage:   operatorImage,
 		CA:              ca,
 		InstanceManager: instanceManager,
+		Recorder:        mgr.GetEventRecorder("redis-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisinstance")
 		os.Exit(1)

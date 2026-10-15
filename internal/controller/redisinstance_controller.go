@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -52,6 +53,8 @@ type RedisInstanceReconciler struct {
 	CA pki.KeyPair
 	// InstanceManager reads the state of every instance over mTLS.
 	InstanceManager *imclient.Client
+	// Recorder emits the Events of RedisInstances.
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
@@ -61,6 +64,7 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage string) *corev1.Pod {
 	runAsNonRoot := true
@@ -118,6 +122,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 					ReadinessProbe: imProbe("/readyz"),
 					LivenessProbe:  imProbe("/healthz"),
 					Command:        instanceCommand(instance),
+					Resources:      instance.Spec.Resources,
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",
@@ -170,7 +175,10 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 
 // instanceCommand runs the Instance Manager, which starts redis-server.
 func instanceCommand(instance *redisv1.RedisInstance) []string {
-	command := []string{managerPath, "instance", "run"}
+	command := []string{managerPath, "instance", "run",
+		"--maxmemory-ratio=" + strconv.Itoa(int(instance.Spec.Redis.MaxmemoryRatio)),
+		"--maxmemory-policy=" + instance.Spec.Redis.MaxmemoryPolicy,
+	}
 	if instance.Spec.ACL.DefaultUser == redisv1.DefaultUserEnabled {
 		command = append(command, "--default-user")
 	}
@@ -384,6 +392,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	var readyCount int32 = 0
+	memoryUnlimited := false
 
 	// Before the Pods: they cannot start until the Secrets they mount exist.
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
@@ -430,6 +439,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			if err := r.Create(ctx, desiredPod); err != nil {
 				return ctrl.Result{}, ignoreAlreadyExists(err)
 			}
+			memoryUnlimited = memoryUnlimited || !hasMemoryLimit(desiredPod)
 			continue
 		} else if err != nil {
 			return ctrl.Result{}, err
@@ -442,6 +452,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if isPodReady(&existingPod) {
 			readyCount++
 		}
+		memoryUnlimited = memoryUnlimited || !hasMemoryLimit(&existingPod)
 	}
 
 	if err := r.cleanupExcessPods(ctx, &instance); err != nil {
@@ -483,7 +494,8 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	if instance.Status.ReadyInstances != readyCount || instance.Status.CurrentPrimary != primaryPod.Name {
+	conditionChanged := r.setMemoryLimitedCondition(&instance, memoryUnlimited)
+	if conditionChanged || instance.Status.ReadyInstances != readyCount || instance.Status.CurrentPrimary != primaryPod.Name {
 		instance.Status.ReadyInstances = readyCount
 		instance.Status.Phase = fmt.Sprintf("%d/%d ready", readyCount, instance.Spec.Instances)
 		instance.Status.CurrentPrimary = primaryPod.Name

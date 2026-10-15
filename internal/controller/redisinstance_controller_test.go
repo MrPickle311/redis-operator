@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
@@ -85,7 +86,8 @@ var _ = Describe("RedisInstance controller", func() {
 			Expect(bootstrap.Command).To(Equal([]string{"/manager", "bootstrap", "/controller/manager"}))
 
 			redis := pod.Spec.Containers[0]
-			Expect(redis.Command).To(Equal([]string{"/controller/manager", "instance", "run"}))
+			Expect(redis.Command).To(Equal([]string{"/controller/manager", "instance", "run",
+				"--maxmemory-ratio=75", "--maxmemory-policy=noeviction"}))
 
 			By("sharing the binary through an emptyDir mounted in both containers")
 			Expect(pod.Spec.Volumes).To(ContainElement(HaveField("Name", "controller")))
@@ -267,8 +269,16 @@ func podLabels(key types.NamespacedName) map[string]string {
 }
 
 // reconcileOnce runs the reconciler for the given RedisInstance exactly once.
+// It drops the Events: a FakeRecorder without a channel discards them.
 func reconcileOnce(key types.NamespacedName) error {
-	r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), OperatorImage: testOperatorImage, CA: testCA}
+	return reconcileWith(&events.FakeRecorder{}, key)
+}
+
+// reconcileWith is reconcileOnce with the given Event recorder.
+func reconcileWith(recorder events.EventRecorder, key types.NamespacedName) error {
+	r := &RedisInstanceReconciler{
+		Client: k8sClient, Scheme: k8sClient.Scheme(), OperatorImage: testOperatorImage, CA: testCA, Recorder: recorder,
+	}
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 	return err
 }
