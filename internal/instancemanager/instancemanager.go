@@ -23,15 +23,31 @@ const shutdownTimeout = 30 * time.Second
 // tls.key, ca.crt) of the Instance Manager API.
 const CertificatesDir = "/certificates"
 
+// Options are the settings the operator passes to "instance run" as flags.
+type Options struct {
+	// DefaultUser enables the passwordless default user of Redis.
+	DefaultUser bool
+	// MaxmemoryRatio is the percent of the container memory limit that
+	// becomes maxmemory.
+	MaxmemoryRatio int
+	// MaxmemoryPolicy is what Redis does when it reaches maxmemory.
+	MaxmemoryPolicy string
+}
+
 // RunInstance runs redis-server and serves the probes until redis-server exits.
 // defaultUser enables the passwordless default user of Redis.
-func RunInstance(ctx context.Context, defaultUser bool) error {
+func RunInstance(ctx context.Context, opts Options) error {
 	auth, err := readInternalAuth(InternalAuthDir)
 	if err != nil {
 		return err
 	}
+	limit, err := memoryLimit(cgroupMemoryMax)
+	if err != nil {
+		return err
+	}
+	conf := redisConfig(auth, opts, maxmemoryFor(limit, opts.MaxmemoryRatio))
 	// 0600: the file holds the passwords, like the mounted Secret it comes from.
-	if err := os.WriteFile(redisConfPath, []byte(redisConfig(auth, defaultUser)), 0o600); err != nil {
+	if err := os.WriteFile(redisConfPath, []byte(conf), 0o600); err != nil {
 		return err
 	}
 

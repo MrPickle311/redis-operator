@@ -65,10 +65,13 @@ func main() {
 		case "bootstrap":
 			exitOnError(instancemanager.CopySelf(os.Args[2]))
 		case "instance":
+			var opts instancemanager.Options
 			flags := flag.NewFlagSet("instance run", flag.ExitOnError)
-			defaultUser := flags.Bool("default-user", false, "Enable the passwordless default user of Redis")
+			flags.BoolVar(&opts.DefaultUser, "default-user", false, "Enable the passwordless default user")
+			flags.IntVar(&opts.MaxmemoryRatio, "maxmemory-ratio", 75, "Percent of the container memory limmaxmemory")
+			flags.StringVar(&opts.MaxmemoryPolicy, "maxmemory-policy", "noeviction", "What Redis does whenmaxmemory")
 			_ = flags.Parse(os.Args[3:])
-			exitOnError(instancemanager.RunInstance(ctrl.SetupSignalHandler(), *defaultUser))
+			exitOnError(instancemanager.RunInstance(ctrl.SetupSignalHandler(), opts))
 		}
 	}
 

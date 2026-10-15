@@ -341,17 +341,11 @@ Operator tworzy **per `RedisInstance`** trzy obiekty z ownerReference (znikają 
 Redis trzyma cały dataset w RAM, więc limit kontenera i `maxmemory` muszą do siebie pasować. Bez `maxmemory` Redis rośnie aż do limitu i dostaje OOMKill zamiast kontrolowanej odmowy zapisu albo eviction. Bez `resources` Pod ma QoS BestEffort i kubelet usuwa go jako pierwszy przy braku pamięci na węźle.
 
 - **`spec.resources`** (`corev1.ResourceRequirements`) trafia 1:1 do kontenera `redis` (wzorzec CNPG). Dokumentacja zaleca requests = limits dla pamięci (QoS Guaranteed).
-- **`maxmemory` liczone z limitu** (wzorzec Strimzi, który tak samo ustawia `-Xmx` JVM): `maxmemory = limits.memory × maxmemoryRatio / 100`. IM dostaje limit przez Downward API, bez dostępu do API K8s:
-  ```yaml
-  env:
-  - name: MEMORY_LIMIT
-    valueFrom:
-      resourceFieldRef: {containerName: redis, resource: limits.memory}
-  ```
+- **`maxmemory` liczone z limitu** (wzorzec Strimzi, który tak samo ustawia `-Xmx` JVM): `maxmemory = limit pamięci × maxmemoryRatio / 100`. IM czyta limit z cgroup v2 (`/sys/fs/cgroup/memory.max`, jak skrypt `dynamic_resources.sh` w Strimzi), bez dostępu do API K8s. Nie Downward API: `resourceFieldRef: limits.memory` bez limitu zwraca pamięć węzła i IM nie odróżni tego od prawdziwego limitu, a cgroup daje wtedy `max`. Cgroup widzi też limit domyślny z LimitRange.
 - **`maxmemoryRatio`** domyślnie `75`. Zapas jest na copy-on-write przy fork (BGSAVE, przepisywanie AOF), bufory replikacji i klientów oraz fragmentację. Przy `persistence: none` fork nie występuje, więc można dać więcej. CEL: 10–95.
 - **Brak limitu pamięci:** `maxmemory 0` (bez limitu) plus ostrzeżenie w statusie (Condition) i Event. Nie blokujemy, bo przydaje się w środowisku deweloperskim.
 - **`maxmemoryPolicy`** domyślnie `noeviction`, bo operator traktuje Redisa jako magazyn danych i nie kasuje kluczy po cichu. Dla cache'a użytkownik wybiera `allkeys-lru`/`allkeys-lfu`. CEL: enum polityk Redisa.
-- **Zmiany:** `maxmemoryPolicy` i `maxmemoryRatio` IM stosuje przez `CONFIG SET`, bez restartu. Zmiana `resources` wymaga nowego Poda, więc idzie przez rolling update (sekcja 3.6). In-place resize Podów (K8s ≥ 1.33) to możliwe rozszerzenie później.
+- **Zmiany:** w kroku 1.5 IM zapisuje `maxmemory` i `maxmemory-policy` do `redis.conf` przy starcie Poda. Stosowanie `maxmemoryPolicy` i `maxmemoryRatio` w locie przez `CONFIG SET` dochodzi w kroku 3, razem z `spec.redis.parameters`. Zmiana `resources` wymaga nowego Poda, więc idzie przez rolling update (sekcja 3.6). In-place resize Podów (K8s ≥ 1.33) to możliwe rozszerzenie później.
 - **Później (krok 3):** ogólne `spec.redis.parameters` (mapa opcji `redis.conf`, jak `postgresql.parameters` w CNPG) z czarną listą opcji zarządzanych przez operator (`dir`, `port`, `replicaof`, `user`, `maxmemory`…) i podziałem na „CONFIG SET” / „wymaga restartu”.
 
 ---

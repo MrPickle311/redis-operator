@@ -4,6 +4,9 @@
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use
 
+See [docs/architecture.md](docs/architecture.md) for diagrams of the managed
+resources and how the operator and the Instance Manager work together.
+
 ## Getting Started
 
 ### Prerequisites

@@ -9,8 +9,10 @@ import (
 
 var testAuth = internalAuth{operatorPassword: "op-secret", replicationPassword: "repl-secret"}
 
+var testOptions = Options{MaxmemoryRatio: 75, MaxmemoryPolicy: "noeviction"}
+
 func TestRedisConfigCreatesTheInternalUsers(t *testing.T) {
-	conf := redisConfig(testAuth, false)
+	conf := redisConfig(testAuth, testOptions, 0)
 
 	for _, line := range []string{
 		"user default off",
@@ -27,10 +29,24 @@ func TestRedisConfigCreatesTheInternalUsers(t *testing.T) {
 }
 
 func TestRedisConfigEnablesThePasswordlessDefaultUserOnRequest(t *testing.T) {
-	conf := redisConfig(testAuth, true)
+	opts := testOptions
+	opts.DefaultUser = true
+	conf := redisConfig(testAuth, opts, 0)
 
 	if !hasLine(conf, "user default on nopass ~* &* +@all") || hasLine(conf, "user default off") {
 		t.Errorf("redis.conf does not enable the default user:\n%s", conf)
+	}
+}
+
+func TestRedisConfigSetsTheMemoryLimit(t *testing.T) {
+	opts := testOptions
+	opts.MaxmemoryPolicy = "allkeys-lru"
+	conf := redisConfig(testAuth, opts, 100663296)
+
+	for _, line := range []string{"maxmemory 100663296", "maxmemory-policy allkeys-lru"} {
+		if !hasLine(conf, line) {
+			t.Errorf("redis.conf has no line %q:\n%s", line, conf)
+		}
 	}
 }
 

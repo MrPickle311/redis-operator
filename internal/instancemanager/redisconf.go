@@ -50,11 +50,12 @@ func readInternalAuth(dir string) (internalAuth, error) {
 	return auth, nil
 }
 
-// redisConfig returns the redis.conf with the internal users. The default user
-// is off unless defaultUser is set, when it needs no password at all.
-func redisConfig(auth internalAuth, defaultUser bool) string {
+// redisConfig returns the redis.conf with the internal users and the memory
+// settings. The default user is off unless opts.DefaultUser is set, when it
+// needs no password at all.
+func redisConfig(auth internalAuth, opts Options, maxmemory int64) string {
 	defaultACL := "user default off"
-	if defaultUser {
+	if opts.DefaultUser {
 		defaultACL = "user default on nopass ~* &* +@all"
 	}
 	return fmt.Sprintf(`%s
@@ -62,8 +63,11 @@ user %s on >%s ~* &* +@all
 user %s on >%s +psync +replconf +ping
 masteruser %s
 masterauth %s
+maxmemory %d
+maxmemory-policy %s
 `, defaultACL,
 		OperatorUser, auth.operatorPassword,
 		ReplicationUser, auth.replicationPassword,
-		ReplicationUser, auth.replicationPassword)
+		ReplicationUser, auth.replicationPassword,
+		maxmemory, opts.MaxmemoryPolicy)
 }
