@@ -28,8 +28,11 @@ const (
 	managerPath      = controllerDir + "/manager"
 )
 
-// certificatesVolume holds the TLS Secret of the Instance Manager API.
-const certificatesVolume = "certificates"
+// Volumes with the Secrets the Instance Manager reads.
+const (
+	certificatesVolume = "certificates"  // TLS of the Instance Manager API
+	internalAuthVolume = "internal-auth" // passwords of the internal users
+)
 
 // instancePodName returns the name of the Pod for the given ordinal.
 func instancePodName(instance *redisv1.RedisInstance, ordinal int32) string {
@@ -53,6 +56,12 @@ func podFQDN(instance *redisv1.RedisInstance, ordinal int32) string {
 // of the Instance Manager API.
 func serverSecretName(instance *redisv1.RedisInstance) string {
 	return instance.Name + "-im-tls"
+}
+
+// internalAuthSecretName returns the name of the Secret with the passwords of
+// the internal Redis users.
+func internalAuthSecretName(instance *redisv1.RedisInstance) string {
+	return instance.Name + "-internal-auth"
 }
 
 // serverCertDNSName returns the wildcard name that matches podFQDN of every

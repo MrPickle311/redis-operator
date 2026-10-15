@@ -24,8 +24,23 @@ const shutdownTimeout = 30 * time.Second
 const CertificatesDir = "/certificates"
 
 // RunInstance runs redis-server and serves the probes until redis-server exits.
-func RunInstance(ctx context.Context) error {
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DialTimeout: time.Second})
+// defaultUser enables the passwordless default user of Redis.
+func RunInstance(ctx context.Context, defaultUser bool) error {
+	auth, err := readInternalAuth(InternalAuthDir)
+	if err != nil {
+		return err
+	}
+	// 0600: the file holds the passwords, like the mounted Secret it comes from.
+	if err := os.WriteFile(redisConfPath, []byte(redisConfig(auth, defaultUser)), 0o600); err != nil {
+		return err
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:        "localhost:6379",
+		Username:    OperatorUser,
+		Password:    auth.operatorPassword,
+		DialTimeout: time.Second,
+	})
 	defer func() { _ = rdb.Close() }()
 
 	probes := &http.Server{
@@ -44,7 +59,7 @@ func RunInstance(ctx context.Context) error {
 		defer func() { _ = server.Close() }()
 	}
 
-	return Run(ctx, "redis-server")
+	return Run(ctx, "redis-server", redisConfPath)
 }
 
 // serve runs the server in the background, over TLS when it has a TLSConfig.

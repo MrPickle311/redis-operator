@@ -781,25 +781,19 @@ redis-operator/
 
 ## 16. Status implementacji (na dziś)
 
-### Zbudowane i zweryfikowane w klastrze homelab (Talos)
-- `RedisInstance` — Reconciler: PVC (z `FSGroup`), Pod (`securityContext` zgodny z `PodSecurity: restricted`), jeden Service, sprzątanie nadmiarowych zasobów przy skalowaniu w dół.
-- Replikacja przez `go-redis` bezpośrednio z operatora do Pod IP (`REPLICAOF`), zweryfikowana end-to-end.
-- Operator wdrożony jako `Deployment` w klastrze (brak routingu Pod-to-Pod z maszyny dewelopera).
-
-### Rozbieżności kodu z planem (do naprawy w kroku 0)
-- API group `cache.cache.example` → `redis.operator.com`.
-- `spec.storage.size` → `spec.storage.volumeClaimTemplate.size` (+ `existingClaims`).
-- Replikacja po Pod IP → DNS przez headless Service.
-- Jeden Service z selektorem na wszystkie Pody → `-rw`/`-ro`/`-r`/`-hl` + etykieta `role`.
-- `setReplicaOf` w każdym reconcile, bez sprawdzenia stanu → idempotentne (docelowo w IM).
-- Usuwanie PVC przy skalowaniu w dół bez sprawdzenia etykiety `managed-pvc`.
-- Brak walidacji CEL.
+### Zbudowane i zweryfikowane (envtest + e2e w Kind)
+- **Krok 0:** API group `redis.operator.com`; `spec.storage.volumeClaimTemplate` + `existingClaims` z walidacją CEL; Pody z `hostname`/`subdomain` i DNS przez Service `-hl`; Services `-rw`/`-ro`/`-r` po etykiecie `redis.operator.com/role`; PVC generowane z ownerReference (zewnętrzne nigdy nie są usuwane); replikacja po DNS, `REPLICAOF` tylko przy realnej zmianie.
+- **Krok 1.1–1.2:** Instance Manager jako PID 1 (initContainer kopiuje binarkę do `emptyDir`, jedna binarka z podkomendami), SIGTERM → czyste zatrzymanie `redis-server`; probes `/healthz`/`/readyz` na `:8001`; `automountServiceAccountToken: false`; role `*_admin|editor|viewer` z etykietami `aggregate-to-*` (test e2e przez `kubectl auth can-i`).
+- **Krok 1.3:** wewnętrzna PKI (`internal/pki`, ECDSA P-256): CA w Secret `redis-operator-ca` w namespace operatora, Secret `<name>-im-tls` per instancja z odnowieniem po 2/3 ważności i przy zmianie CA; API IM na `:8000` po mTLS (tylko `ClientAuth` z CN `redis-operator`, certy czytane przy każdym handshake'u); `GET /status` z `INFO replication`; `internal/imclient` (świeży cert klienta per handshake); reconciler czyta stan replik przez `/status`.
+- **Krok 1.4:** Secret `<name>-internal-auth` (hasła `crypto/rand.Text()`, generowane raz, nigdy nie podmieniane); IM zapisuje `redis.conf` z `user default off`, `_operator` i `_replication` (`+psync +replconf +ping`) oraz `masteruser`/`masterauth`; probes, `/status` i `REPLICAOF` operatora logują się jako `_operator`; `spec.acl.defaultUser: disabled|enabled` (flaga `--default-user` IM).
 
 ### Świadomie tymczasowe uproszczenia
-- Brak Instance Managera.
-- Brak update Podów przy zmianie `spec.image`/configu.
-- Ordinal 0 = zawsze primary (brak failoveru).
-- Brak TLS, ACL, `existingClaims`, NetworkPolicy, PDB.
+- `REPLICAOF` operator wysyła bezpośrednio do Redisa (do kroku 2, potem przez API IM).
+- Ordinal 0 = zawsze primary (brak failoveru, krok 4).
+- Brak update Podów przy zmianie `spec` (krok 3).
+- Replika jest Ready przed `REPLICAOF` i może przez chwilę serwować pusty dataset przez `-ro` (bezpieczny start, krok 2).
+- Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
+- Brak TLS Redisa, ACL użytkowników, PDB, backupu.
 
 ---
 

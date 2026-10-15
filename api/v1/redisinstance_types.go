@@ -34,6 +34,28 @@ type RedisInstanceSpec struct {
 	Instances int32       `json:"instances,omitempty"`
 	Image     string      `json:"image"`
 	Storage   StorageSpec `json:"storage"`
+
+	// ACL configures the users of Redis.
+	// +kubebuilder:default={}
+	// +optional
+	ACL ACLSpec `json:"acl,omitzero"`
+}
+
+// DefaultUserMode tells whether the default user of Redis is enabled.
+// +kubebuilder:validation:Enum=disabled;enabled
+type DefaultUserMode string
+
+const (
+	DefaultUserDisabled DefaultUserMode = "disabled"
+	DefaultUserEnabled  DefaultUserMode = "enabled"
+)
+
+type ACLSpec struct {
+	// DefaultUser enables the default user of Redis, which needs no password
+	// and may run every command. Meant for development only.
+	// +kubebuilder:default=disabled
+	// +optional
+	DefaultUser DefaultUserMode `json:"defaultUser,omitempty"`
 }
 
 type StorageSpec struct {

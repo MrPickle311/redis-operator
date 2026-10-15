@@ -21,6 +21,7 @@ package e2e
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -57,6 +58,9 @@ spec:
       size: 256Mi
 `, redisName, redisNamespace, redisInstances, redisImage)
 
+// Passwords of the internal users, read from the Secret the operator generates.
+var operatorPassword, replicationPassword string
+
 // Scenario: one RedisInstance with a primary (ordinal 0) and two replicas.
 // The specs are Ordered and build on each other: the data written in one spec
 // is expected to survive the primary restart in a later one.
@@ -75,6 +79,12 @@ var _ = Describe("RedisInstance", Ordered, func() {
 
 		By("creating the RedisInstance")
 		Expect(kubectlApply(redisInstanceManifest)).To(Succeed())
+
+		By("reading the passwords of the internal users")
+		Eventually(func(g Gomega) {
+			operatorPassword = secretValue(g, redisName+"-internal-auth", "operator-password")
+			replicationPassword = secretValue(g, redisName+"-internal-auth", "replication-password")
+		}).Should(Succeed())
 	})
 
 	AfterAll(func() {
@@ -103,6 +113,16 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run", ""))
 
 		Expect(redisCLI(Default, primary, "PING")).To(Equal("PONG"))
+	})
+
+	It("lets only the internal users in, each with its own permissions", func() {
+		// redis-cli may exit with 0 on an error reply, so only the output is checked.
+		out, _ := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "redis-cli", "PING")
+		Expect(out).To(ContainSubstring("NOAUTH"), "the default user must be off")
+
+		out, _ = kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--",
+			"redis-cli", "--user", "_replication", "--pass", replicationPassword, "--no-auth-warning", "GET", "e2e-key")
+		Expect(out).To(ContainSubstring("NOPERM"), "the replication user must not read data")
 	})
 
 	It("creates the headless Service", func() {
@@ -161,9 +181,7 @@ var _ = Describe("RedisInstance", Ordered, func() {
 			g.Expect(redisCLI(g, primary, "-h", redisName+"-ro", "GET", "rw-key")).To(Equal("via-rw"))
 		}).Should(Succeed(), "a replica behind -ro did not serve the read")
 
-		// redis-cli may exit with 0 on an error reply, so only the output is checked.
-		out, _ := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--",
-			"redis-cli", "-h", redisName+"-ro", "SET", "rw-key", "via-ro")
+		out, _ := kubectl(redisCLIArgs(primary, "-h", redisName+"-ro", "SET", "rw-key", "via-ro")...)
 		Expect(out).To(ContainSubstring("READONLY"))
 	})
 
@@ -239,11 +257,27 @@ func podIP(name string) string {
 	return out
 }
 
-// redisCLI runs redis-cli inside the given Pod and returns its output.
+// redisCLI runs redis-cli as the operator user inside the given Pod and returns its output.
 func redisCLI(g Gomega, pod string, args ...string) string {
-	out, err := kubectl(append([]string{"exec", pod, "-n", redisNamespace, "-c", "redis", "--", "redis-cli"}, args...)...)
+	out, err := kubectl(redisCLIArgs(pod, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
+}
+
+// redisCLIArgs returns the kubectl arguments that run redis-cli as the operator user.
+func redisCLIArgs(pod string, args ...string) []string {
+	return append([]string{"exec", pod, "-n", redisNamespace, "-c", "redis", "--",
+		"redis-cli", "--user", "_operator", "--pass", operatorPassword, "--no-auth-warning"}, args...)
+}
+
+// secretValue returns the decoded value of a key of a Secret in the Redis namespace.
+func secretValue(g Gomega, secret, key string) string {
+	out, err := kubectl("get", "secret", secret, "-n", redisNamespace, "-o", "jsonpath={.data."+key+"}")
+	g.Expect(err).NotTo(HaveOccurred())
+	value, err := base64.StdEncoding.DecodeString(out)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(value).NotTo(BeEmpty())
+	return string(value)
 }
 
 // infoField returns the value of a "field:value" line from Redis INFO output.

@@ -39,6 +39,20 @@ spec:
           spec:
             description: spec defines the desired state of RedisInstance
             properties:
+              acl:
+                default: {}
+                description: ACL configures the users of Redis.
+                properties:
+                  defaultUser:
+                    default: disabled
+                    description: |-
+                      DefaultUser enables the default user of Redis, which needs no password
+                      and may run every command. Meant for development only.
+                    enum:
+                    - disabled
+                    - enabled
+                    type: string
+                type: object
               image:
                 type: string
               instances:

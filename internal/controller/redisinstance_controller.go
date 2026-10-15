@@ -117,7 +117,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 					},
 					ReadinessProbe: imProbe("/readyz"),
 					LivenessProbe:  imProbe("/healthz"),
-					Command:        []string{managerPath, "instance", "run"},
+					Command:        instanceCommand(instance),
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",
@@ -129,6 +129,11 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 							MountPath: instancemanager.CertificatesDir,
 							ReadOnly:  true,
 						},
+						{
+							Name:      internalAuthVolume,
+							MountPath: instancemanager.InternalAuthDir,
+							ReadOnly:  true,
+						},
 					},
 					SecurityContext: containerSecurity,
 				},
@@ -137,6 +142,12 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 				{
 					Name:         controllerVolume,
 					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				},
+				{
+					Name: internalAuthVolume,
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{SecretName: internalAuthSecretName(instance)},
+					},
 				},
 				{
 					Name: "data",
@@ -155,6 +166,15 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 			},
 		},
 	}
+}
+
+// instanceCommand runs the Instance Manager, which starts redis-server.
+func instanceCommand(instance *redisv1.RedisInstance) []string {
+	command := []string{managerPath, "instance", "run"}
+	if instance.Spec.ACL.DefaultUser == redisv1.DefaultUserEnabled {
+		command = append(command, "--default-user")
+	}
+	return command
 }
 
 // imProbe checks the given path on the probe port of the Instance Manager.
@@ -365,10 +385,15 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var readyCount int32 = 0
 
-	// Before the Pods: they cannot start until the Secret they mount exists.
+	// Before the Pods: they cannot start until the Secrets they mount exist.
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	internalAuth, err := r.ensureInternalAuthSecret(ctx, &instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	operatorPassword := string(internalAuth.Data[instancemanager.OperatorPasswordKey])
 
 	for _, svc := range []*corev1.Service{
 		buildHeadlessService(&instance),
@@ -447,7 +472,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			continue
 		}
 
-		changed, err := r.ensureReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost)
+		changed, err := r.ensureReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost, operatorPassword)
 		if err != nil {
 			logger.Error(err, "Failed to configure replication", "pod", replicaName)
 			replicationPending = true
