@@ -159,6 +159,20 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}
 	})
 
+	It("sends REPLICAOF through the Instance Manager with the epoch of the primary", func() {
+		Eventually(func(g Gomega) {
+			out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o", "jsonpath={.status.primaryEpoch}")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("1"))
+		}).Should(Succeed())
+
+		for i := 1; i < redisInstances; i++ {
+			out, err := kubectl("exec", podName(i), "-n", redisNamespace, "-c", "redis", "--", "cat", "/data/.operator/epoch")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(Equal("1"), "replica %s did not store the epoch", podName(i))
+		}
+	})
+
 	It("serves the Instance Manager API only to clients with the operator certificate", func() {
 		By("forwarding a local port to the API of the primary")
 		portForward := exec.Command("kubectl", "port-forward", "pod/"+primary, "-n", redisNamespace,

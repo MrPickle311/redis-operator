@@ -35,7 +35,6 @@ type Options struct {
 }
 
 // RunInstance runs redis-server and serves the probes until redis-server exits.
-// defaultUser enables the passwordless default user of Redis.
 func RunInstance(ctx context.Context, opts Options) error {
 	auth, err := readInternalAuth(InternalAuthDir)
 	if err != nil {
@@ -52,7 +51,7 @@ func RunInstance(ctx context.Context, opts Options) error {
 	}
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:        "localhost:6379",
+		Addr:        "localhost:" + strconv.Itoa(redisPort),
 		Username:    OperatorUser,
 		Password:    auth.operatorPassword,
 		DialTimeout: time.Second,
@@ -66,7 +65,7 @@ func RunInstance(ctx context.Context, opts Options) error {
 	}
 	status := &http.Server{
 		Addr:              ":" + strconv.Itoa(StatusPort),
-		Handler:           statusHandler(rdb),
+		Handler:           apiHandler(rdb, epochPath),
 		TLSConfig:         serverTLSConfig(CertificatesDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

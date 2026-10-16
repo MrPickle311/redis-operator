@@ -59,22 +59,48 @@ func New(ca pki.KeyPair) (*Client, error) {
 // Status returns the replication state of the instance at host, its Pod DNS name.
 func (c *Client) Status(ctx context.Context, host string) (instancemanager.InstanceStatus, error) {
 	var status instancemanager.InstanceStatus
+	err := c.do(ctx, http.MethodGet, host, "/status", nil, &status)
+	return status, err
+}
 
-	url := "https://" + net.JoinHostPort(host, strconv.Itoa(c.port)) + "/status"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// ReplicaOf makes the instance at host replicate from primaryHost. It returns
+// true when the replication target had to change. The Instance Manager rejects
+// the command when it has already accepted a higher epoch.
+func (c *Client) ReplicaOf(ctx context.Context, host string, epoch int64, primaryHost string) (bool, error) {
+	var resp instancemanager.ReplicaOfResponse
+	req := instancemanager.ReplicaOfRequest{Epoch: epoch, PrimaryHost: primaryHost}
+	err := c.do(ctx, http.MethodPost, host, "/replicaof", req, &resp)
+	return resp.Changed, err
+}
+
+// do sends body as JSON, unless it is nil, and decodes the response into out.
+func (c *Client) do(ctx context.Context, method, host, path string, body, out any) error {
+	var reqBody io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = bytes.NewReader(data)
+	}
+
+	url := "https://" + net.JoinHostPort(host, strconv.Itoa(c.port)) + path
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
-		return status, err
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return status, err
+		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return status, fmt.Errorf("GET %s: %s: %s", url, resp.Status, bytes.TrimSpace(body))
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(msg))
 	}
-	err = json.NewDecoder(resp.Body).Decode(&status)
-	return status, err
+	return json.NewDecoder(resp.Body).Decode(out)
 }

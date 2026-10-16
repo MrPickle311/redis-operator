@@ -781,8 +781,10 @@ redis-operator/
 - **Krok 1.3:** wewnętrzna PKI (`internal/pki`, ECDSA P-256): CA w Secret `redis-operator-ca` w namespace operatora, Secret `<name>-im-tls` per instancja z odnowieniem po 2/3 ważności i przy zmianie CA; API IM na `:8000` po mTLS (tylko `ClientAuth` z CN `redis-operator`, certy czytane przy każdym handshake'u); `GET /status` z `INFO replication`; `internal/imclient` (świeży cert klienta per handshake); reconciler czyta stan replik przez `/status`.
 - **Krok 1.4:** Secret `<name>-internal-auth` (hasła `crypto/rand.Text()`, generowane raz, nigdy nie podmieniane); IM zapisuje `redis.conf` z `user default off`, `_operator` i `_replication` (`+psync +replconf +ping`) oraz `masteruser`/`masterauth`; probes, `/status` i `REPLICAOF` operatora logują się jako `_operator`; `spec.acl.defaultUser: disabled|enabled` (flaga `--default-user` IM).
 
+- **Krok 1.5:** `spec.resources` 1:1 do kontenera `redis`; `spec.redis.maxmemoryPolicy` (enum, domyślnie `noeviction`) i `maxmemoryRatio` (10–95, domyślnie 75); IM czyta limit z cgroup v2 (`memory.max`) i zapisuje `maxmemory`/`maxmemory-policy` w `redis.conf`; bez limitu `maxmemory 0`, condition `MemoryLimited=False` i jeden Warning Event (`events.k8s.io`).
+- **Krok 2.1:** `POST /replicaof {epoch, primaryHost}` w IM (idempotentny, przez `INFO replication`); `status.primaryEpoch` (na razie zawsze 1); IM trzyma najwyższy przyjęty epoch w `/data/.operator/epoch` (atomowy zapis) i odrzuca starsze polecenia (409); operator nie łączy się już z Redisem bezpośrednio; status zapisywany tylko przy realnej zmianie (`equality.Semantic.DeepEqual`).
+
 ### Świadomie tymczasowe uproszczenia
-- `REPLICAOF` operator wysyła bezpośrednio do Redisa (do kroku 2, potem przez API IM).
 - Ordinal 0 = zawsze primary (brak failoveru, krok 4).
 - Brak update Podów przy zmianie `spec` (krok 3).
 - Replika jest Ready przed `REPLICAOF` i może przez chwilę serwować pusty dataset przez `-ro` (bezpieczny start, krok 2).

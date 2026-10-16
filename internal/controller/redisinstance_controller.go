@@ -25,6 +25,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -390,6 +391,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.Get(ctx, req.NamespacedName, &instance); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	oldStatus := instance.Status.DeepCopy()
+	// ponytail: the primary never changes before failover (step 4), so the epoch stays 1.
+	instance.Status.PrimaryEpoch = max(instance.Status.PrimaryEpoch, 1)
 
 	var readyCount int32 = 0
 	memoryUnlimited := false
@@ -398,11 +402,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
-	internalAuth, err := r.ensureInternalAuthSecret(ctx, &instance)
-	if err != nil {
+	if err := r.ensureInternalAuthSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
-	operatorPassword := string(internalAuth.Data[instancemanager.OperatorPasswordKey])
 
 	for _, svc := range []*corev1.Service{
 		buildHeadlessService(&instance),
@@ -483,7 +485,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			continue
 		}
 
-		changed, err := r.ensureReplicaOf(ctx, podFQDN(&instance, ordinal), primaryHost, operatorPassword)
+		changed, err := r.InstanceManager.ReplicaOf(ctx, podFQDN(&instance, ordinal), instance.Status.PrimaryEpoch, primaryHost)
 		if err != nil {
 			logger.Error(err, "Failed to configure replication", "pod", replicaName)
 			replicationPending = true
@@ -494,11 +496,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	conditionChanged := r.setMemoryLimitedCondition(&instance, memoryUnlimited)
-	if conditionChanged || instance.Status.ReadyInstances != readyCount || instance.Status.CurrentPrimary != primaryPod.Name {
-		instance.Status.ReadyInstances = readyCount
-		instance.Status.Phase = fmt.Sprintf("%d/%d ready", readyCount, instance.Spec.Instances)
-		instance.Status.CurrentPrimary = primaryPod.Name
+	r.setMemoryLimitedCondition(&instance, memoryUnlimited)
+	instance.Status.ReadyInstances = readyCount
+	instance.Status.Phase = fmt.Sprintf("%d/%d ready", readyCount, instance.Spec.Instances)
+	instance.Status.CurrentPrimary = primaryPod.Name
+	if !equality.Semantic.DeepEqual(oldStatus, &instance.Status) {
 		if err := r.Status().Update(ctx, &instance); err != nil {
 			return ctrl.Result{}, err
 		}

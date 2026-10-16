@@ -76,7 +76,7 @@ spec:
                     - allkeys-random
                     - volatile-lru
                     - volatile-lfu
-                    - vo-random
+                    - volatile-random
                     - volatile-ttl
                     type: string
                   maxmemoryRatio:
@@ -277,6 +277,13 @@ spec:
                 type: string
               phase:
                 type: string
+              primaryEpoch:
+                description: |-
+                  PrimaryEpoch grows with every change of the primary. The Instance
+                  Managers reject commands sent for an older epoch, e.g. by a former
+                  operator leader.
+                format: int64
+                type: integer
               readyInstances:
                 format: int32
                 type: integer

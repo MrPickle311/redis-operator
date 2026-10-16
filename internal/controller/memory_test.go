@@ -27,6 +27,18 @@ var _ = Describe("Memory", func() {
 			Expect(instance.Spec.Redis.MaxmemoryRatio).To(BeEquivalentTo(75))
 		})
 
+		It("accepts every eviction policy of Redis", func() {
+			for _, policy := range []string{
+				"noeviction", "allkeys-lru", "allkeys-lfu", "allkeys-random",
+				"volatile-lru", "volatile-lfu", "volatile-random", "volatile-ttl",
+			} {
+				instance := newInstance("memory-policy-" + policy)
+				instance.Spec.Redis.MaxmemoryPolicy = policy
+				Expect(k8sClient.Create(ctx, instance)).To(Succeed(), "policy %s", policy)
+				DeferCleanup(k8sClient.Delete, ctx, instance)
+			}
+		})
+
 		DescribeTable("rejects invalid values",
 			func(mutate func(*redisv1.RedisSpec)) {
 				instance := newInstance("memory-invalid-test")

@@ -59,7 +59,7 @@ type RedisInstanceSpec struct {
 type RedisSpec struct {
 	// MaxmemoryPolicy is what Redis does when it reaches maxmemory. The
 	// default noeviction rejects writes instead of silently deleting keys.
-	// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;vo-random;volatile-ttl
+	// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;volatile-random;volatile-ttl
 	// +kubebuilder:default=noeviction
 	// +optional
 	MaxmemoryPolicy string `json:"maxmemoryPolicy,omitempty"`
@@ -127,6 +127,12 @@ type RedisInstanceStatus struct {
 	ReadyInstances int32  `json:"readyInstances,omitempty"`
 	Phase          string `json:"phase,omitempty"`
 	CurrentPrimary string `json:"currentPrimary,omitempty"`
+
+	// PrimaryEpoch grows with every change of the primary. The Instance
+	// Managers reject commands sent for an older epoch, e.g. by a former
+	// operator leader.
+	// +optional
+	PrimaryEpoch int64 `json:"primaryEpoch,omitempty"`
 	// Conditions of the instance, e.g. MemoryLimited.
 	// +listType=map
 	// +listMapKey=type

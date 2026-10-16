@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
 	"github.com/MrPickle311/redis-operator/internal/pki"
 )
 
@@ -68,10 +66,8 @@ func TestStatusAPIServesARenewedCertificateWithoutRestart(t *testing.T) {
 }
 
 func TestStatusIsUnavailableWithoutRedis(t *testing.T) {
-	// Nothing listens on port 1, like with a dead redis-server.
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
-	defer func() { _ = rdb.Close() }()
-	srv := httptest.NewServer(statusHandler(rdb))
+	rdb := deadRedis(t)
+	srv := httptest.NewServer(apiHandler(rdb, filepath.Join(t.TempDir(), "epoch")))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/status")

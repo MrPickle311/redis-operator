@@ -14,10 +14,10 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
 
-// ensureInternalAuthSecret returns the Secret with the passwords of the
+// ensureInternalAuthSecret creates the Secret with the passwords of the
 // internal users, generating each password once. Running instances keep using
 // the passwords they started with, so existing ones are never replaced.
-func (r *RedisInstanceReconciler) ensureInternalAuthSecret(ctx context.Context, instance *redisv1.RedisInstance) (*corev1.Secret, error) {
+func (r *RedisInstanceReconciler) ensureInternalAuthSecret(ctx context.Context, instance *redisv1.RedisInstance) error {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: internalAuthSecretName(instance), Namespace: instance.Namespace}}
 
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
@@ -34,5 +34,5 @@ func (r *RedisInstanceReconciler) ensureInternalAuthSecret(ctx context.Context, 
 	if result != controllerutil.OperationResultNone {
 		logf.FromContext(ctx).Info("Reconciled internal users Secret", "name", secret.Name, "operation", result)
 	}
-	return secret, err
+	return err
 }

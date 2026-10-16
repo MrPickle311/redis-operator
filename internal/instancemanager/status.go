@@ -29,8 +29,9 @@ type InstanceStatus struct {
 	MasterPort int    `json:"masterPort,omitempty"`
 }
 
-// statusHandler serves the API of the Instance Manager.
-func statusHandler(rdb *redis.Client) http.Handler {
+// apiHandler serves the API of the Instance Manager. epochPath is where it
+// keeps the highest epoch it has accepted.
+func apiHandler(rdb *redis.Client, epochPath string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		status, err := readStatus(r.Context(), rdb)
@@ -38,10 +39,36 @@ func statusHandler(rdb *redis.Client) http.Handler {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(status)
+		writeJSON(w, status)
+	})
+
+	guard := &epochGuard{path: epochPath}
+	mux.HandleFunc("POST /replicaof", func(w http.ResponseWriter, r *http.Request) {
+		var req ReplicaOfRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Epoch < 1 || req.PrimaryHost == "" {
+			http.Error(w, "expected a JSON body with epoch >= 1 and primaryHost", http.StatusBadRequest)
+			return
+		}
+		var resp ReplicaOfResponse
+		err := guard.run(req.Epoch, func() (err error) {
+			resp.Changed, err = replicaOf(r.Context(), rdb, req.PrimaryHost)
+			return err
+		})
+		switch {
+		case errors.Is(err, errStaleEpoch):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		default:
+			writeJSON(w, resp)
+		}
 	})
 	return mux
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func readStatus(ctx context.Context, rdb *redis.Client) (InstanceStatus, error) {

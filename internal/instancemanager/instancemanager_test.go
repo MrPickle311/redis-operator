@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 func TestRunReturnsTheExitCodeOfTheProcess(t *testing.T) {
@@ -68,9 +66,7 @@ func TestCopySelfWritesAnExecutableCopy(t *testing.T) {
 }
 
 func TestProbes(t *testing.T) {
-	// Nothing listens on port 1, so every PING fails like with a dead redis-server.
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
-	defer func() { _ = rdb.Close() }()
+	rdb := deadRedis(t)
 	srv := httptest.NewServer(probeHandler(rdb))
 	defer srv.Close()
 

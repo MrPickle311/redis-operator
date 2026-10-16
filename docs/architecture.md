@@ -75,11 +75,11 @@ flowchart TB
             IM["Instance Manager<br/>/controller/manager instance run<br/>PID 1"]:::proc
             RS["redis-server<br/>:6379"]:::proc
             PROBE[":8001 HTTP<br/>/healthz /readyz"]:::proc
-            STATUS[":8000 HTTPS mTLS<br/>GET /status"]:::proc
+            STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof"]:::proc
         end
 
         CTRL[("emptyDir /controller<br/>manager binary<br/>redis.conf 0600")]:::vol
-        DATA[("/data<br/>PVC")]:::vol
+        DATA[("/data<br/>PVC<br/>.operator/epoch")]:::vol
         CERTS[("/certificates<br/>Secret cache-im-tls")]:::secret
         IAUTH[("/internal-auth<br/>Secret cache-internal-auth")]:::secret
         CG[("/sys/fs/cgroup/memory.max<br/>limit from spec.resources")]:::vol
@@ -95,7 +95,8 @@ flowchart TB
     IM --- STATUS
     CERTS -- reloaded on every handshake --> STATUS
     PROBE -- PING as _operator --> RS
-    STATUS -- INFO replication as _operator --> RS
+    STATUS -- INFO replication, REPLICAOF as _operator --> RS
+    STATUS -- highest accepted epoch --> DATA
     RS --- DATA
 ```
 
@@ -107,7 +108,7 @@ the redis container can run the Instance Manager with any Redis image.
 
 | User           | Rights                         | Used by                                      |
 |----------------|--------------------------------|----------------------------------------------|
-| `_operator`    | `+@all`                        | operator (`REPLICAOF`), Instance Manager      |
+| `_operator`    | `+@all`                        | Instance Manager                              |
 | `_replication` | `+psync +replconf +ping`       | replicas syncing from the primary            |
 
 ## Memory
@@ -185,12 +186,30 @@ flowchart LR
     OP <-- "watch RedisInstance + owned objects<br/>create Secrets, Services, PVCs, Pods<br/>patch role label, update status" --> API
     API -- schedules --> KUBELET
     KUBELET -- "probes :8001" --> IM0 & IM1
-    OP -- "GET /status :8000<br/>mTLS, client CN=redis-operator" --> IM1
-    OP -- "REPLICAOF cache-0... :6379<br/>user _operator" --> RS1
+    OP -- "POST /replicaof :8000<br/>mTLS, client CN=redis-operator" --> IM1
+    IM1 -- "REPLICAOF cache-0... <br/>user _operator" --> RS1
     RS1 -- "PSYNC :6379<br/>user _replication" --> RS0
     APP -- "cache-rw :6379" --> RS0
     APP -- "cache-ro :6379" --> RS1
 ```
+
+## Epoch
+
+`status.primaryEpoch` grows with every change of the primary (failover comes
+in step 4; until then it stays `1`). Every command of the operator to an
+Instance Manager carries it:
+
+- The Instance Manager stores the highest epoch it has accepted on the PVC
+  (`/data/.operator/epoch`, written atomically with fsync and rename), so it
+  survives restarts of the Pod.
+- A command with a lower epoch gets `409 Conflict` and is not run. This stops
+  a late request of a former operator leader from undoing a failover.
+- Commands run one at a time, so one of an older epoch never runs after a
+  newer one.
+
+The operator no longer connects to Redis itself: `REPLICAOF` goes through
+`POST /replicaof`, which is idempotent and does nothing when the replica
+already follows the requested primary.
 
 ## Reconcile loop
 
@@ -217,14 +236,19 @@ sequenceDiagram
     end
     OP->>API: Delete Pods and generated PVCs above spec.instances
     loop each Ready replica
-        OP->>IM: GET /status (mTLS)
-        IM->>RS: INFO replication
-        IM-->>OP: role, masterHost, masterPort
-        alt not replicating from cache-0
-            OP->>RS: REPLICAOF cache-0.cache-hl.app.svc 6379
+        OP->>IM: POST /replicaof {epoch, primaryHost} (mTLS)
+        alt epoch lower than the one IM accepted
+            IM-->>OP: 409 Conflict
+        else
+            IM->>IM: store epoch in /data/.operator/epoch
+            IM->>RS: INFO replication
+            opt not replicating from cache-0
+                IM->>RS: REPLICAOF cache-0.cache-hl.app.svc 6379
+            end
+            IM-->>OP: {changed}
         end
     end
-    OP->>API: Update status (readyInstances, phase, currentPrimary,<br/>MemoryLimited condition)
+    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited condition)
     opt a Pod has no memory limit (first time)
         OP->>API: Warning Event MemoryLimitMissing
     end

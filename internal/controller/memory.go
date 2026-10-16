@@ -19,11 +19,10 @@ func hasMemoryLimit(pod *corev1.Pod) bool {
 	return false
 }
 
-// setMemoryLimitedCondition sets the MemoryLimited condition and returns true
-// when it changed. Without a memory limit Redis runs without maxmemory and
+// setMemoryLimitedCondition sets the MemoryLimited condition. Without a memory limit Redis runs without maxmemory and
 // grows until it is OOMKilled, so the condition turning False also emits a
 // Warning Event, once rather than on every reconcile.
-func (r *RedisInstanceReconciler) setMemoryLimitedCondition(instance *redisv1.RedisInstance, unlimited bool) bool {
+func (r *RedisInstanceReconciler) setMemoryLimitedCondition(instance *redisv1.RedisInstance, unlimited bool) {
 	condition := metav1.Condition{
 		Type:               redisv1.ConditionMemoryLimited,
 		Status:             metav1.ConditionTrue,
@@ -41,5 +40,5 @@ func (r *RedisInstanceReconciler) setMemoryLimitedCondition(instance *redisv1.Re
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, condition.Reason, "Reconcile", condition.Message)
 		}
 	}
-	return meta.SetStatusCondition(&instance.Status.Conditions, condition)
+	meta.SetStatusCondition(&instance.Status.Conditions, condition)
 }

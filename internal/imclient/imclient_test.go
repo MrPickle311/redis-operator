@@ -61,6 +61,28 @@ func TestStatusReturnsTheErrorOfTheInstanceManager(t *testing.T) {
 	}
 }
 
+func TestReplicaOfSendsTheEpochAndThePrimary(t *testing.T) {
+	ca := mustCA(t)
+	var got instancemanager.ReplicaOfRequest
+	client := newTestClient(t, ca, startInstanceManager(t, ca, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/replicaof" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(instancemanager.ReplicaOfResponse{Changed: true})
+	}))
+
+	changed, err := client.ReplicaOf(context.Background(), "localhost", 3, replica.MasterHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := instancemanager.ReplicaOfRequest{Epoch: 3, PrimaryHost: replica.MasterHost}
+	if got != want || !changed {
+		t.Errorf("ReplicaOf() sent %+v and returned changed=%v, want %+v and true", got, changed, want)
+	}
+}
+
 // startInstanceManager serves handler over mTLS like an Instance Manager: with
 // a server certificate for localhost and only clients from ca.
 func startInstanceManager(t *testing.T, ca pki.KeyPair, handler http.HandlerFunc) *httptest.Server {
