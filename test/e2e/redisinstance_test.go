@@ -261,6 +261,53 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}, 15*time.Second).Should(Equal(before), "a reconcile triggered a full resync of a replica")
 	})
 
+	It("keeps a new replica out of the Services until its first sync is done", func() {
+		newReplica := podName(redisInstances)
+		setReplicationUser := func(state string) {
+			Eventually(func(g Gomega) {
+				g.Expect(redisCLI(g, primary, "ACL", "SETUSER", "_replication", state)).To(Equal("OK"))
+			}).Should(Succeed())
+		}
+		scaleTo := func(instances int) {
+			_, err := kubectl("patch", "redisinstance", redisName, "-n", redisNamespace, "--type=merge",
+				"-p", fmt.Sprintf(`{"spec":{"instances":%d}}`, instances))
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		By("blocking the sync: the primary no longer accepts the replication user")
+		// Only new logins are refused; existing replication links stay up.
+		setReplicationUser("off")
+		DeferCleanup(func() {
+			setReplicationUser("on")
+			scaleTo(redisInstances)
+			Eventually(func() bool {
+				_, err := kubectl("get", "pod", newReplica, "-n", redisNamespace)
+				return err != nil
+			}).Should(BeTrue(), "Pod %s was not removed after scaling down", newReplica)
+		})
+
+		By("adding a replica")
+		scaleTo(redisInstances + 1)
+		Eventually(func(g Gomega) {
+			g.Expect(redisCLI(g, newReplica, "PING")).To(Equal("PONG"))
+		}).Should(Succeed(), "redis-server did not start in %s", newReplica)
+
+		By("checking that it is running but not Ready, and that the other replicas stay Ready")
+		Consistently(func(g Gomega) {
+			g.Expect(infoField(redisCLI(g, newReplica, "INFO", "replication"), "master_link_status")).To(Equal("down"))
+			g.Expect(podReady(newReplica)).To(BeFalse(), "a replica without the dataset of the primary is Ready")
+			for _, replica := range replicaPods() {
+				g.Expect(podReady(replica)).To(BeTrue(), "synced replica %s left the Services", replica)
+			}
+		}, 20*time.Second).Should(Succeed())
+
+		By("unblocking the sync")
+		setReplicationUser("on")
+		Eventually(podReady).WithArguments(newReplica).Should(BeTrue())
+		Expect(redisCLI(Default, newReplica, "GET", "e2e-key")).To(Equal("hello"),
+			"the replica became Ready without the data of the primary")
+	})
+
 	It("reconnects the replicas after the primary Pod is recreated", func() {
 		oldIP := podIP(primary)
 

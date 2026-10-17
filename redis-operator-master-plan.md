@@ -183,6 +183,8 @@ API IM pozwala promować, degradować i zmieniać ACL, więc bez uwierzytelnieni
 - Operator utrzymuje **wewnętrzne PKI dla IM** (CA per operator, Secret w namespace operatora; certyfikat serwerowy per `RedisInstance`). To PKI jest **zawsze** generowane przez operator i jest niezależne od TLS Redisa z sekcji 7.
 - Port `:8000` (API) wymaga mTLS: IM akceptuje tylko certyfikat klienta z CN operatora.
 - Port `:8001` (probes) wystawia tylko `/healthz` i `/readyz`, bez żadnych mutacji.
+  - `/healthz` (liveness) sprawdza tylko IM, nie Redisa: ładowanie dużego datasetu nie może restartować Poda.
+  - `/readyz` (readiness): `PING` (odrzuca `LOADING`), a na replice dodatkowo zakończony pierwszy pełny sync (`master_link_status:up` i `master_sync_in_progress:0`). Spełniony warunek IM zapamiętuje do swojego restartu: przy awarii primary repliki zostają w `-ro` i serwują lekko nieaktualne dane, zamiast wypaść wszystkie naraz. Primary nie jest zapamiętywany, więc zdegradowany primary musi najpierw zsynchronizować się jako replika.
 - Operator zawsze tworzy wbudowaną NetworkPolicy pozwalającą na ruch do `:8000` tylko z Podów operatora. Jest ona niezależna od `spec.networkPolicy.mode`, bo to element bezpieczeństwa operatora, a nie aplikacji.
 
 ### 3.2 Użytkownicy wewnętrzni
@@ -283,6 +285,8 @@ Kryteria wyboru: ten sam `master_replid` co ostatnio znany primary, najwyższy `
 ### 3.6 Update istniejących Podów
 
 Zmiana `spec.image` lub konfiguracji, która wymaga restartu, uruchamia rolling update: najpierw repliki (po jednej, czekając na `master_link_status:up` i nadrobienie lagu), na końcu switchover primary na zaktualizowaną replikę i restart starego primary. Zmiany, które da się zastosować przez `CONFIG SET`, idą bez restartu.
+
+**`/replicaof` także do replik, które nie są Ready.** Replika jest Ready dopiero po pierwszym syncu (sekcja 3.1), więc replika z nieaktualnym celem replikacji (np. wystartowała ze starym `replicaof` w `redis.conf` tuż przed switchoverem) nigdy nie zrobi syncu i nigdy nie będzie Ready. Dziś operator wysyła `/replicaof` tylko do Ready replik. W kroku 3, razem z pierwszym przeniesieniem primary, warunek zmienia się na „Pod Running, a IM odpowiada”; błąd IM w trakcie startu Poda oznacza tylko ponowienie reconcile.
 
 ### 3.7 Moduły Redisa
 
@@ -792,12 +796,13 @@ redis-operator/
 - **Krok 2.1:** `POST /replicaof {epoch, primaryHost}` w IM (idempotentny, przez `INFO replication`); `status.primaryEpoch` (na razie zawsze 1); IM trzyma najwyższy przyjęty epoch w `/data/.operator/epoch` (atomowy zapis) i odrzuca starsze polecenia (409); operator nie łączy się już z Redisem bezpośrednio; status zapisywany tylko przy realnej zmianie (`equality.Semantic.DeepEqual`).
 
 - **Krok 2.2:** ServiceAccount, Role (`get` tylko na własny `RedisInstance`) i RoleBinding `<name>-instance` per instancja; token jako projected volume tylko w kontenerze `redis` (`automountServiceAccountToken: false` zostaje); IM przed startem `redis-server` czyta `status.currentPrimary` (czeka, aż operator go ustawi) i replika startuje od razu z `replicaof` w `redis.conf`; `POD_NAME`/`POD_NAMESPACE` z Downward API, `--instance` jako flaga.
+- **Krok 2.3:** `/readyz` na replice wymaga zakończonego pierwszego syncu (`master_link_status:up`, `master_sync_in_progress:0`), zapamiętanego do restartu IM (sekcja 3.1); test e2e: nowa replika bez możliwości syncu (wyłączony `_replication` na primary) jest Running, ale nie Ready, a zsynchronizowane repliki zostają Ready.
 
 ### Świadomie tymczasowe uproszczenia
 - Ordinal 0 = zawsze primary (brak failoveru, krok 4).
 - Primary startuje bez fence i bez porównania danych z replikami (bezpieczny start primary z sekcji 3.3, krok 4 razem z failoverem). `/promote`, `/demote`, `/fence` powstaną razem z pierwszym użyciem (switchover w kroku 3, failover w kroku 4).
 - Brak update Podów przy zmianie `spec` (krok 3).
-- Replika jest Ready, zanim skończy pierwszą synchronizację z primary, i może przez chwilę serwować stary lub pusty dataset przez `-ro` (readiness po pierwszym syncu: krok 2.3).
+- Operator wysyła `/replicaof` tylko do Ready replik. Wystarcza, dopóki primary się nie przenosi (replika startuje z `replicaof` w `redis.conf`); zmiana w kroku 3 (sekcja 3.6).
 - Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
 - Brak TLS Redisa, ACL użytkowników, PDB, backupu.
 
@@ -810,7 +815,7 @@ graph TD
     S0["0. Porządki<br/>API group, spec.storage, headless + DNS,<br/>-rw/-ro/-r, etykiety role, PVC managed/external,<br/>CEL, idempotentny REPLICAOF"]
     S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni,<br/>spec.resources + maxmemory z limitu"]
     S2["2. IM v2<br/>/replicaof, /promote, /demote, /fence,<br/>epoch, bezpieczny start,<br/>SA + Role + RoleBinding per instancja"]
-    S3["3. Reconciler → imclient<br/>rolling update, switchover,<br/>spec.redis.parameters"]
+    S3["3. Reconciler → imclient<br/>rolling update, switchover,<br/>spec.redis.parameters,<br/>/replicaof także do nie-Ready replik"]
     S4["4. Failover<br/>PDB, anti-affinity, węzeł NotReady, drain"]
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]
