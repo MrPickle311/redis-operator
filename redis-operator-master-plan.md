@@ -668,6 +668,13 @@ Reużywa całego silnika `RedisInstance`: IM, fencing, storage, TLS, ACL. Nowe e
 - skalowanie shardów: migracja slotów (`CLUSTER SETSLOT ... MIGRATING/IMPORTING` + `MIGRATE`), wykonywana krokowo z zapisem postępu w statusie, żeby dało się ją wznowić po restarcie operatora;
 - failover: natywny mechanizm klastra (gossip + głosowanie primary). Operator nie decyduje o failoverze, tylko obserwuje (`CLUSTER SHARDS`), aktualizuje etykiety/status i odtwarza utracone repliki. Tu operator **nie** jest źródłem decyzji, bo Redis Cluster ma własne kworum.
 
+Do doprecyzowania przy kroku 10:
+- **Rozmieszczenie Podów.** Anti-affinity per shard (etykieta `redis.operator.com/shard`), nie per instancja: primary i jego repliki muszą stać na różnych węzłach (lub strefach). Pody różnych shardów mogą dzielić węzeł. Bez tego awaria jednego węzła zabiera cały shard i `cluster_state:fail`.
+- **Zmniejszanie liczby shardów.** Kolejność: (1) wyprowadzić wszystkie sloty z usuwanego shardu (migracja jak przy skalowaniu w górę), (2) `CLUSTER FORGET <id>` na **każdym** pozostałym node'zie w oknie 60 s (inaczej gossip przywraca wpis), (3) dopiero potem usunąć Pody i PVC. Każdy etap zapisany w statusie, żeby wznowić po restarcie. Skalowanie w dół z niepustym shardem blokowane walidacją/statusem, nie przez kasowanie danych.
+- **Bezpieczny start w trybie klastra.** `nodes.conf` (`cluster-config-file`) leży na PVC obok danych, więc restart zachowuje node ID i przydział slotów. Node z pustym PVC (nowy lub utracony wolumen) dostaje nowe ID: operator robi `CLUSTER FORGET` starego ID i dołącza nowy jako replikę (`CLUSTER MEET` + `CLUSTER REPLICATE`), nigdy jako primary z pustymi slotami. Analogia do ochrony przed pustym primary z sekcji 3.3.
+- **Kształt statusu.** `status.clusterState` (`ok`/`fail` z `CLUSTER INFO`), `status.shards[]`: `{name, primary, replicas[], slots: "0-5460", nodeID}`, plus `status.slotMigration` (źródło, cel, zakres, postęp) dla wznawialnej migracji. Warunki: `Ready`, `SlotsCovered` (wszystkie 16384 przypisane), `Migrating`.
+- **Wpływ na `RedisInstance` już teraz.** IM nie może zakładać jednego primary na całą instancję: rola i stan replikacji pochodzą z Redisa (`INFO replication`, w klastrze `CLUSTER SHARDS`), a cel replikacji przychodzi z zewnątrz (dziś `status.currentPrimary`, w klastrze primary danego shardu).
+
 ---
 
 ## 12. Walidacja — CEL najpierw, webhooki tylko tam, gdzie muszą
