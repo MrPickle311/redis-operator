@@ -17,12 +17,16 @@ flowchart LR
     classDef svc fill:#d6eaf8,stroke:#2471a3,color:#000
     classDef secret fill:#fdebd0,stroke:#ca6f1e,color:#000
     classDef pvc fill:#fcf3cf,stroke:#b7950b,color:#000
+    classDef rbac fill:#fadbd8,stroke:#b03a2e,color:#000
     classDef ext fill:#eaeded,stroke:#7f8c8d,color:#000,stroke-dasharray:4 3
 
     CA["Secret redis-operator-ca<br/>operator namespace"]:::ext
     RI["RedisInstance<br/>cache"]:::cr
     EXT["PVC from<br/>spec.storage.existingClaims"]:::ext
 
+    RI --> SA["ServiceAccount cache-instance"]:::rbac
+    RI --> ROLE["Role cache-instance<br/>get redisinstances/cache"]:::rbac
+    RI --> RB["RoleBinding cache-instance"]:::rbac
     RI --> TLS["Secret cache-im-tls"]:::secret
     RI --> AUTH["Secret cache-internal-auth"]:::secret
     RI --> HL["Service cache-hl"]:::svc
@@ -44,6 +48,8 @@ How the objects use each other:
 | Object                      | Content                                         | Used by                                                  |
 |-----------------------------|-------------------------------------------------|----------------------------------------------------------|
 | Secret `redis-operator-ca`  | CA cert and key                                 | operator: signs `cache-im-tls` and its own client certs  |
+| ServiceAccount `cache-instance` | token of the Instance Managers           | every Pod (`serviceAccountName`), redis container only   |
+| Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` only  | the Instance Manager reads `status.currentPrimary`       |
 | Secret `cache-im-tls`       | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod, mounted at `/certificates`                    |
 | Secret `cache-internal-auth`| `operator-password`, `replication-password`     | every Pod at `/internal-auth`; operator for `REPLICAOF`  |
 | Service `cache-hl`          | headless                                        | stable DNS `cache-N.cache-hl.app.svc` for every Pod      |
@@ -83,12 +89,16 @@ flowchart TB
         CERTS[("/certificates<br/>Secret cache-im-tls")]:::secret
         IAUTH[("/internal-auth<br/>Secret cache-internal-auth")]:::secret
         CG[("/sys/fs/cgroup/memory.max<br/>limit from spec.resources")]:::vol
+        TOKEN[("/var/run/secrets/kubernetes.io/serviceaccount<br/>projected token of cache-instance")]:::secret
     end
+    API["Kubernetes API<br/>RedisInstance cache"]
 
     INIT -- copies itself --> CTRL
     CTRL -- runs binary --> IM
     IAUTH -- passwords --> IM
     CG -- memory limit --> IM
+    TOKEN -- token --> IM
+    IM -- "get status.currentPrimary<br/>before redis-server starts" --> API
     IM -- writes redis.conf --> CTRL
     IM -- starts, SIGTERM on shutdown --> RS
     IM --- PROBE
@@ -102,6 +112,22 @@ flowchart TB
 
 The init container copies the operator binary into a shared `emptyDir`, so
 the redis container can run the Instance Manager with any Redis image.
+
+## Safe start
+
+Before it starts `redis-server`, the Instance Manager reads
+`status.currentPrimary` of its own `RedisInstance` (waiting until the operator
+has set it):
+
+- **This Pod is the primary:** `redis.conf` has no `replicaof`.
+- **Another Pod is:** `redis.conf` gets `replicaof <primary>.cache-hl.app.svc 6379`,
+  so a restarted replica never runs as a primary, not even for a moment, and
+  takes no writes on a stale dataset.
+
+The Pod keeps `automountServiceAccountToken: false`. The operator mounts a
+projected token of `cache-instance` into the redis container only, at the path
+client-go expects, so the init container gets no token. The Role allows `get`
+on this one `RedisInstance` and nothing else.
 
 `redis.conf` turns off the passwordless `default` user (unless
 `spec.acl.defaultUser: enabled`) and defines two internal users:
@@ -229,6 +255,7 @@ sequenceDiagram
     OP->>API: Get RedisInstance
     OP->>API: CreateOrUpdate Secret cache-im-tls<br/>(new cert when missing or past 2/3 of lifetime)
     OP->>API: CreateOrUpdate Secret cache-internal-auth<br/>(generate only missing passwords)
+    OP->>API: CreateOrUpdate ServiceAccount, Role, RoleBinding cache-instance
     OP->>API: Ensure Services hl, rw, ro, r
     loop each ordinal
         OP->>API: Ensure PVC (unless existingClaim)

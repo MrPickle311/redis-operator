@@ -114,7 +114,7 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		// cmdline separates the arguments with NUL bytes.
 		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run",
-			"--maxmemory-ratio=75", "--maxmemory-policy=noeviction", ""))
+			"--instance="+redisName, "--maxmemory-ratio=75", "--maxmemory-policy=noeviction", ""))
 
 		Expect(redisCLI(Default, primary, "PING")).To(Equal("PONG"))
 	})
@@ -140,6 +140,35 @@ var _ = Describe("RedisInstance", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(out).To(Equal("True"))
 		}).Should(Succeed())
+	})
+
+	It("starts the replicas as replicas of the current primary", func() {
+		// Read by the Instance Manager from status.currentPrimary before redis-server starts.
+		conf := func(pod string) string {
+			out, err := kubectl("exec", pod, "-n", redisNamespace, "-c", "redis", "--", "cat", "/controller/redis.conf")
+			Expect(err).NotTo(HaveOccurred())
+			return out
+		}
+		Expect(conf(primary)).NotTo(ContainSubstring("replicaof"))
+		for i := 1; i < redisInstances; i++ {
+			Expect(conf(podName(i))).To(ContainSubstring(
+				fmt.Sprintf("replicaof %s.%s-hl.%s.svc 6379", primary, redisName, redisNamespace)))
+		}
+	})
+
+	It("lets the Instance Managers read only their own RedisInstance", func() {
+		account := fmt.Sprintf("--as=system:serviceaccount:%s:%s-instance", redisNamespace, redisName)
+		for _, check := range []struct {
+			verb, resource, want string
+		}{
+			{"get", "redisinstances.redis.operator.com/" + redisName, "yes"},
+			{"get", "redisinstances.redis.operator.com/other", "no"},
+			{"update", "redisinstances.redis.operator.com/" + redisName, "no"},
+			{"get", "secrets", "no"},
+		} {
+			out, _ := kubectl("auth", "can-i", check.verb, check.resource, "-n", redisNamespace, account)
+			Expect(out).To(Equal(check.want), "can-i %s %s", check.verb, check.resource)
+		}
 	})
 
 	It("creates the headless Service", func() {

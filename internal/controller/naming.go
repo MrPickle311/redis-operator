@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
+	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
 
 const redisPort = 6379
@@ -32,6 +33,7 @@ const (
 const (
 	certificatesVolume = "certificates"  // TLS of the Instance Manager API
 	internalAuthVolume = "internal-auth" // passwords of the internal users
+	apiAccessVolume    = "kube-api-access"
 )
 
 // instancePodName returns the name of the Pod for the given ordinal.
@@ -42,14 +44,18 @@ func instancePodName(instance *redisv1.RedisInstance, ordinal int32) string {
 // headlessServiceName returns the name of the headless Service that gives
 // every Pod a stable DNS record.
 func headlessServiceName(instance *redisv1.RedisInstance) string {
-	return instance.Name + "-hl"
+	return instancemanager.HeadlessServiceName(instance.Name)
 }
 
 // podFQDN returns the stable DNS name of the instance with the given ordinal.
-// Unlike the Pod IP, it does not change when the Pod is recreated.
 func podFQDN(instance *redisv1.RedisInstance, ordinal int32) string {
-	return fmt.Sprintf("%s.%s.%s.svc",
-		instancePodName(instance, ordinal), headlessServiceName(instance), instance.Namespace)
+	return instancemanager.PodFQDN(instancePodName(instance, ordinal), instance.Name, instance.Namespace)
+}
+
+// instanceAccountName returns the name of the ServiceAccount, Role and
+// RoleBinding of the Instance Managers.
+func instanceAccountName(instance *redisv1.RedisInstance) string {
+	return instance.Name + "-instance"
 }
 
 // serverSecretName returns the name of the Secret with the TLS certificate

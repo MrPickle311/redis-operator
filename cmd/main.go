@@ -65,13 +65,19 @@ func main() {
 		case "bootstrap":
 			exitOnError(instancemanager.CopySelf(os.Args[2]))
 		case "instance":
-			var opts instancemanager.Options
+			// The Downward API sets both variables in the Pod spec.
+			opts := instancemanager.Options{PodName: os.Getenv("POD_NAME"), Namespace: os.Getenv("POD_NAMESPACE")}
 			flags := flag.NewFlagSet("instance run", flag.ExitOnError)
+			flags.StringVar(&opts.Instance, "instance", "", "Name of the RedisInstance of this Pod")
 			flags.BoolVar(&opts.DefaultUser, "default-user", false, "Enable the passwordless default user")
 			flags.IntVar(&opts.MaxmemoryRatio, "maxmemory-ratio", 75, "Percent of the container memory limit used as maxmemory")
 			flags.StringVar(&opts.MaxmemoryPolicy, "maxmemory-policy", "noeviction", "What Redis does when it reaches maxmemory")
 			_ = flags.Parse(os.Args[3:])
-			exitOnError(instancemanager.RunInstance(ctrl.SetupSignalHandler(), opts))
+			c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
+			if err == nil {
+				err = instancemanager.RunInstance(ctrl.SetupSignalHandler(), c, opts)
+			}
+			exitOnError(err)
 		}
 	}
 

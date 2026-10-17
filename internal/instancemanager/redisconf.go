@@ -52,13 +52,14 @@ func readInternalAuth(dir string) (internalAuth, error) {
 
 // redisConfig returns the redis.conf with the internal users and the memory
 // settings. The default user is off unless opts.DefaultUser is set, when it
-// needs no password at all.
-func redisConfig(auth internalAuth, opts Options, maxmemory int64) string {
+// needs no password at all. A non-empty replicaOf makes Redis start as a
+// replica of that host.
+func redisConfig(auth internalAuth, opts Options, maxmemory int64, replicaOf string) string {
 	defaultACL := "user default off"
 	if opts.DefaultUser {
 		defaultACL = "user default on nopass ~* &* +@all"
 	}
-	return fmt.Sprintf(`%s
+	conf := fmt.Sprintf(`%s
 user %s on >%s ~* &* +@all
 user %s on >%s +psync +replconf +ping
 masteruser %s
@@ -70,4 +71,8 @@ maxmemory-policy %s
 		ReplicationUser, auth.replicationPassword,
 		ReplicationUser, auth.replicationPassword,
 		maxmemory, opts.MaxmemoryPolicy)
+	if replicaOf != "" {
+		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
+	}
+	return conf
 }

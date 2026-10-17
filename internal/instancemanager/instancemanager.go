@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // shutdownTimeout is how long redis-server may take to stop after SIGTERM
@@ -23,8 +26,13 @@ const shutdownTimeout = 30 * time.Second
 // tls.key, ca.crt) of the Instance Manager API.
 const CertificatesDir = "/certificates"
 
-// Options are the settings the operator passes to "instance run" as flags.
+// Options are the settings the operator passes to "instance run".
 type Options struct {
+	// Instance is the name of the RedisInstance the Pod belongs to.
+	Instance string
+	// PodName and Namespace identify the Pod; they come from the Downward API.
+	PodName   string
+	Namespace string
 	// DefaultUser enables the passwordless default user of Redis.
 	DefaultUser bool
 	// MaxmemoryRatio is the percent of the container memory limit that
@@ -35,18 +43,10 @@ type Options struct {
 }
 
 // RunInstance runs redis-server and serves the probes until redis-server exits.
-func RunInstance(ctx context.Context, opts Options) error {
+// It reads the current primary of the instance from c.
+func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	auth, err := readInternalAuth(InternalAuthDir)
 	if err != nil {
-		return err
-	}
-	limit, err := memoryLimit(cgroupMemoryMax)
-	if err != nil {
-		return err
-	}
-	conf := redisConfig(auth, opts, maxmemoryFor(limit, opts.MaxmemoryRatio))
-	// 0600: the file holds the passwords, like the mounted Secret it comes from.
-	if err := os.WriteFile(redisConfPath, []byte(conf), 0o600); err != nil {
 		return err
 	}
 
@@ -58,6 +58,7 @@ func RunInstance(ctx context.Context, opts Options) error {
 	})
 	defer func() { _ = rdb.Close() }()
 
+	// Before waiting for the primary: the liveness probe must answer meanwhile.
 	probes := &http.Server{
 		Addr:              ":" + strconv.Itoa(ProbePort),
 		Handler:           probeHandler(rdb),
@@ -74,6 +75,26 @@ func RunInstance(ctx context.Context, opts Options) error {
 		defer func() { _ = server.Close() }()
 	}
 
+	// Safe start: a replica starts as a replica, so it never takes writes or
+	// serves its stale dataset as a primary before the operator steps in.
+	primary, err := waitForPrimary(ctx, c, types.NamespacedName{Namespace: opts.Namespace, Name: opts.Instance})
+	if err != nil {
+		return err
+	}
+	var replicaOf string
+	if primary != opts.PodName {
+		replicaOf = PodFQDN(primary, opts.Instance, opts.Namespace)
+	}
+
+	limit, err := memoryLimit(cgroupMemoryMax)
+	if err != nil {
+		return err
+	}
+	conf := redisConfig(auth, opts, maxmemoryFor(limit, opts.MaxmemoryRatio), replicaOf)
+	// 0600: the file holds the passwords, like the mounted Secret it comes from.
+	if err := os.WriteFile(redisConfPath, []byte(conf), 0o600); err != nil {
+		return err
+	}
 	return Run(ctx, "redis-server", redisConfPath)
 }
 

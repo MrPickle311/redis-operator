@@ -87,7 +87,7 @@ var _ = Describe("RedisInstance controller", func() {
 
 			redis := pod.Spec.Containers[0]
 			Expect(redis.Command).To(Equal([]string{"/controller/manager", "instance", "run",
-				"--maxmemory-ratio=75", "--maxmemory-policy=noeviction"}))
+				"--instance=" + name, "--maxmemory-ratio=75", "--maxmemory-policy=noeviction"}))
 
 			By("sharing the binary through an emptyDir mounted in both containers")
 			Expect(pod.Spec.Volumes).To(ContainElement(HaveField("Name", "controller")))
@@ -96,7 +96,7 @@ var _ = Describe("RedisInstance controller", func() {
 			}
 		})
 
-		It("probes the Instance Manager and mounts no ServiceAccount token", func() {
+		It("probes the Instance Manager and does not automount the ServiceAccount token", func() {
 			pod := &corev1.Pod{}
 			Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
 			redis := pod.Spec.Containers[0]

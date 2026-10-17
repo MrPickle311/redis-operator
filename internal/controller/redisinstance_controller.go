@@ -40,6 +40,7 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/imclient"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	"github.com/MrPickle311/redis-operator/internal/pki"
+	rbacv1 "k8s.io/api/rbac/v1"
 )
 
 // RedisInstanceReconciler reconciles a RedisInstance object
@@ -66,6 +67,8 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 
 func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage string) *corev1.Pod {
 	runAsNonRoot := true
@@ -93,6 +96,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 		Spec: corev1.PodSpec{
 			Hostname:                     instancePodName(instance, ordinal),
 			Subdomain:                    headlessServiceName(instance),
+			ServiceAccountName:           instanceAccountName(instance),
 			AutomountServiceAccountToken: &automountToken,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsUser:    &runAsUser,
@@ -123,7 +127,11 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 					ReadinessProbe: imProbe("/readyz"),
 					LivenessProbe:  imProbe("/healthz"),
 					Command:        instanceCommand(instance),
-					Resources:      instance.Spec.Resources,
+					Env: []corev1.EnvVar{
+						fieldEnv("POD_NAME", "metadata.name"),
+						fieldEnv("POD_NAMESPACE", "metadata.namespace"),
+					},
+					Resources: instance.Spec.Resources,
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",
@@ -140,6 +148,11 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 							MountPath: instancemanager.InternalAuthDir,
 							ReadOnly:  true,
 						},
+						{
+							Name:      apiAccessVolume,
+							MountPath: serviceAccountDir,
+							ReadOnly:  true,
+						},
 					},
 					SecurityContext: containerSecurity,
 				},
@@ -149,6 +162,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 					Name:         controllerVolume,
 					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 				},
+				{Name: apiAccessVolume, VolumeSource: apiAccessVolumeSource()},
 				{
 					Name: internalAuthVolume,
 					VolumeSource: corev1.VolumeSource{
@@ -177,6 +191,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 // instanceCommand runs the Instance Manager, which starts redis-server.
 func instanceCommand(instance *redisv1.RedisInstance) []string {
 	command := []string{managerPath, "instance", "run",
+		"--instance=" + instance.Name,
 		"--maxmemory-ratio=" + strconv.Itoa(int(instance.Spec.Redis.MaxmemoryRatio)),
 		"--maxmemory-policy=" + instance.Spec.Redis.MaxmemoryPolicy,
 	}
@@ -405,6 +420,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.ensureInternalAuthSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.ensureInstanceAccount(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	for _, svc := range []*corev1.Service{
 		buildHeadlessService(&instance),
@@ -537,6 +555,9 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&corev1.Secret{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&rbacv1.Role{}).
+		Owns(&rbacv1.RoleBinding{}).
 		Named("redisinstance").
 		Complete(r)
 }

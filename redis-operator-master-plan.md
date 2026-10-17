@@ -784,10 +784,13 @@ redis-operator/
 - **Krok 1.5:** `spec.resources` 1:1 do kontenera `redis`; `spec.redis.maxmemoryPolicy` (enum, domyślnie `noeviction`) i `maxmemoryRatio` (10–95, domyślnie 75); IM czyta limit z cgroup v2 (`memory.max`) i zapisuje `maxmemory`/`maxmemory-policy` w `redis.conf`; bez limitu `maxmemory 0`, condition `MemoryLimited=False` i jeden Warning Event (`events.k8s.io`).
 - **Krok 2.1:** `POST /replicaof {epoch, primaryHost}` w IM (idempotentny, przez `INFO replication`); `status.primaryEpoch` (na razie zawsze 1); IM trzyma najwyższy przyjęty epoch w `/data/.operator/epoch` (atomowy zapis) i odrzuca starsze polecenia (409); operator nie łączy się już z Redisem bezpośrednio; status zapisywany tylko przy realnej zmianie (`equality.Semantic.DeepEqual`).
 
+- **Krok 2.2:** ServiceAccount, Role (`get` tylko na własny `RedisInstance`) i RoleBinding `<name>-instance` per instancja; token jako projected volume tylko w kontenerze `redis` (`automountServiceAccountToken: false` zostaje); IM przed startem `redis-server` czyta `status.currentPrimary` (czeka, aż operator go ustawi) i replika startuje od razu z `replicaof` w `redis.conf`; `POD_NAME`/`POD_NAMESPACE` z Downward API, `--instance` jako flaga.
+
 ### Świadomie tymczasowe uproszczenia
 - Ordinal 0 = zawsze primary (brak failoveru, krok 4).
+- Primary startuje bez fence i bez porównania danych z replikami (bezpieczny start primary z sekcji 3.3, krok 4 razem z failoverem). `/promote`, `/demote`, `/fence` powstaną razem z pierwszym użyciem (switchover w kroku 3, failover w kroku 4).
 - Brak update Podów przy zmianie `spec` (krok 3).
-- Replika jest Ready przed `REPLICAOF` i może przez chwilę serwować pusty dataset przez `-ro` (bezpieczny start, krok 2).
+- Replika jest Ready, zanim skończy pierwszą synchronizację z primary, i może przez chwilę serwować stary lub pusty dataset przez `-ro` (readiness po pierwszym syncu: krok 2.3).
 - Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
 - Brak TLS Redisa, ACL użytkowników, PDB, backupu.
 
