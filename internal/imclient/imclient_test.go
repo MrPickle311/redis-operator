@@ -70,7 +70,7 @@ func TestReplicaOfSendsTheEpochAndThePrimary(t *testing.T) {
 			return
 		}
 		_ = json.NewDecoder(r.Body).Decode(&got)
-		_ = json.NewEncoder(w).Encode(instancemanager.ReplicaOfResponse{Changed: true})
+		_ = json.NewEncoder(w).Encode(instancemanager.CommandResponse{Changed: true})
 	}))
 
 	changed, err := client.ReplicaOf(context.Background(), "localhost", 3, replica.MasterHost)
@@ -80,6 +80,33 @@ func TestReplicaOfSendsTheEpochAndThePrimary(t *testing.T) {
 	want := instancemanager.ReplicaOfRequest{Epoch: 3, PrimaryHost: replica.MasterHost}
 	if got != want || !changed {
 		t.Errorf("ReplicaOf() sent %+v and returned changed=%v, want %+v and true", got, changed, want)
+	}
+}
+
+func TestFenceAndPromoteSendTheEpoch(t *testing.T) {
+	ca := mustCA(t)
+	got := map[string]instancemanager.EpochRequest{}
+	client := newTestClient(t, ca, startInstanceManager(t, ca, func(w http.ResponseWriter, r *http.Request) {
+		var req instancemanager.EpochRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		got[r.Method+" "+r.URL.Path] = req
+		_ = json.NewEncoder(w).Encode(instancemanager.CommandResponse{Changed: true})
+	}))
+
+	if err := client.Fence(context.Background(), "localhost", 4); err != nil {
+		t.Fatalf("Fence() error = %v", err)
+	}
+	promoted, err := client.Promote(context.Background(), "localhost", 4)
+	if err != nil {
+		t.Fatalf("Promote() error = %v", err)
+	}
+
+	want := map[string]instancemanager.EpochRequest{"POST /fence": {Epoch: 4}, "POST /promote": {Epoch: 4}}
+	if len(got) != len(want) || got["POST /fence"] != want["POST /fence"] || got["POST /promote"] != want["POST /promote"] {
+		t.Errorf("sent %v, want %v", got, want)
+	}
+	if !promoted {
+		t.Error("Promote() = false, want the Changed of the response")
 	}
 }
 

@@ -67,9 +67,24 @@ func (c *Client) Status(ctx context.Context, host string) (instancemanager.Insta
 // true when the replication target had to change. The Instance Manager rejects
 // the command when it has already accepted a higher epoch.
 func (c *Client) ReplicaOf(ctx context.Context, host string, epoch int64, primaryHost string) (bool, error) {
-	var resp instancemanager.ReplicaOfResponse
+	var resp instancemanager.CommandResponse
 	req := instancemanager.ReplicaOfRequest{Epoch: epoch, PrimaryHost: primaryHost}
 	err := c.do(ctx, http.MethodPost, host, "/replicaof", req, &resp)
+	return resp.Changed, err
+}
+
+// Fence makes the instance at host hold back writes until it is promoted or
+// made a replica of another instance.
+func (c *Client) Fence(ctx context.Context, host string, epoch int64) error {
+	var resp instancemanager.CommandResponse
+	return c.do(ctx, http.MethodPost, host, "/fence", instancemanager.EpochRequest{Epoch: epoch}, &resp)
+}
+
+// Promote makes the instance at host a primary that accepts writes. It returns
+// true when the instance was a replica before.
+func (c *Client) Promote(ctx context.Context, host string, epoch int64) (bool, error) {
+	var resp instancemanager.CommandResponse
+	err := c.do(ctx, http.MethodPost, host, "/promote", instancemanager.EpochRequest{Epoch: epoch}, &resp)
 	return resp.Changed, err
 }
 

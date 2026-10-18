@@ -27,6 +27,11 @@ type InstanceStatus struct {
 	Role       string `json:"role"` // "master" or "slave"
 	MasterHost string `json:"masterHost,omitempty"`
 	MasterPort int    `json:"masterPort,omitempty"`
+	// ReplID and Offset place the dataset in the replication history: a
+	// replica with the ReplID of its primary and the same Offset has every
+	// write of the primary.
+	ReplID string `json:"replID,omitempty"`
+	Offset int64  `json:"offset"`
 }
 
 // apiHandler serves the API of the Instance Manager. epochPath is where it
@@ -49,21 +54,48 @@ func apiHandler(rdb *redis.Client, epochPath string) http.Handler {
 			http.Error(w, "expected a JSON body with epoch >= 1 and primaryHost", http.StatusBadRequest)
 			return
 		}
-		var resp ReplicaOfResponse
-		err := guard.run(req.Epoch, func() (err error) {
-			resp.Changed, err = replicaOf(r.Context(), rdb, req.PrimaryHost)
-			return err
-		})
-		switch {
-		case errors.Is(err, errStaleEpoch):
-			http.Error(w, err.Error(), http.StatusConflict)
-		case err != nil:
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		default:
-			writeJSON(w, resp)
+		runCommand(w, guard, req.Epoch, func() (bool, error) { return replicaOf(r.Context(), rdb, req.PrimaryHost) })
+	})
+	mux.HandleFunc("POST /fence", func(w http.ResponseWriter, r *http.Request) {
+		if epoch, ok := decodeEpoch(w, r); ok {
+			runCommand(w, guard, epoch, func() (bool, error) { return true, fence(r.Context(), rdb) })
+		}
+	})
+	mux.HandleFunc("POST /promote", func(w http.ResponseWriter, r *http.Request) {
+		if epoch, ok := decodeEpoch(w, r); ok {
+			runCommand(w, guard, epoch, func() (bool, error) { return promote(r.Context(), rdb) })
 		}
 	})
 	return mux
+}
+
+// decodeEpoch reads an EpochRequest. It answers 400 and returns false when
+// the body is not one.
+func decodeEpoch(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	var req EpochRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Epoch < 1 {
+		http.Error(w, "expected a JSON body with epoch >= 1", http.StatusBadRequest)
+		return 0, false
+	}
+	return req.Epoch, true
+}
+
+// runCommand runs command under the epoch guard and writes the outcome:
+// 409 for a stale epoch, 503 when Redis fails.
+func runCommand(w http.ResponseWriter, guard *epochGuard, epoch int64, command func() (bool, error)) {
+	var resp CommandResponse
+	err := guard.run(epoch, func() (err error) {
+		resp.Changed, err = command()
+		return err
+	})
+	switch {
+	case errors.Is(err, errStaleEpoch):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		writeJSON(w, resp)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -76,11 +108,24 @@ func readStatus(ctx context.Context, rdb *redis.Client) (InstanceStatus, error) 
 	if err != nil {
 		return InstanceStatus{}, err
 	}
-	replication := info["Replication"]
+	return parseStatus(info["Replication"])
+}
 
-	status := InstanceStatus{Role: replication["role"], MasterHost: replication["master_host"]}
+// parseStatus reads the fields of INFO replication the operator needs.
+func parseStatus(replication map[string]string) (InstanceStatus, error) {
+	status := InstanceStatus{
+		Role:       replication["role"],
+		MasterHost: replication["master_host"],
+		ReplID:     replication["master_replid"],
+	}
+	var err error
 	if port, ok := replication["master_port"]; ok {
 		if status.MasterPort, err = strconv.Atoi(port); err != nil {
+			return InstanceStatus{}, err
+		}
+	}
+	if offset, ok := replication["master_repl_offset"]; ok {
+		if status.Offset, err = strconv.ParseInt(offset, 10, 64); err != nil {
 			return InstanceStatus{}, err
 		}
 	}

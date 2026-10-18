@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -28,8 +29,15 @@ type ReplicaOfRequest struct {
 	PrimaryHost string `json:"primaryHost"`
 }
 
-// ReplicaOfResponse tells whether the replication target had to change.
-type ReplicaOfResponse struct {
+// EpochRequest is the body of POST /fence and POST /promote.
+type EpochRequest struct {
+	// Epoch is the status.primaryEpoch the operator acted on.
+	Epoch int64 `json:"epoch"`
+}
+
+// CommandResponse tells whether a command changed the role or the replication
+// target of Redis.
+type CommandResponse struct {
 	Changed bool `json:"changed"`
 }
 
@@ -108,8 +116,42 @@ func replicaOf(ctx context.Context, rdb *redis.Client, primaryHost string) (bool
 	if err != nil {
 		return false, err
 	}
-	if status.Role == "slave" && status.MasterHost == primaryHost && status.MasterPort == redisPort {
-		return false, nil
+	changed := status.Role != "slave" || status.MasterHost != primaryHost || status.MasterPort != redisPort
+	if changed {
+		if err := rdb.ReplicaOf(ctx, primaryHost, strconv.Itoa(redisPort)).Err(); err != nil {
+			return false, err
+		}
 	}
-	return true, rdb.ReplicaOf(ctx, primaryHost, strconv.Itoa(redisPort)).Err()
+	// After REPLICAOF, not before: a demoted primary is fenced, and its waiting
+	// clients must get READONLY instead of writing to it. Unpausing a Redis
+	// that is not paused does nothing.
+	return changed, rdb.ClientUnpause(ctx).Err()
+}
+
+// fenceTimeout bounds a fence the operator never lifts, e.g. because it
+// stopped in the middle of a switchover.
+// ponytail: fixed hour; the operator fences again when it resumes a switchover.
+const fenceTimeout = time.Hour
+
+// fence makes writes wait until /promote or /replicaof lifts the pause. Reads,
+// INFO and the replication stream keep working, so replicas can catch up.
+func fence(ctx context.Context, rdb *redis.Client) error {
+	// Not rdb.ClientPause: it pauses every command, and only writes must stop.
+	return rdb.Do(ctx, "CLIENT", "PAUSE", fenceTimeout.Milliseconds(), "WRITE").Err()
+}
+
+// promote makes Redis a primary and lifts the fence. It returns true when
+// Redis was a replica before.
+func promote(ctx context.Context, rdb *redis.Client) (bool, error) {
+	status, err := readStatus(ctx, rdb)
+	if err != nil {
+		return false, err
+	}
+	changed := status.Role != "master"
+	if changed {
+		if err := rdb.ReplicaOf(ctx, "NO", "ONE").Err(); err != nil {
+			return false, err
+		}
+	}
+	return changed, rdb.ClientUnpause(ctx).Err()
 }

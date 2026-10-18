@@ -78,6 +78,39 @@ func TestReplicaOfAPIRejectsBadRequests(t *testing.T) {
 	}
 }
 
+func TestFenceAndPromoteAPIsRejectBadRequests(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "epoch")
+	if err := writeEpoch(path, 5); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(apiHandler(deadRedis(t), path))
+	defer srv.Close()
+
+	for _, endpoint := range []string{"/fence", "/promote"} {
+		for _, tt := range []struct {
+			name string
+			body string
+			want int
+		}{
+			{"not JSON", "fence", http.StatusBadRequest},
+			{"no epoch", `{}`, http.StatusBadRequest},
+			{"stale epoch", `{"epoch": 4}`, http.StatusConflict},
+			{"Redis down", `{"epoch": 5}`, http.StatusServiceUnavailable},
+		} {
+			t.Run(endpoint+" "+tt.name, func(t *testing.T) {
+				resp, err := http.Post(srv.URL+endpoint, "application/json", strings.NewReader(tt.body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = resp.Body.Close()
+				if resp.StatusCode != tt.want {
+					t.Errorf("POST %s = %d, want %d", endpoint, resp.StatusCode, tt.want)
+				}
+			})
+		}
+	}
+}
+
 // deadRedis returns a client of a redis-server that is down: nothing listens on port 1.
 func deadRedis(t *testing.T) *redis.Client {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})

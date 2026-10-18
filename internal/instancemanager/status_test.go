@@ -80,6 +80,42 @@ func TestStatusIsUnavailableWithoutRedis(t *testing.T) {
 	}
 }
 
+func TestParseStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		replication map[string]string
+		want        InstanceStatus
+		wantErr     bool
+	}{
+		{
+			name:        "primary",
+			replication: map[string]string{"role": "master", "master_replid": "abc", "master_repl_offset": "1500"},
+			want:        InstanceStatus{Role: "master", ReplID: "abc", Offset: 1500},
+		},
+		{
+			name: "replica",
+			replication: map[string]string{
+				"role": "slave", "master_host": "cache-0.cache-hl.prod.svc", "master_port": "6379",
+				"master_replid": "abc", "master_repl_offset": "1490",
+			},
+			want: InstanceStatus{Role: "slave", MasterHost: "cache-0.cache-hl.prod.svc", MasterPort: 6379, ReplID: "abc", Offset: 1490},
+		},
+		{name: "bad port", replication: map[string]string{"role": "slave", "master_port": "x"}, wantErr: true},
+		{name: "bad offset", replication: map[string]string{"role": "master", "master_repl_offset": "x"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseStatus(tt.replication)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseStatus() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("parseStatus() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 // startStatusServer serves 200 on every path with the TLS setup of the status
 // API, reading the certificates from dir.
 func startStatusServer(t *testing.T, dir string) *httptest.Server {
