@@ -203,6 +203,47 @@ var _ = Describe("RedisInstance controller", func() {
 		})
 	})
 
+	// Ordered with BeforeAll for the same reason as the scale-down specs.
+	Context("when status.currentPrimary points to another Pod", Ordered, func() {
+		const name = "moved-primary-test"
+
+		BeforeAll(func() {
+			instance := newRedisInstance(name, 2, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+
+			By("moving the primary to ordinal 1, as a switchover does")
+			Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+			instance.Status.CurrentPrimary = name + "-1"
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+		})
+
+		AfterAll(func() {
+			Expect(k8sClient.Delete(ctx, newRedisInstance(name, 1, redisv1.StorageSpec{}))).To(Succeed())
+		})
+
+		It("moves the role labels, and with them the -rw and -ro Services", func() {
+			for pod, role := range map[string]string{name + "-0": roleReplica, name + "-1": rolePrimary} {
+				Expect(podLabels(objectKey(pod))).To(HaveKeyWithValue(labelRole, role), "Pod %s", pod)
+			}
+		})
+
+		It("does not delete the primary when scaling down below its ordinal", func() {
+			instance := &redisv1.RedisInstance{}
+			Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+			instance.Spec.Instances = 1
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+			recorder := events.NewFakeRecorder(10)
+			Expect(reconcileWith(recorder, objectKey(name))).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, objectKey(name+"-1"), &corev1.Pod{})).To(Succeed(), "the primary Pod was deleted")
+			Expect(pvcDeleted(name+"-1-data")).To(BeFalse(), "the PVC of the primary was deleted")
+			Expect(recorder.Events).To(Receive(ContainSubstring("ScaleDownBlocked")))
+		})
+	})
+
 	DescribeTable("validating spec.storage with CEL rules",
 		func(storage redisv1.StorageSpec, accepted bool) {
 			instance := newRedisInstance("cel-test", 2, storage)

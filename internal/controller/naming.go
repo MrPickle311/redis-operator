@@ -87,11 +87,19 @@ func pvcName(instance *redisv1.RedisInstance, ordinal int32) (string, bool) {
 	return fmt.Sprintf("%s-%d-data", instance.Name, ordinal), false
 }
 
+// primaryOrdinal returns the ordinal of the current primary: the Pod in
+// status.currentPrimary, or 0 for a new instance that has none yet.
+func primaryOrdinal(instance *redisv1.RedisInstance) int32 {
+	ordinal, err := ordinalFromPodName(instance.Status.CurrentPrimary, instance.Name)
+	if err != nil {
+		return 0
+	}
+	return ordinal
+}
+
 // podRole returns the role of the instance with the given ordinal.
-// For now ordinal 0 is always the primary; failover (step 4) will take the
-// primary from status.currentPrimary instead.
-func podRole(ordinal int32) string {
-	if ordinal == 0 {
+func podRole(instance *redisv1.RedisInstance, ordinal int32) string {
+	if ordinal == primaryOrdinal(instance) {
 		return rolePrimary
 	}
 	return roleReplica

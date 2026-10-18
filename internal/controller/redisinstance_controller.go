@@ -90,7 +90,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 			Labels: map[string]string{
 				labelName:     appName,
 				labelInstance: instance.Name,
-				labelRole:     podRole(ordinal),
+				labelRole:     podRole(instance, ordinal),
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -230,6 +230,12 @@ func (r *RedisInstanceReconciler) cleanupExcessPods(ctx context.Context, instanc
 		}
 
 		if ordinal >= instance.Spec.Instances {
+			if pod.Name == instance.Status.CurrentPrimary {
+				// Deleting the primary would lose the writes not yet replicated.
+				r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "ScaleDownBlocked", "ScaleDown",
+					"Pod %s is the primary; switch over to a remaining instance first", pod.Name)
+				continue
+			}
 			logger.Info("removing redundant Pod", "name", pod.Name)
 			if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
 				return err
@@ -465,7 +471,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 
-		if err := r.ensureRoleLabel(ctx, &existingPod, podRole(ordinal)); err != nil {
+		if err := r.ensureRoleLabel(ctx, &existingPod, podRole(&instance, ordinal)); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -479,9 +485,10 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	primary := primaryOrdinal(&instance)
 	var primaryPod corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{
-		Name:      instancePodName(&instance, 0),
+		Name:      instancePodName(&instance, primary),
 		Namespace: instance.Namespace,
 	}, &primaryPod); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -491,22 +498,32 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	primaryHost := podFQDN(&instance, 0)
+	primaryHost := podFQDN(&instance, primary)
 	replicationPending := false
-	for ordinal := int32(1); ordinal < instance.Spec.Instances; ordinal++ {
+	for ordinal := range instance.Spec.Instances {
+		if ordinal == primary {
+			continue
+		}
 		replicaName := instancePodName(&instance, ordinal)
 		var replicaPod corev1.Pod
 		if err := r.Get(ctx, types.NamespacedName{Name: replicaName, Namespace: instance.Namespace}, &replicaPod); err != nil {
 			continue
 		}
-		if !isPodReady(&replicaPod) {
+		// Running, not Ready: a replica becomes Ready only after its first
+		// sync, which never happens while it replicates from a wrong primary.
+		if replicaPod.Status.Phase != corev1.PodRunning || !replicaPod.DeletionTimestamp.IsZero() {
 			continue
 		}
 
 		changed, err := r.InstanceManager.ReplicaOf(ctx, podFQDN(&instance, ordinal), instance.Status.PrimaryEpoch, primaryHost)
 		if err != nil {
-			logger.Error(err, "Failed to configure replication", "pod", replicaName)
 			replicationPending = true
+			if isPodReady(&replicaPod) {
+				logger.Error(err, "Failed to configure replication", "pod", replicaName)
+			} else {
+				// A starting Instance Manager answers only once redis-server runs.
+				logger.V(1).Info("Instance Manager not reachable yet", "pod", replicaName, "reason", err.Error())
+			}
 			continue
 		}
 		if changed {

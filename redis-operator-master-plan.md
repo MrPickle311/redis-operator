@@ -286,7 +286,7 @@ Kryteria wyboru: ten sam `master_replid` co ostatnio znany primary, najwyższy `
 
 Zmiana `spec.image` lub konfiguracji, która wymaga restartu, uruchamia rolling update: najpierw repliki (po jednej, czekając na `master_link_status:up` i nadrobienie lagu), na końcu switchover primary na zaktualizowaną replikę i restart starego primary. Zmiany, które da się zastosować przez `CONFIG SET`, idą bez restartu.
 
-**`/replicaof` także do replik, które nie są Ready.** Replika jest Ready dopiero po pierwszym syncu (sekcja 3.1), więc replika z nieaktualnym celem replikacji (np. wystartowała ze starym `replicaof` w `redis.conf` tuż przed switchoverem) nigdy nie zrobi syncu i nigdy nie będzie Ready. Dziś operator wysyła `/replicaof` tylko do Ready replik. W kroku 3, razem z pierwszym przeniesieniem primary, warunek zmienia się na „Pod Running, a IM odpowiada”; błąd IM w trakcie startu Poda oznacza tylko ponowienie reconcile.
+**`/replicaof` także do replik, które nie są Ready.** Replika jest Ready dopiero po pierwszym syncu (sekcja 3.1), więc replika z nieaktualnym celem replikacji (np. wystartowała ze starym `replicaof` w `redis.conf` tuż przed switchoverem) nigdy nie zrobi syncu i nigdy nie będzie Ready. Dlatego operator wysyła `/replicaof` do każdej repliki w fazie Running, nie tylko Ready (krok 3.1); błąd IM w trakcie startu Poda oznacza tylko ponowienie reconcile.
 
 ### 3.7 Moduły Redisa
 
@@ -797,12 +797,13 @@ redis-operator/
 
 - **Krok 2.2:** ServiceAccount, Role (`get` tylko na własny `RedisInstance`) i RoleBinding `<name>-instance` per instancja; token jako projected volume tylko w kontenerze `redis` (`automountServiceAccountToken: false` zostaje); IM przed startem `redis-server` czyta `status.currentPrimary` (czeka, aż operator go ustawi) i replika startuje od razu z `replicaof` w `redis.conf`; `POD_NAME`/`POD_NAMESPACE` z Downward API, `--instance` jako flaga.
 - **Krok 2.3:** `/readyz` na replice wymaga zakończonego pierwszego syncu (`master_link_status:up`, `master_sync_in_progress:0`), zapamiętanego do restartu IM (sekcja 3.1); test e2e: nowa replika bez możliwości syncu (wyłączony `_replication` na primary) jest Running, ale nie Ready, a zsynchronizowane repliki zostają Ready.
+- **Krok 3.1:** kontroler bierze primary ze `status.currentPrimary` (pusty → ordinal 0), etykiety `role` i Services `-rw`/`-ro` idą za nim; `/replicaof` trafia do każdej repliki w fazie Running (nie tylko Ready, sekcja 3.6), błąd IM startującego Poda to tylko ponowienie (log `V(1)`); skalowanie w dół nigdy nie usuwa primary (Warning Event `ScaleDownBlocked`, trzeba najpierw zrobić switchover).
 
 ### Świadomie tymczasowe uproszczenia
-- Ordinal 0 = zawsze primary (brak failoveru, krok 4).
+- Nic jeszcze nie przenosi primary: switchover w kroku 3.2, failover w kroku 4. Do tego czasu `status.currentPrimary` to zawsze ordinal 0.
 - Primary startuje bez fence i bez porównania danych z replikami (bezpieczny start primary z sekcji 3.3, krok 4 razem z failoverem). `/promote`, `/demote`, `/fence` powstaną razem z pierwszym użyciem (switchover w kroku 3, failover w kroku 4).
 - Brak update Podów przy zmianie `spec` (krok 3).
-- Operator wysyła `/replicaof` tylko do Ready replik. Wystarcza, dopóki primary się nie przenosi (replika startuje z `replicaof` w `redis.conf`); zmiana w kroku 3 (sekcja 3.6).
+- Brak testu e2e wysyłki `/replicaof` do repliki, która nie jest Ready: wymaga przeniesienia primary, więc dojdzie ze switchoverem (krok 3.2).
 - Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
 - Brak TLS Redisa, ACL użytkowników, PDB, backupu.
 
