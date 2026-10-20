@@ -269,7 +269,7 @@ sequenceDiagram
 
 Kryteria wyboru: ten sam `master_replid` co ostatnio znany primary, najwyższy `master_repl_offset`, `master_link_status` niedawno `up`. Remis rozstrzyga niższy ordinal (determinizm).
 
-**Planowany switchover** przez `kubectl annotate redisinstance sessions-cache redis.operator.com/promote=sessions-cache-2`. Przebieg: fence primary → czekanie, aż kandydat dogoni offset (zero lag) → promote → demote starego. Awaryjny failover nie czeka na zerowy lag (odpowiedź na dawną otwartą decyzję #2).
+**Planowany switchover** przez `kubectl annotate redisinstance sessions-cache redis.operator.com/promote=sessions-cache-2` (krok 3.2, opis dla użytkownika w `docs/architecture.md`). Przebieg: walidacja → `status.targetPrimary` + `primaryEpoch++` (zapis statusu przed pierwszym poleceniem do IM) → fence primary → czekanie, aż kandydat dogoni offset (ten sam `replID`, offset ≥) → promote → `status.currentPrimary` → demote starego przez `/replicaof`. Każdy krok da się powtórzyć: po crashu operator kontynuuje od `status.targetPrimary`, a cel, który jest już `master`, oznacza udany promote. Kandydat, który nie dogoni w ciągu minuty, kończy switchover jako `Failed` i zdejmuje fence. Awaryjny failover nie czeka na zerowy lag (odpowiedź na dawną otwartą decyzję #2).
 
 ### 3.5 Odporność na awarie węzłów i drain
 
@@ -460,33 +460,82 @@ spec:
     volumeClaimTemplate:          # operator generuje PVC
       size: 5Gi
       storageClassName: fast-ssd
-    existingClaims:               # część lub wszystkie instancje na zewnętrznych PVC
+    existingClaims:               # część instancji na zewnętrznych PVC; niezmienne po utworzeniu
       - instanceOrdinal: 0
         claimName: sessions-cache-restored-from-snapshot
+      - instanceOrdinal: 3        # zarezerwowany na skalowanie w górę do 4 instancji
+        claimName: sessions-cache-spare
 ```
 
-```mermaid
-flowchart TD
-    START[Reconcile instancji N] --> CHECK{Wpis w existingClaims<br/>dla tego ordinala?}
-    CHECK -->|Tak| VALIDATE[Zwaliduj: istnieje, Bound,<br/>AccessMode, nie używany przez inny RedisInstance]
-    VALIDATE -->|OK| MOUNT[Zamontuj]
-    VALIDATE -->|błąd| FAIL[condition StorageReady=False]
-    CHECK -->|Nie| GEN{volumeClaimTemplate?}
-    GEN -->|Tak| CREATE[Utwórz PVC name-N-data<br/>z ownerReference + etykietą managed]
-    GEN -->|Nie| FAIL
-    CREATE --> MOUNT
+**Zasada: wolumeny wybiera się przy tworzeniu, potem zarządza nimi wyłącznie operator.** `spec.storage.existingClaims` to dane wejściowe, a faktyczne przypisanie ordinal → PVC trzyma `status.volumes`. Zmienić je można tylko operacją przez operator (adnotacja `recreate`, niżej), nigdy edycją spec. Ordinal nie ma stałej roli (switchover przenosi primary), więc ograniczenie „zewnętrzny tylko dla primary” nie miałoby sensu.
+
+### Walidacja w spec (CEL)
+
+- `existingClaims` jest niezmienne po utworzeniu: `has(self.existingClaims) == has(oldSelf.existingClaims) && (!has(self.existingClaims) || self.existingClaims == oldSelf.existingClaims)` na `StorageSpec` (nie da się też dodać listy później).
+- Unikalne ordinale (`listType=map`, `listMapKey=instanceOrdinal`).
+- **Brak** reguły `instanceOrdinal < instances`: wpis dla ordinala ≥ `instances` to wolumin zarezerwowany na skalowanie w górę; ta reguła blokowałaby skalowanie w dół przy niezmiennej liście.
+- `volumeClaimTemplate` wymagane, chyba że wpisy dla ordinali `< instances` pokrywają wszystkie instancje: `has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims) && self.storage.existingClaims.filter(c, c.instanceOrdinal < self.instances).size() == self.instances)`. Skalowanie w górę bez wolnego woluminu i bez template jest odrzucane na `kubectl apply`/`kubectl scale`.
+
+### Pamięć operatora: `status.volumes`
+
+```yaml
+status:
+  volumes:
+    - {ordinal: 0, claimName: sessions-cache-restored-from-snapshot, uid: 7f3a…, external: true,  state: Ready}
+    - {ordinal: 1, claimName: sessions-cache-1-data,                 uid: 91bc…, external: false, state: Ready}
+    - {ordinal: 2, claimName: sessions-cache-2-data,                 uid: c0de…, external: false, state: Missing,
+       message: "PVC was deleted; a new one is generated because instance 2 is a replica"}
 ```
 
-**Cykl życia — reguła jest prosta: kto tworzy, ten usuwa.**
+- **Przypisanie powstaje raz**, przy pierwszym podpięciu ordinala: wpis z `existingClaims`, jeśli jest, w przeciwnym razie PVC `<name>-<ordinal>-data` z `volumeClaimTemplate`. Od tej chwili operator patrzy tylko na `status.volumes`.
+- **`uid` PVC** jest zapisywany przy pierwszym podpięciu. PVC o tej samej nazwie, ale z innym UID (ktoś usunął i utworzył od nowa, np. z innego snapshotu) to **inny wolumin**: traktowany jak brakujący, nigdy montowany po cichu.
+- **`state` jest obserwowany, nie historyczny.** Operator wylicza go w każdym reconcile z bieżącego stanu PVC; trwale zapamiętane są tylko `claimName`, `uid` i `external`. Historia (co i kiedy odtworzono) jest w Events.
 
-| PVC | ownerReference | Usunięcie `RedisInstance` | Skalowanie w dół |
-|---|---|---|---|
-| Generowany (`volumeClaimTemplate`) | Tak | Usunięty (GC) | Usunięty |
-| Zewnętrzny (`existingClaims`) | **Nie** | Zostaje | Zostaje (tylko odmontowany) |
+| `state` | Kiedy | Skutek |
+|---|---|---|
+| `Ready` | PVC istnieje, UID zgodny, nie jest usuwany, faza ≠ `Lost` | normalna praca |
+| `Terminating` | PVC ma `deletionTimestamp`, ale Pod go jeszcze trzyma (`pvc-protection`) | Warning Event; Pod działa dalej, po jego zniknięciu → `Missing` |
+| `Missing` | PVC nie istnieje albo ma inny UID | patrz „Usunięty lub podmieniony PVC” |
+| `Lost` | faza PVC `Lost` (PV zniknął) | jak `Missing` |
 
-- Operator oznacza własne PVC etykietą `redis.operator.com/managed-pvc: "true"`. Przed jakimkolwiek `Delete` sprawdza **zarówno** etykietę, jak i ownerReference. To podwójne zabezpieczenie przed usunięciem cudzego zasobu przez błąd w kodzie.
-- Zewnętrzny PVC zostaje oznaczony adnotacją `redis.operator.com/attached-to: <ns>/<name>/<ordinal>`, żeby wykryć próbę podpięcia go do dwóch instancji. Adnotację zdejmuje finalizer przy odłączeniu.
+Condition `StorageReady` agreguje: `True`, gdy każdy wpis jest `Ready`; inaczej `False` z listą ordinali w `message`.
+
+### Cykl życia
+
+| Zdarzenie | Generowany PVC | Zewnętrzny PVC |
+|---|---|---|
+| Usunięcie `RedisInstance` | usunięty (ownerReference, GC) | zostaje |
+| Skalowanie w dół | usunięty razem z wpisem w `status.volumes` (dane repliki są do odtworzenia) | odpięty, zostaje; wpis w `status.volumes` też zostaje |
+| Skalowanie w górę | ordinal z wpisem w `status.volumes` → ten sam PVC; bez wpisu → `existingClaims`, a w ostateczności nowy PVC z template | ponownie podpięty ten sam PVC (z kontrolą UID) |
+
+- Operator oznacza własne PVC etykietą `redis.operator.com/managed-pvc: "true"`. Przed jakimkolwiek `Delete` sprawdza **zarówno** etykietę, jak i ownerReference.
+- Skalowanie w dół nigdy nie usuwa primary (krok 3.1, Event `ScaleDownBlocked`).
 - Kto chce zachować dane po usunięciu CR, robi przedtem Backup (sekcja 10) albo używa `existingClaims`.
+
+### Usunięty lub podmieniony PVC (`Missing`/`Lost`)
+
+Dopóki Pod działa, `pvc-protection` trzyma PVC w `Terminating`. Decyzja zapada, gdy Poda już nie ma:
+
+| Ordinal | Generowany PVC | Zewnętrzny PVC |
+|---|---|---|
+| **replika** | operator tworzy nowy pusty PVC, zapisuje nowy UID, Event `VolumeRecreated`; replika robi pełny sync | `StorageReady=False`, Pod nie powstaje; naprawa: `recreate` |
+| **primary** | **nigdy automatycznie**: pusty primary skasowałby dane replik przy `FULLRESYNC`. `StorageReady=False`, Pod nie powstaje; wyjście: switchover na zdrową replikę (krok 3.2), potem ordinal jest repliką. Od kroku 4 robi to failover. | jak obok |
+
+### Operacja `recreate` — jedyna zmiana przypisania
+
+`kubectl annotate redisinstance sessions-cache redis.operator.com/recreate=sessions-cache-2`:
+- tylko dla repliki (primary → `Event RecreateRejected`, adnotacja zdjęta, jak przy promote);
+- usuwa Pod; generowany PVC usuwa, zewnętrzny tylko odpina (zostaje nietknięty);
+- przestawia wpis w `status.volumes` na nowy generowany PVC (wymaga `volumeClaimTemplate`), Event `InstanceRecreated`, adnotacja zdjęta.
+
+Ta sama ścieżka obsłuży uszkodzony wolumin (np. lokalny dysk na martwym węźle) i, od kroku 4, `recreateOnNodeLoss`.
+
+### Ograniczenia
+
+- **Status nie przeżywa każdego przywracania.** Odtworzenie `RedisInstance` z gita albo Velero zaczyna z pustym statusem. Operator odbudowuje przypisania ze spec i deterministycznych nazw, więc wynik jest ten sam, z jednym wyjątkiem: ordinal przestawiony wcześniej przez `recreate` wraca do zewnętrznego PVC ze spec. UID zostaje zapisany od nowa (pierwsze podpięcie), więc podmieniony PVC nie zostanie wtedy wykryty.
+- **Obce dane podane już przy tworzeniu przechodzą.** Operator nie wie, czy zewnętrzny PVC należał do tej bazy; to świadoma decyzja użytkownika (typowo restore). Replika i tak zrobi pełny sync i nadpisze **dane na tym woluminie** (zniszczy je, jeśli PVC przez pomyłkę należał do innego klastra). Obcy primary złapie dopiero bezpieczny start z kroku 4 (porównanie `replid`/offsetu z replikami). Plik `/data/.operator/epoch` z obcego woluminu może mieć wyższą wartość niż `status.primaryEpoch`, co blokuje polecenia do tej instancji (409). Opcjonalny stempel tożsamości na woluminie (`/data/.operator/identity` z UID `RedisInstance`) rozwiązałby oba przypadki; dodamy, jeśli zajdzie potrzeba.
+- **Jeden PVC w dwóch `RedisInstance`** wykrywa dopiero adnotacja `redis.operator.com/attached-to: <ns>/<name>/<ordinal>` (zdejmowana finalizerem przy odpięciu) — po kroku 3.3.
+- **Zewnętrzny PVC środkowego ordinala bez template** nie da się odtworzyć: `recreate` wymaga `volumeClaimTemplate`.
 
 ---
 
@@ -693,8 +742,8 @@ Reguły walidacji zapisane w CRD (`+kubebuilder:validation:XValidation`, CEL) s�
 - **Wcześnie, nie na końcu:** walidacja w CRD kształtuje API. Dodana późno, zmienia zachowanie dla obiektów, które już istnieją w klastrze. Dlatego CEL wchodzi w kroku 0 i rośnie razem z każdym nowym polem.
 
 Przykłady reguł CEL:
-- `existingClaims[].instanceOrdinal < instances`, unikalne ordinale;
-- `volumeClaimTemplate` wymagane, gdy `existingClaims` nie pokrywa wszystkich ordinali;
+- `existingClaims` niezmienne po utworzeniu, unikalne ordinale (sekcja 6);
+- `volumeClaimTemplate` wymagane, gdy `existingClaims` nie pokrywa wszystkich ordinali `< instances`;
 - `username` nie zaczyna się od `_`;
 - `authentication`: dokładnie jedno z `passwordSecretRef` / `generate`;
 - `minReplicasToWrite < instances`.
@@ -798,12 +847,17 @@ redis-operator/
 - **Krok 2.2:** ServiceAccount, Role (`get` tylko na własny `RedisInstance`) i RoleBinding `<name>-instance` per instancja; token jako projected volume tylko w kontenerze `redis` (`automountServiceAccountToken: false` zostaje); IM przed startem `redis-server` czyta `status.currentPrimary` (czeka, aż operator go ustawi) i replika startuje od razu z `replicaof` w `redis.conf`; `POD_NAME`/`POD_NAMESPACE` z Downward API, `--instance` jako flaga.
 - **Krok 2.3:** `/readyz` na replice wymaga zakończonego pierwszego syncu (`master_link_status:up`, `master_sync_in_progress:0`), zapamiętanego do restartu IM (sekcja 3.1); test e2e: nowa replika bez możliwości syncu (wyłączony `_replication` na primary) jest Running, ale nie Ready, a zsynchronizowane repliki zostają Ready.
 - **Krok 3.1:** kontroler bierze primary ze `status.currentPrimary` (pusty → ordinal 0), etykiety `role` i Services `-rw`/`-ro` idą za nim; `/replicaof` trafia do każdej repliki w fazie Running (nie tylko Ready, sekcja 3.6), błąd IM startującego Poda to tylko ponowienie (log `V(1)`); skalowanie w dół nigdy nie usuwa primary (Warning Event `ScaleDownBlocked`, trzeba najpierw zrobić switchover).
+- **Krok 3.2a:** API IM `POST /fence {epoch}` (`CLIENT PAUSE <1h> WRITE`: zapisy czekają, odczyty, `INFO` i strumień replikacji działają) i `POST /promote {epoch}` (`REPLICAOF NO ONE` + `CLIENT UNPAUSE`); `/replicaof` zdejmuje pauzę po `REPLICAOF` (zdegradowany primary odpowiada `READONLY` zamiast wieszać klientów); `/status` raportuje `replID` i `offset`; wspólna obsługa epoch i błędów 409/503 (`runCommand`).
+- **Krok 3.2b:** switchover przez adnotację `redis.operator.com/promote=<pod>`: walidacja (jest primary, cel ≠ primary, cel to Ready Pod instancji; inaczej Event `SwitchoverRejected`), `status.targetPrimary` + `primaryEpoch++` + condition `Switchover`, fence → zero lag → promote → `currentPrimary`, Events `SwitchoverCompleted`/`SwitchoverFailed` (timeout 1 min zdejmuje fence); adnotacja zdejmowana po obsłużeniu. Test e2e: switchover na `-1` i z powrotem, bez utraty danych, stary primary (Running, nie Ready) dostaje `/replicaof`.
 
 ### Świadomie tymczasowe uproszczenia
-- Nic jeszcze nie przenosi primary: switchover w kroku 3.2, failover w kroku 4. Do tego czasu `status.currentPrimary` to zawsze ordinal 0.
-- Primary startuje bez fence i bez porównania danych z replikami (bezpieczny start primary z sekcji 3.3, krok 4 razem z failoverem). `/promote`, `/demote`, `/fence` powstaną razem z pierwszym użyciem (switchover w kroku 3, failover w kroku 4).
-- Brak update Podów przy zmianie `spec` (krok 3).
-- Brak testu e2e wysyłki `/replicaof` do repliki, która nie jest Ready: wymaga przeniesienia primary, więc dojdzie ze switchoverem (krok 3.2).
+- Primary przenosi tylko planowany switchover; automatyczny failover w kroku 4.
+- Primary startuje bez fence i bez porównania danych z replikami (bezpieczny start primary z sekcji 3.3, krok 4 razem z failoverem). Restart starego primary w trakcie switchoveru gubi fence (pauza żyje w procesie `redis-server`).
+- Po switchoverze etykiety `role` przestawia pętla Podów w następnym reconcile: `-rw` przez chwilę wskazuje stary primary, który odpowiada wtedy `READONLY` (jest już fenced albo repliką), więc zapisy nigdy nie trafiają do dwóch primary.
+- Fence trwa najwyżej godzinę (`fenceTimeout`), switchover czeka na kandydata minutę (`switchoverTimeout`); oba na stałe w kodzie.
+- Fence nie rozłącza klientów: zapisy czekają, a po demote dostają `READONLY`.
+- Brak update Podów przy zmianie `spec` (krok 3.4).
+- `existingClaims` wciąż edytowalne i bez kontroli UID PVC: usunięcie Poda odtworzy go z woluminem z bieżącej spec (model z sekcji 6 w kroku 3.3).
 - Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
 - Brak TLS Redisa, ACL użytkowników, PDB, backupu.
 
@@ -816,7 +870,7 @@ graph TD
     S0["0. Porządki<br/>API group, spec.storage, headless + DNS,<br/>-rw/-ro/-r, etykiety role, PVC managed/external,<br/>CEL, idempotentny REPLICAOF"]
     S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni,<br/>spec.resources + maxmemory z limitu"]
     S2["2. IM v2<br/>/replicaof, /promote, /demote, /fence,<br/>epoch, bezpieczny start,<br/>SA + Role + RoleBinding per instancja"]
-    S3["3. Reconciler → imclient<br/>rolling update, switchover,<br/>spec.redis.parameters,<br/>/replicaof także do nie-Ready replik"]
+    S3["3. Reconciler → imclient<br/>3.1 primary ze statusu, /replicaof do nie-Ready replik<br/>3.2 /fence, /promote, switchover<br/>3.3 wolumeny: niezmienne existingClaims,<br/>status.volumes + UID, recreate<br/>3.4 rolling update<br/>3.5 spec.redis.parameters"]
     S4["4. Failover<br/>PDB, anti-affinity, węzeł NotReady, drain"]
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]

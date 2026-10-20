@@ -60,7 +60,10 @@ How the objects use each other:
 
 A PVC from `spec.storage.existingClaims` takes the place of the generated
 `cache-N-data`; the operator never owns or deletes it. On scale-down the
-operator deletes the extra Pods and their generated PVCs.
+operator deletes the extra Pods and their generated PVCs, but never the
+primary: if the primary is above the new `spec.instances`, it stays and the
+operator emits a `Warning` Event `ScaleDownBlocked` until you
+[switch over](#switchover) to a remaining instance.
 
 There is no ConfigMap: the Instance Manager builds `redis.conf` inside the
 Pod from the mounted Secrets.
@@ -81,7 +84,7 @@ flowchart TB
             IM["Instance Manager<br/>/controller/manager instance run<br/>PID 1"]:::proc
             RS["redis-server<br/>:6379"]:::proc
             PROBE[":8001 HTTP<br/>/healthz /readyz"]:::proc
-            STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof"]:::proc
+            STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof /fence /promote"]:::proc
         end
 
         CTRL[("emptyDir /controller<br/>manager binary<br/>redis.conf 0600")]:::vol
@@ -105,7 +108,7 @@ flowchart TB
     IM --- STATUS
     CERTS -- reloaded on every handshake --> STATUS
     PROBE -- PING as _operator --> RS
-    STATUS -- INFO replication, REPLICAOF as _operator --> RS
+    STATUS -- "INFO, REPLICAOF, CLIENT PAUSE/UNPAUSE<br/>as _operator" --> RS
     STATUS -- highest accepted epoch --> DATA
     RS --- DATA
 ```
@@ -221,9 +224,10 @@ flowchart LR
 
 ## Epoch
 
-`status.primaryEpoch` grows with every change of the primary (failover comes
-in step 4; until then it stays `1`). Every command of the operator to an
-Instance Manager carries it:
+`status.primaryEpoch` grows with every change of the primary: today with every
+[switchover](#switchover), from step 4 also with every failover. Every command
+of the operator to an Instance Manager (`/replicaof`, `/fence`, `/promote`)
+carries it:
 
 - The Instance Manager stores the highest epoch it has accepted on the PVC
   (`/data/.operator/epoch`, written atomically with fsync and rename), so it
@@ -237,11 +241,90 @@ The operator no longer connects to Redis itself: `REPLICAOF` goes through
 `POST /replicaof`, which is idempotent and does nothing when the replica
 already follows the requested primary.
 
+## Switchover
+
+A switchover moves the primary to a replica while both are healthy, with no
+lost writes. Use it before maintenance of the primary's node; the rolling
+update (step 3) and failover (step 4) build on it.
+
+```sh
+kubectl annotate redisinstance cache redis.operator.com/promote=cache-1
+kubectl get redisinstance cache -o jsonpath='{.status.currentPrimary}'   # cache-1 once done
+```
+
+The operator removes the annotation when the switchover has completed or
+failed; the outcome is in the condition `Switchover` and in the Events.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant OP as Operator
+    participant API as Kubernetes API
+    participant OLD as IM cache-0 (primary)
+    participant NEW as IM cache-1 (target)
+
+    U->>API: annotate promote=cache-1
+    OP->>OP: validate: a primary exists, target is not it,<br/>target is a Ready Pod of the instance
+    OP->>API: status: targetPrimary=cache-1, primaryEpoch 1→2,<br/>Switchover=True (before any command)
+    loop every second until caught up
+        OP->>NEW: GET /status
+        OP->>OLD: POST /fence {epoch 2}
+        Note over OLD: CLIENT PAUSE WRITE:<br/>writes wait, reads and replication go on
+        OP->>OLD: GET /status
+        Note over OP: caught up: same replID,<br/>target offset ≥ primary offset
+    end
+    OP->>NEW: POST /promote {epoch 2}
+    Note over NEW: REPLICAOF NO ONE, CLIENT UNPAUSE
+    OP->>API: status: currentPrimary=cache-1, targetPrimary="",<br/>Switchover=False/Completed; remove annotation
+    OP->>OLD: POST /replicaof {epoch 2, cache-1}
+    Note over OLD: REPLICAOF cache-1, CLIENT UNPAUSE:<br/>waiting writes get READONLY
+    OP->>API: next reconcile: move role labels,<br/>so cache-rw selects cache-1
+```
+
+Why the steps are in this order:
+
+- **Fence first.** Replication is asynchronous, so the replica is always a
+  little behind. While the primary is fenced its offset stops growing, so
+  "the target has the same offset" means "the target has every write".
+- **Writes wait instead of failing.** Clients see a pause, usually well under
+  a second, not errors. After the demotion the waiting writes get
+  `READONLY`, so none of them land on the old primary.
+- **The epoch is stored before the first command.** No Instance Manager ever
+  sees an epoch the status does not hold, and the status update fails on a
+  stale `resourceVersion`, so two operator leaders cannot both start a
+  switchover.
+- **Every step can be repeated.** After a crash of the operator, the next
+  reconcile continues from `status.targetPrimary`. A target that already
+  reports `role:master` was promoted by an earlier pass, so the operator only
+  finishes.
+
+The operator rejects the request (Event `SwitchoverRejected`, annotation
+removed, nothing changed) when the instance has no primary yet, the target is
+already the primary, is not a Pod of this instance, or is not Ready.
+
+If the target does not catch up within a minute (e.g. its link to the primary
+is down), the switchover fails: the operator lifts the fence, so the primary
+takes writes again, sets `Switchover=False` with reason `Failed` and emits a
+`Warning` Event `SwitchoverFailed`.
+
+Known limits:
+
+- A restart of the old primary during a switchover loses the fence, which
+  lives in the `redis-server` process. Safe start of a primary comes with
+  failover (step 4).
+- The fence lasts at most an hour if the operator never follows up; the
+  timeouts are fixed in code.
+- `cache-rw` follows the role label, which the next reconcile moves. Until
+  then it points at the old primary, which answers `READONLY`.
+
 ## Reconcile loop
 
 One pass of `RedisInstanceReconciler.Reconcile`. The operator re-runs it on
 every change of the `RedisInstance` or an owned object, and requeues after
-5 s while replication is not set up.
+5 s while replication is not set up (every second during a switchover).
+The primary is the Pod in `status.currentPrimary` (`cache-0` for a new
+instance).
 
 ```mermaid
 sequenceDiagram
@@ -259,23 +342,27 @@ sequenceDiagram
     OP->>API: Ensure Services hl, rw, ro, r
     loop each ordinal
         OP->>API: Ensure PVC (unless existingClaim)
-        OP->>API: Create Pod, or patch its role label
+        OP->>API: Create Pod, or patch its role label (primary = status.currentPrimary)
     end
-    OP->>API: Delete Pods and generated PVCs above spec.instances
-    loop each Ready replica
+    OP->>API: Delete Pods and generated PVCs above spec.instances (never the primary)
+    opt promote annotation or status.targetPrimary set
+        OP->>OP: one step of the switchover (see Switchover)
+    end
+    loop each Running replica (Ready or not: a replica becomes Ready only after its first sync)
         OP->>IM: POST /replicaof {epoch, primaryHost} (mTLS)
         alt epoch lower than the one IM accepted
             IM-->>OP: 409 Conflict
         else
             IM->>IM: store epoch in /data/.operator/epoch
             IM->>RS: INFO replication
-            opt not replicating from cache-0
-                IM->>RS: REPLICAOF cache-0.cache-hl.app.svc 6379
+            opt not replicating from the primary
+                IM->>RS: REPLICAOF <primary>.cache-hl.app.svc 6379
             end
+            IM->>RS: CLIENT UNPAUSE (lifts the fence of a demoted primary)
             IM-->>OP: {changed}
         end
     end
-    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited condition)
+    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited and Switchover conditions)
     opt a Pod has no memory limit (first time)
         OP->>API: Warning Event MemoryLimitMissing
     end
