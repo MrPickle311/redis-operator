@@ -244,6 +244,51 @@ var _ = Describe("RedisInstance controller", func() {
 		})
 	})
 
+	// Ordered with BeforeAll for the same reason as the scale-down specs.
+	Context("with a promote annotation that cannot be served", Ordered, func() {
+		const name = "switchover-rejected-test"
+
+		BeforeAll(func() {
+			instance := newRedisInstance(name, 2, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+
+			// envtest runs no kubelet, so no Pod gets an IP and the operator
+			// never sets the primary itself.
+			Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+			instance.Status.CurrentPrimary = name + "-0"
+			instance.Status.PrimaryEpoch = 1
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		})
+
+		AfterAll(func() {
+			Expect(k8sClient.Delete(ctx, newRedisInstance(name, 1, redisv1.StorageSpec{}))).To(Succeed())
+		})
+
+		DescribeTable("rejects the switchover and drops the annotation",
+			func(target, wantReason string) {
+				instance := &redisv1.RedisInstance{}
+				Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+				instance.Annotations = map[string]string{redisv1.AnnotationPromote: target}
+				Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+				recorder := events.NewFakeRecorder(10)
+				Expect(reconcileWith(recorder, objectKey(name))).To(Succeed())
+
+				Expect(recorder.Events).To(Receive(SatisfyAll(
+					ContainSubstring("SwitchoverRejected"), ContainSubstring(wantReason))))
+				Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
+				Expect(instance.Annotations).NotTo(HaveKey(redisv1.AnnotationPromote))
+				Expect(instance.Status.CurrentPrimary).To(Equal(name + "-0"))
+				Expect(instance.Status.TargetPrimary).To(BeEmpty())
+				Expect(instance.Status.PrimaryEpoch).To(Equal(int64(1)), "a rejected switchover must not take an epoch")
+			},
+			Entry("a replica that is not Ready", name+"-1", "not Ready"),
+			Entry("a Pod of no instance", name+"-5", "not an instance"),
+			Entry("the current primary", name+"-0", "already the primary"),
+		)
+	})
+
 	DescribeTable("validating spec.storage with CEL rules",
 		func(storage redisv1.StorageSpec, accepted bool) {
 			instance := newRedisInstance("cel-test", 2, storage)

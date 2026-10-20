@@ -287,6 +287,10 @@ spec:
               readyInstances:
                 format: int32
                 type: integer
+              targetPrimary:
+                description: TargetPrimary is the Pod a switchover in progress moves
+                  the primary to.
+                type: string
             type: object
         required:
         - spec

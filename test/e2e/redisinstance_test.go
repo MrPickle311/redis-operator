@@ -328,6 +328,44 @@ var _ = Describe("RedisInstance", Ordered, func() {
 			}).Should(Succeed(), "replica %s did not recover after the primary restart", replica)
 		}
 	})
+
+	It("switches over to a replica on request and back, without losing writes", func() {
+		switchOver := func(to, from int, epoch string) {
+			By(fmt.Sprintf("annotating the RedisInstance to promote %s", podName(to)))
+			_, err := kubectl("annotate", "redisinstance", redisName, "-n", redisNamespace,
+				"redis.operator.com/promote="+podName(to), "--overwrite")
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
+					`jsonpath={.status.currentPrimary} {.status.primaryEpoch} {.metadata.annotations.redis\.operator\.com/promote}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(out)).To(Equal(podName(to)+" "+epoch), "status and annotation after the switchover")
+			}).Should(Succeed())
+
+			By("checking that the new primary takes writes through -rw and the old one replicates from it")
+			Eventually(func(g Gomega) {
+				g.Expect(redisCLI(g, podName(to), "INFO", "replication")).To(ContainSubstring("role:master"))
+				g.Expect(redisCLI(g, podName(to), "-h", redisName+"-rw", "SET", "switchover-key", podName(to))).To(Equal("OK"))
+			}).Should(Succeed())
+			// The old primary was not Ready-latched, so this also covers /replicaof
+			// reaching a Pod that is Running but not Ready.
+			Eventually(func(g Gomega) {
+				info := redisCLI(g, podName(from), "INFO", "replication")
+				g.Expect(info).To(ContainSubstring("master_host:" + podFQDN(to)))
+				g.Expect(info).To(ContainSubstring("master_link_status:up"))
+				g.Expect(redisCLI(g, podName(from), "GET", "switchover-key")).To(Equal(podName(to)))
+			}).Should(Succeed(), "old primary %s did not become a replica of %s", podName(from), podName(to))
+			Eventually(podReady).WithArguments(podName(from)).Should(BeTrue())
+
+			for i := range redisInstances {
+				Expect(redisCLI(Default, podName(i), "GET", "e2e-key")).To(Equal("hello"), "Pod %s lost data", podName(i))
+			}
+		}
+
+		switchOver(1, 0, "2")
+		switchOver(0, 1, "3")
+	})
 })
 
 // --- Naming: mirrors the operator's conventions on purpose, without importing them,

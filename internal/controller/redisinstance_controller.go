@@ -485,6 +485,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// Before the primary is read: a completed switchover changes it, and the
+	// replication loop below then demotes the old primary.
+	if result, err := r.reconcileSwitchover(ctx, &instance); err != nil || !result.IsZero() {
+		return result, err
+	}
 	primary := primaryOrdinal(&instance)
 	var primaryPod corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{

@@ -27,8 +27,16 @@ import (
 // limit, so maxmemory is set. When False, Redis grows until it is OOMKilled.
 const ConditionMemoryLimited = "MemoryLimited"
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// ConditionSwitchover is True while the primary moves to another Pod. When
+// False, its Reason tells how the last switchover ended: Completed or Failed.
+const ConditionSwitchover = "Switchover"
+
+// AnnotationPromote asks for a planned switchover to the named Pod:
+//
+//	kubectl annotate redisinstance cache redis.operator.com/promote=cache-1
+//
+// The operator removes it once the switchover has completed or failed.
+const AnnotationPromote = "redis.operator.com/promote"
 
 // RedisInstanceSpec defines the desired state of RedisInstance
 // +kubebuilder:validation:XValidation:rule="!has(self.storage.existingClaims) || self.storage.existingClaims.all(c, c.instanceOrdinal < self.instances)",message="storage.existingClaims[].instanceOrdinal must be lower than instances"
@@ -138,6 +146,10 @@ type RedisInstanceStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// TargetPrimary is the Pod a switchover in progress moves the primary to.
+	// +optional
+	TargetPrimary string `json:"targetPrimary,omitempty"`
 }
 
 // +kubebuilder:object:root=true
