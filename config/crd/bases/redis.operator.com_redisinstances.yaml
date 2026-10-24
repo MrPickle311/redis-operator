@@ -295,6 +295,13 @@ spec:
                 x-kubernetes-list-type: map
               currentPrimary:
                 type: string
+              handledRequests:
+                additionalProperties:
+                  type: string
+                description: |-
+                  HandledRequests holds, per request annotation, the value the operator
+                  last handled, so a request kept in the annotation is not served again.
+                type: object
               phase:
                 type: string
               primaryEpoch:

@@ -225,19 +225,23 @@ func readyClaims(instance *redisv1.RedisInstance) map[int32]string {
 // is only let go, never deleted) and binds the instance to a new generated
 // PVC, which reconcileVolumes creates once the old one is gone.
 //
-// The binding is written to the status before the annotation is removed, so
-// a crash in between repeats the recreate instead of losing it.
+// The new binding and the handled request are written in one status update,
+// so a crash before it repeats the recreate instead of losing it.
 func (r *RedisInstanceReconciler) reconcileRecreate(ctx context.Context, instance *redisv1.RedisInstance) error {
-	target, requested := instance.Annotations[redisv1.AnnotationRecreate]
+	target, requested := pendingRequest(instance, redisv1.AnnotationRecreate)
 	if !requested {
 		return nil
 	}
 
 	ordinal, reason := recreateRejection(instance, target)
 	if reason != "" {
+		markHandled(instance, redisv1.AnnotationRecreate)
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return err
+		}
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "RecreateRejected", "Recreate",
 			"Cannot recreate %s: %s", target, reason)
-		return r.removeAnnotation(ctx, instance, redisv1.AnnotationRecreate)
+		return nil
 	}
 
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: target, Namespace: instance.Namespace}}
@@ -250,6 +254,7 @@ func (r *RedisInstanceReconciler) reconcileRecreate(ctx context.Context, instanc
 
 	vol := volumeOf(instance, ordinal)
 	*vol = redisv1.VolumeStatus{Ordinal: ordinal, ClaimName: generatedPVCName(instance, ordinal)}
+	markHandled(instance, redisv1.AnnotationRecreate)
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}
@@ -257,7 +262,7 @@ func (r *RedisInstanceReconciler) reconcileRecreate(ctx context.Context, instanc
 	logf.FromContext(ctx).Info("Recreating replica on a new volume", "pod", target, "pvc", vol.ClaimName)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "InstanceRecreated", "Recreate",
 		"Recreating %s on a new generated PVC %s", target, vol.ClaimName)
-	return r.removeAnnotation(ctx, instance, redisv1.AnnotationRecreate)
+	return nil
 }
 
 // recreateRejection returns the ordinal of target, or explains why it cannot
@@ -377,14 +382,4 @@ func (r *RedisInstanceReconciler) createDataPVC(
 	}
 	logf.FromContext(ctx).Info("Created PVC", "name", pvc.Name)
 	return pvc, nil
-}
-
-// removeAnnotation marks a request as handled, so it is not served twice.
-func (r *RedisInstanceReconciler) removeAnnotation(ctx context.Context, instance *redisv1.RedisInstance, key string) error {
-	if _, ok := instance.Annotations[key]; !ok {
-		return nil
-	}
-	patch := client.MergeFrom(instance.DeepCopy())
-	delete(instance.Annotations, key)
-	return r.Patch(ctx, instance, patch)
 }

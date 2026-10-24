@@ -429,6 +429,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	forgetRemovedRequests(&instance)
 	if err := r.reconcileRecreate(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}

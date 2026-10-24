@@ -36,7 +36,9 @@ const ConditionSwitchover = "Switchover"
 //
 //	kubectl annotate redisinstance cache redis.operator.com/promote=cache-1
 //
-// The operator removes it once the switchover has completed or failed.
+// The operator handles every value once and records it in
+// status.handledRequests, so the annotation may stay, e.g. in git. To ask
+// again for the same Pod, change the value after an @: cache-1@2.
 const AnnotationPromote = "redis.operator.com/promote"
 
 // ConditionStorageReady is True when the volume of every instance is Ready,
@@ -55,7 +57,7 @@ const ConditionReady = "Ready"
 //	kubectl annotate redisinstance cache redis.operator.com/recreate=cache-2
 //
 // It is the only way to change the volume of an instance once it is bound.
-// The operator removes the annotation once it has handled it.
+// Like AnnotationPromote, every value is handled once: cache-2@2 asks again.
 const AnnotationRecreate = "redis.operator.com/recreate"
 
 // RedisInstanceSpec defines the desired state of RedisInstance
@@ -183,6 +185,11 @@ type RedisInstanceStatus struct {
 	// +listMapKey=ordinal
 	// +optional
 	Volumes []VolumeStatus `json:"volumes,omitempty"`
+
+	// HandledRequests holds, per request annotation, the value the operator
+	// last handled, so a request kept in the annotation is not served again.
+	// +optional
+	HandledRequests map[string]string `json:"handledRequests,omitempty"`
 }
 
 // VolumeState is the observed state of the volume of one instance.

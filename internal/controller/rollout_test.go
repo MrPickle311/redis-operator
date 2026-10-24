@@ -96,7 +96,18 @@ var _ = Describe("RedisInstance rolling update", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(retry).To(BeZero())
 			Expect(getInstance(name).Status.TargetPrimary).To(BeEmpty())
+		})
+
+		It("does not wait for a promote annotation that was handled already", func() {
+			instance := getInstance(name)
+			instance.Status.HandledRequests = map[string]string{redisv1.AnnotationPromote: name + "-2"}
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			Expect(pendingRequestOf(name, redisv1.AnnotationPromote)).To(BeFalse())
+
 			removeAnnotation(name, redisv1.AnnotationPromote)
+			instance = getInstance(name)
+			instance.Status.HandledRequests = nil
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 		})
 
 		It("waits after a failed switchover before it fences the primary again", func() {
@@ -216,6 +227,11 @@ func setImage(name, image string) {
 	instance := getInstance(name)
 	instance.Spec.Image = image
 	Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+}
+
+func pendingRequestOf(name, key string) bool {
+	_, pending := pendingRequest(getInstance(name), key)
+	return pending
 }
 
 func removeAnnotation(name, key string) {

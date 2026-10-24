@@ -242,6 +242,32 @@ The operator no longer connects to Redis itself: `REPLICAOF` goes through
 `POST /replicaof`, which is idempotent and does nothing when the replica
 already follows the requested primary.
 
+## Requests
+
+Two annotations on the `RedisInstance` ask the operator for a one-off
+action: `redis.operator.com/promote=<pod>` ([switchover](#switchover)) and
+`redis.operator.com/recreate=<pod>` ([recreate](#volumes)). The operator never
+removes them. It records the value it handled in `status.handledRequests`,
+in the same status update as the change the request made, and acts only on
+a value it has not handled:
+
+```sh
+kubectl annotate redisinstance cache redis.operator.com/recreate=cache-2
+kubectl get redisinstance cache -o jsonpath='{.status.handledRequests}'
+# {"redis.operator.com/recreate":"cache-2"}
+kubectl annotate redisinstance cache redis.operator.com/recreate=cache-2@2 --overwrite   # again, same Pod
+```
+
+- **The same value twice does nothing**, so the annotation may stay, also in
+  git with a tool that heals drift.
+- **Anything after an `@`** only makes the value new: `cache-2@2` asks again
+  for `cache-2`. Any token works, e.g. a date.
+- **Removing the annotation** drops its record, so setting the same value
+  later is a new request. A rejected request (Events `SwitchoverRejected`,
+  `RecreateRejected`) counts as handled too.
+- **A crash cannot repeat or lose a request:** the record and its effect are
+  written together.
+
 ## Volumes
 
 You choose the volumes when you create the `RedisInstance`; after that the
@@ -308,7 +334,7 @@ The operator deletes the Pod and its generated PVC (an external PVC is only
 let go, never deleted), binds the instance to a new generated PVC and starts
 it there; the replica syncs from the primary. It rejects the request (Event
 `RecreateRejected`) for the primary, during a switchover, and without a
-`volumeClaimTemplate`.
+`volumeClaimTemplate`. Every value is handled once (see [Requests](#requests)).
 
 Known limits:
 
@@ -316,7 +342,9 @@ Known limits:
   re-created from git or Velero starts with an empty status. The operator
   rebuilds the bindings from the spec, with the same result, except that an
   instance moved by `recreate` goes back to its external PVC, and a PVC
-  replaced meanwhile is not detected (its UID is recorded anew).
+  replaced meanwhile is not detected (its UID is recorded anew). With
+  `status.handledRequests` gone too, a `promote` or `recreate` annotation kept
+  in the restored object runs once more.
 - **Foreign data at creation is not detected.** The operator cannot tell
   whether an external PVC belonged to this database. A replica overwrites it
   in its full sync, so data on a PVC of another database given by mistake is
@@ -337,8 +365,8 @@ kubectl annotate redisinstance cache redis.operator.com/promote=cache-1
 kubectl get redisinstance cache -o jsonpath='{.status.currentPrimary}'   # cache-1 once done
 ```
 
-The operator removes the annotation when the switchover has completed or
-failed; the outcome is in the condition `Switchover` and in the Events.
+The operator handles every value once (see [Requests](#requests)); the
+outcome is in the condition `Switchover` and in the Events.
 
 ```mermaid
 sequenceDiagram
@@ -351,7 +379,7 @@ sequenceDiagram
 
     U->>API: annotate promote=cache-1
     OP->>OP: validate: a primary exists, target is not it,<br/>target is a Ready Pod of the instance
-    OP->>API: status: targetPrimary=cache-1, primaryEpoch 1→2,<br/>Switchover=True (before any command)
+    OP->>API: status: targetPrimary=cache-1, primaryEpoch 1→2,<br/>Switchover=True, handledRequests (before any command)
     loop every second until caught up
         OP->>NEW: GET /status
         OP->>OLD: POST /fence {epoch 2}
@@ -361,7 +389,7 @@ sequenceDiagram
     end
     OP->>NEW: POST /promote {epoch 2}
     Note over NEW: REPLICAOF NO ONE, CLIENT UNPAUSE
-    OP->>API: status: currentPrimary=cache-1, targetPrimary="",<br/>Switchover=False/Completed; remove annotation
+    OP->>API: status: currentPrimary=cache-1, targetPrimary="",<br/>Switchover=False/Completed
     OP->>OLD: POST /replicaof {epoch 2, cache-1}
     Note over OLD: REPLICAOF cache-1, CLIENT UNPAUSE:<br/>waiting writes get READONLY
     OP->>API: next reconcile: move role labels,<br/>so cache-rw selects cache-1
@@ -384,8 +412,8 @@ Why the steps are in this order:
   reports `role:master` was promoted by an earlier pass, so the operator only
   finishes.
 
-The operator rejects the request (Event `SwitchoverRejected`, annotation
-removed, nothing changed) when the instance has no primary yet, the target is
+The operator rejects the request (Event `SwitchoverRejected`, recorded as
+handled, nothing else changed) when the instance has no primary yet, the target is
 already the primary, is not a Pod of this instance, or is not Ready.
 
 If the target does not catch up within a minute (e.g. its link to the primary
@@ -413,7 +441,7 @@ gives another hash, the Pod is outdated and the operator replaces it.
 ```mermaid
 flowchart TD
     A{"outdated Pods?"} -->|no| Z["nothing to do"]
-    A -->|yes| B{"every instance Ready,<br/>every volume Ready,<br/>no switchover running,<br/>no promote annotation?"}
+    A -->|yes| B{"every instance Ready,<br/>every volume Ready,<br/>no switchover running,<br/>no pending promote request?"}
     B -->|no| W["wait for the next reconcile"]
     B -->|yes| C{"an outdated replica?"}
     C -->|yes| D["delete it (Event RollingUpdate);<br/>the Pod loop creates it again<br/>on the same volume"]
@@ -446,7 +474,8 @@ flowchart TD
 - **A failed switchover** does not repeat at once: the rolling update waits
   5 minutes before it fences the primary again.
 - **A switchover the user asked for goes first:** the rolling update waits
-  while the `promote` annotation is set.
+  while a `promote` request is pending. A handled one that stays, e.g. in
+  git, does not block it.
 
 Known limits:
 
@@ -472,11 +501,10 @@ Keep the `RedisInstance` in git; the Pods, Services and PVCs are the
 operator's and never belong there. A change of `spec.image` in git is the
 intended way to start a rolling update. Until the steps below are done:
 
-- **Never put `promote` or `recreate` in git.** They are one-off requests:
-  the operator removes them when done, and a tool that heals drift puts them
-  back, so the request runs again. For `recreate` that means a new empty
-  volume and a full resync, over and over. Use `kubectl annotate` (making
-  them safe to keep in git is step 3.4d).
+- **`promote` and `recreate` may live in git.** The operator handles each
+  value once and never removes the annotation, so self-heal has nothing to
+  put back (see [Requests](#requests)). To repeat a request, commit a new
+  value, e.g. `cache-2@2`. A restore without the status runs it once more.
 - **Use annotation-based resource tracking** in Argo CD (the default since
   3.0). With label tracking Argo CD reads `app.kubernetes.io/instance`, which
   the operator also sets on its Pods and Services (moving to an own label is
@@ -492,7 +520,7 @@ the first in this order is the reason:
 | `status` | `reason` | When | Passes on its own |
 |---|---|---|---|
 | `False` | `StorageNotReady` | the condition `StorageReady` is not `True` | no: see [Volumes](#volumes) |
-| `False` | `Switchover` | a switchover runs or the `promote` annotation is set | yes |
+| `False` | `Switchover` | a switchover runs or a `promote` request is pending | yes |
 | `False` | `RollingUpdate` | some Pods run an outdated spec | yes |
 | `False` | `InstancesNotReady` | fewer Ready instances than `spec.instances` | usually: Pods start, replicas sync |
 | `True` | `Ready` | none of the above | |
@@ -552,7 +580,7 @@ sequenceDiagram
     OP->>API: CreateOrUpdate Secret cache-internal-auth<br/>(generate only missing passwords)
     OP->>API: CreateOrUpdate ServiceAccount, Role, RoleBinding cache-instance
     OP->>API: Ensure Services hl, rw, ro, r
-    opt recreate annotation
+    opt pending recreate request
         OP->>API: Delete Pod and generated PVC, bind to a new generated PVC
     end
     loop each ordinal
@@ -567,7 +595,7 @@ sequenceDiagram
         OP->>API: Delete one outdated replica, or start a switchover away from the primary
     end
     OP->>API: Update status if the Ready condition changed<br/>(before the switchover, which may return early)
-    opt promote annotation or status.targetPrimary set
+    opt pending promote request or status.targetPrimary set
         OP->>OP: one step of the switchover (see Switchover)
     end
     loop each Running replica (Ready or not: a replica becomes Ready only after its first sync)

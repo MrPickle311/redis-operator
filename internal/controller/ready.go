@@ -13,7 +13,7 @@ import (
 // Reason tells why; only StorageNotReady needs a human, every other Reason
 // passes on its own.
 func readyCondition(instance *redisv1.RedisInstance, readyCount int32, outdated int) metav1.Condition {
-	_, promoteRequested := instance.Annotations[redisv1.AnnotationPromote]
+	_, promoteRequested := pendingRequest(instance, redisv1.AnnotationPromote)
 	instances := instance.Spec.Instances
 
 	status, reason, message := metav1.ConditionFalse, "", ""

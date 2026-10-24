@@ -30,15 +30,20 @@ const switchoverPollInterval = time.Second
 // continues from status.targetPrimary.
 func (r *RedisInstanceReconciler) reconcileSwitchover(ctx context.Context, instance *redisv1.RedisInstance) (ctrl.Result, error) {
 	if instance.Status.TargetPrimary == "" {
-		target, requested := instance.Annotations[redisv1.AnnotationPromote]
+		target, requested := pendingRequest(instance, redisv1.AnnotationPromote)
 		if !requested {
 			return ctrl.Result{}, nil
 		}
+		markHandled(instance, redisv1.AnnotationPromote)
 		if reason := r.switchoverRejection(ctx, instance, target); reason != "" {
+			if err := r.Status().Update(ctx, instance); err != nil {
+				return ctrl.Result{}, err
+			}
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "SwitchoverRejected", "Switchover",
 				"Cannot switch over to %s: %s", target, reason)
-			return ctrl.Result{}, r.removeAnnotation(ctx, instance, redisv1.AnnotationPromote)
+			return ctrl.Result{}, nil
 		}
+		// startSwitchover writes the handled request with the new epoch.
 		if err := r.startSwitchover(ctx, instance, target); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -129,7 +134,7 @@ func (r *RedisInstanceReconciler) finishSwitchover(ctx context.Context, instance
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "SwitchoverCompleted", "Switchover",
 		"Moved the primary from %s to %s", from, to)
-	return r.removeAnnotation(ctx, instance, redisv1.AnnotationPromote)
+	return nil
 }
 
 // abortSwitchover gives up when the target does not catch up in time and lets
@@ -147,7 +152,7 @@ func (r *RedisInstanceReconciler) abortSwitchover(ctx context.Context, instance 
 		return err
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "SwitchoverFailed", "Switchover", message)
-	return r.removeAnnotation(ctx, instance, redisv1.AnnotationPromote)
+	return nil
 }
 
 func (r *RedisInstanceReconciler) setSwitchoverCondition(instance *redisv1.RedisInstance, status metav1.ConditionStatus, reason, message string) {

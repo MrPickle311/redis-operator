@@ -50,7 +50,7 @@ func (r *RedisInstanceReconciler) reconcileRollout(ctx context.Context, instance
 	if len(outdated) == 0 || !allReady || instance.Status.TargetPrimary != "" {
 		return 0, nil
 	}
-	if _, requested := instance.Annotations[redisv1.AnnotationPromote]; requested {
+	if _, requested := pendingRequest(instance, redisv1.AnnotationPromote); requested {
 		return 0, nil // the switchover asked by the user goes first
 	}
 

@@ -228,7 +228,7 @@ var _ = Describe("RedisInstance volumes", func() {
 			Expect(reconcileWith(recorder, objectKey(name))).To(Succeed())
 
 			instance := getInstance(name)
-			Expect(instance.Annotations).NotTo(HaveKey(redisv1.AnnotationRecreate))
+			Expect(instance.Status.HandledRequests).To(HaveKeyWithValue(redisv1.AnnotationRecreate, name+"-1"))
 			vol := volume(instance, 1)
 			Expect(vol.ClaimName).To(Equal(name + "-1-data"))
 			Expect(vol.External).To(BeFalse())
@@ -271,6 +271,29 @@ var _ = Describe("RedisInstance volumes", func() {
 			Expect(vol.UID).NotTo(Equal(oldUID))
 			Expect(podClaim(name + "-1")).To(Equal(claim))
 		})
+
+		It("does not recreate again while the annotation stays, as in git", func() {
+			uid := volume(getInstance(name), 1).UID
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+			Expect(podExistsNow(name + "-1")).To(BeTrue())
+			Expect(volume(getInstance(name), 1).UID).To(Equal(uid))
+		})
+
+		It("recreates again for a new value of the same Pod", func() {
+			annotate(name, redisv1.AnnotationRecreate, name+"-1@2")
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+			Expect(podExistsNow(name + "-1")).To(BeFalse())
+			Expect(getInstance(name).Status.HandledRequests).To(HaveKeyWithValue(redisv1.AnnotationRecreate, name+"-1@2"))
+			deletePVCNow(claim)
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+		})
+
+		It("forgets the request once the annotation is removed", func() {
+			removeAnnotation(name, redisv1.AnnotationRecreate)
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+			Expect(getInstance(name).Status.HandledRequests).NotTo(HaveKey(redisv1.AnnotationRecreate))
+		})
 	})
 
 	Context("when the recreate annotation cannot be served", Ordered, func() {
@@ -284,7 +307,7 @@ var _ = Describe("RedisInstance volumes", func() {
 
 		AfterAll(func() { deleteInstance(name) })
 
-		DescribeTable("rejects it, drops the annotation and keeps the instance",
+		DescribeTable("rejects it once and keeps the instance",
 			func(target, wantReason string) {
 				before := getInstance(name).Status.Volumes
 				annotate(name, redisv1.AnnotationRecreate, target)
@@ -295,7 +318,7 @@ var _ = Describe("RedisInstance volumes", func() {
 				Expect(drain(recorder)).To(ContainElement(SatisfyAll(
 					ContainSubstring("RecreateRejected"), ContainSubstring(wantReason))))
 				instance := getInstance(name)
-				Expect(instance.Annotations).NotTo(HaveKey(redisv1.AnnotationRecreate))
+				Expect(instance.Status.HandledRequests).To(HaveKeyWithValue(redisv1.AnnotationRecreate, target))
 				Expect(instance.Status.Volumes).To(Equal(before))
 				Expect(podExistsNow(name + "-0")).To(BeTrue())
 			},

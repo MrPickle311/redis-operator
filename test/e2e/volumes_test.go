@@ -170,7 +170,7 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 
 	It("moves that replica to a generated volume on recreate and leaves the external PVC alone", func() {
 		_, err := kubectl("annotate", "redisinstance", volName, "-n", volNamespace,
-			"redis.operator.com/recreate="+volPod(1))
+			"redis.operator.com/recreate="+volPod(1), "--overwrite")
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(volPodReady).WithArguments(1).Should(BeTrue())
@@ -178,9 +178,17 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 		Expect(volBinding(1, "external")).To(BeEmpty())
 		Expect(volCLI(Default, volPod(1), "GET", "vol-key")).To(Equal("kept"))
 		Expect(volPVCUIDOrEmpty(volExternal)).NotTo(BeEmpty(), "the operator deleted an external PVC")
-		Expect(volAnnotation("redis.operator.com/recreate")).To(BeEmpty())
+		Expect(volHandled("redis.operator.com/recreate")).To(Equal(volPod(1)))
 		Expect(volEvents("InstanceRecreated")).NotTo(BeEmpty())
 		Eventually(volCondition).WithArguments("StorageReady").Should(Equal("True"))
+
+		By("keeping the annotation, as a GitOps tool would: the replica is not recreated again")
+		Expect(volAnnotation("redis.operator.com/recreate")).To(Equal(volPod(1)))
+		uid, err := kubectl("get", "pod", volPod(1), "-n", volNamespace, "-o", "jsonpath={.metadata.uid}")
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(func() (string, error) {
+			return kubectl("get", "pod", volPod(1), "-n", volNamespace, "-o", "jsonpath={.metadata.uid}")
+		}, 15*time.Second).Should(Equal(uid), "a handled recreate ran again")
 	})
 
 	It("rejects recreating the primary", func() {
@@ -188,11 +196,11 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 		uid, err := kubectl("get", "pod", primary, "-n", volNamespace, "-o", "jsonpath={.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = kubectl("annotate", "redisinstance", volName, "-n", volNamespace, "redis.operator.com/recreate="+primary)
+		_, err = kubectl("annotate", "redisinstance", volName, "-n", volNamespace, "redis.operator.com/recreate="+primary, "--overwrite")
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(volEvents).WithArguments("RecreateRejected").ShouldNot(BeEmpty())
-		Eventually(volAnnotation).WithArguments("redis.operator.com/recreate").Should(BeEmpty())
+		Eventually(volHandled).WithArguments("redis.operator.com/recreate").Should(Equal(primary))
 		Consistently(func() (string, error) {
 			return kubectl("get", "pod", primary, "-n", volNamespace, "-o", "jsonpath={.metadata.uid}")
 		}, 10*time.Second).Should(Equal(uid), "the primary Pod was replaced")
@@ -246,7 +254,7 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 		Eventually(volBinding).WithArguments(ordinal, "state").Should(Equal("Terminating"))
 
 		By("switching over to " + target)
-		_, err = kubectl("annotate", "redisinstance", volName, "-n", volNamespace, "redis.operator.com/promote="+target)
+		_, err = kubectl("annotate", "redisinstance", volName, "-n", volNamespace, "redis.operator.com/promote="+target, "--overwrite")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(volPrimary).Should(Equal(target))
 
@@ -317,6 +325,12 @@ func volCondition(condition string) string {
 func volAnnotation(key string) string {
 	return volGet("redisinstance", volName, "-o",
 		"jsonpath={.metadata.annotations."+strings.ReplaceAll(key, ".", `\.`)+"}")
+}
+
+// volHandled returns the value of the request annotation key the operator last handled.
+func volHandled(key string) string {
+	return volGet("redisinstance", volName, "-o",
+		"jsonpath={.status.handledRequests."+strings.ReplaceAll(key, ".", `\.`)+"}")
 }
 
 // volBinding returns a field of the status.volumes entry of the ordinal.

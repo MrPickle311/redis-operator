@@ -268,7 +268,7 @@ var _ = Describe("RedisInstance controller", func() {
 			Expect(k8sClient.Delete(ctx, newRedisInstance(name, 1, redisv1.StorageSpec{}))).To(Succeed())
 		})
 
-		DescribeTable("rejects the switchover and drops the annotation",
+		DescribeTable("rejects the switchover once and keeps the annotation",
 			func(target, wantReason string) {
 				instance := &redisv1.RedisInstance{}
 				Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
@@ -281,10 +281,14 @@ var _ = Describe("RedisInstance controller", func() {
 				Expect(recorder.Events).To(Receive(SatisfyAll(
 					ContainSubstring("SwitchoverRejected"), ContainSubstring(wantReason))))
 				Expect(k8sClient.Get(ctx, objectKey(name), instance)).To(Succeed())
-				Expect(instance.Annotations).NotTo(HaveKey(redisv1.AnnotationPromote))
+				Expect(instance.Annotations).To(HaveKeyWithValue(redisv1.AnnotationPromote, target))
+				Expect(instance.Status.HandledRequests).To(HaveKeyWithValue(redisv1.AnnotationPromote, target))
 				Expect(instance.Status.CurrentPrimary).To(Equal(name + "-0"))
 				Expect(instance.Status.TargetPrimary).To(BeEmpty())
 				Expect(instance.Status.PrimaryEpoch).To(Equal(int64(1)), "a rejected switchover must not take an epoch")
+
+				Expect(reconcileWith(recorder, objectKey(name))).To(Succeed())
+				Expect(recorder.Events).NotTo(Receive(), "a handled request was served again")
 			},
 			Entry("a replica that is not Ready", name+"-1", "not Ready"),
 			Entry("a Pod of no instance", name+"-5", "not an instance"),

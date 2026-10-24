@@ -343,9 +343,9 @@ var _ = Describe("RedisInstance", Ordered, func() {
 
 			Eventually(func(g Gomega) {
 				out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
-					`jsonpath={.status.currentPrimary} {.status.primaryEpoch} {.metadata.annotations.redis\.operator\.com/promote}`)
+					`jsonpath={.status.currentPrimary} {.status.primaryEpoch} {.status.handledRequests.redis\.operator\.com/promote}`)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(strings.TrimSpace(out)).To(Equal(podName(to)+" "+epoch), "status and annotation after the switchover")
+				g.Expect(out).To(Equal(podName(to)+" "+epoch+" "+podName(to)), "status and handled request after the switchover")
 			}).Should(Succeed())
 
 			By("checking that the new primary takes writes through -rw and the old one replicates from it")
