@@ -59,9 +59,9 @@ How the objects use each other:
 | PVC `cache-N-data`          | Redis data                                      | Pod `cache-N`, mounted at `/data`                        |
 
 A PVC from `spec.storage.existingClaims` takes the place of the generated
-`cache-N-data`; the operator never owns or deletes it. On scale-down the
-operator deletes the extra Pods and their generated PVCs, but never the
-primary: if the primary is above the new `spec.instances`, it stays and the
+`cache-N-data`; the operator never owns or deletes it (see [Volumes](#volumes)).
+On scale-down the operator deletes the extra Pods and their generated PVCs,
+but never the primary: if the primary is above the new `spec.instances`, it stays and the
 operator emits a `Warning` Event `ScaleDownBlocked` until you
 [switch over](#switchover) to a remaining instance.
 
@@ -241,6 +241,89 @@ The operator no longer connects to Redis itself: `REPLICAOF` goes through
 `POST /replicaof`, which is idempotent and does nothing when the replica
 already follows the requested primary.
 
+## Volumes
+
+You choose the volumes when you create the `RedisInstance`; after that the
+operator alone manages them. `spec.storage.existingClaims` cannot be changed
+(the API server rejects it), so no edit can put a running instance on another
+volume by mistake.
+
+```yaml
+spec:
+  storage:
+    volumeClaimTemplate: {size: 5Gi}
+    existingClaims:
+      - {instanceOrdinal: 0, claimName: cache-restored}   # e.g. restored from a snapshot
+      - {instanceOrdinal: 3, claimName: cache-spare}      # reserved: used when scaling up to 4
+status:
+  volumes:
+    - {ordinal: 0, claimName: cache-restored, uid: 7f3a…, external: true, state: Ready}
+    - {ordinal: 1, claimName: cache-1-data,   uid: 91bc…, state: Ready}
+    - {ordinal: 2, claimName: cache-2-data,   uid: c0de…, state: Ready}
+```
+
+`status.volumes` is the memory of the operator. An instance is bound to a
+volume once, when it first needs one: the claim from `existingClaims`, or
+else a PVC generated from `volumeClaimTemplate`. The UID of the PVC is
+recorded before any Pod mounts it, and a Pod is only created on a volume that
+is `Ready`.
+
+| `state` | Meaning |
+|---|---|
+| `Ready` | The PVC exists, has the recorded UID and is not being deleted. |
+| `Terminating` | The PVC is being deleted, but the Pod still uses it (`pvc-protection`). The Pod keeps running. |
+| `Missing` | The PVC does not exist, or a PVC with its name has another UID: it was deleted and created again and holds other data. The instance gets no Pod. |
+| `Lost` | The PVC lost its PersistentVolume. |
+| `Detached` | An external PVC of an instance removed by a scale-down. It is mounted again on the next scale-up. |
+
+The condition `StorageReady` is `False` while any instance's volume is not
+`Ready` (`Detached` does not count), and lists them in its message. Entering
+such a state emits a `Warning` Event `VolumeUnavailable`.
+
+What the operator does on its own:
+
+- **Scale-down:** a generated PVC is deleted with its binding (the data of a
+  replica can be synced again); an external PVC stays, bound and `Detached`.
+- **Scale-up:** an instance with a binding gets the same PVC back (same UID
+  only); otherwise the claim from `existingClaims`, or a new generated PVC.
+- **A generated PVC of a replica is gone and the Pod with it:** a new empty PVC
+  is generated (Event `VolumeRecreated`) and the replica does a full sync.
+- **A generated name is taken by a PVC the operator did not create:** never
+  adopted, the instance stays `Missing` until you delete or rename that PVC.
+- **The volume of the primary is gone:** never replaced on its own, because an
+  empty primary would make every replica drop its data in a full resync. The
+  primary keeps running while its PVC is `Terminating`: [switch over](#switchover)
+  to a replica, then delete the old primary's Pod, and it comes back as a
+  replica on a new volume. Once the Pod is gone too, only failover (step 4)
+  can move the primary.
+
+The only way to change the volume of an instance is to recreate a replica:
+
+```sh
+kubectl annotate redisinstance cache redis.operator.com/recreate=cache-2
+```
+
+The operator deletes the Pod and its generated PVC (an external PVC is only
+let go, never deleted), binds the instance to a new generated PVC and starts
+it there; the replica syncs from the primary. It rejects the request (Event
+`RecreateRejected`) for the primary, during a switchover, and without a
+`volumeClaimTemplate`.
+
+Known limits:
+
+- **`status.volumes` does not survive every restore.** A `RedisInstance`
+  re-created from git or Velero starts with an empty status. The operator
+  rebuilds the bindings from the spec, with the same result, except that an
+  instance moved by `recreate` goes back to its external PVC, and a PVC
+  replaced meanwhile is not detected (its UID is recorded anew).
+- **Foreign data at creation is not detected.** The operator cannot tell
+  whether an external PVC belonged to this database. A replica overwrites it
+  in its full sync, so data on a PVC of another database given by mistake is
+  lost. A wrong primary is caught only by the safe start of step 4.
+- **One PVC in two `RedisInstance`s** is not detected yet.
+- An external PVC of an instance in the middle cannot be replaced without a
+  `volumeClaimTemplate`.
+
 ## Switchover
 
 A switchover moves the primary to a replica while both are healthy, with no
@@ -340,9 +423,15 @@ sequenceDiagram
     OP->>API: CreateOrUpdate Secret cache-internal-auth<br/>(generate only missing passwords)
     OP->>API: CreateOrUpdate ServiceAccount, Role, RoleBinding cache-instance
     OP->>API: Ensure Services hl, rw, ro, r
+    opt recreate annotation
+        OP->>API: Delete Pod and generated PVC, bind to a new generated PVC
+    end
     loop each ordinal
-        OP->>API: Ensure PVC (unless existingClaim)
-        OP->>API: Create Pod, or patch its role label (primary = status.currentPrimary)
+        OP->>API: Bind a volume (status.volumes), create a generated PVC if needed,<br/>observe the PVC (UID, deletion, Lost)
+    end
+    OP->>API: Update status if the bindings changed
+    loop each ordinal
+        OP->>API: Create Pod (only on a Ready volume), or patch its role label
     end
     OP->>API: Delete Pods and generated PVCs above spec.instances (never the primary)
     opt promote annotation or status.targetPrimary set
@@ -362,7 +451,7 @@ sequenceDiagram
             IM-->>OP: {changed}
         end
     end
-    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited and Switchover conditions)
+    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited, StorageReady and Switchover conditions)
     opt a Pod has no memory limit (first time)
         OP->>API: Warning Event MemoryLimitMissing
     end

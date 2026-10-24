@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // ConditionMemoryLimited is True when every redis container has a memory
@@ -38,9 +39,22 @@ const ConditionSwitchover = "Switchover"
 // The operator removes it once the switchover has completed or failed.
 const AnnotationPromote = "redis.operator.com/promote"
 
+// ConditionStorageReady is True when the volume of every instance is Ready,
+// see RedisInstanceStatus.Volumes. When False, its message lists the instances
+// whose volume is not.
+const ConditionStorageReady = "StorageReady"
+
+// AnnotationRecreate asks to recreate the named replica on a new generated
+// volume, e.g. after its PVC was lost:
+//
+//	kubectl annotate redisinstance cache redis.operator.com/recreate=cache-2
+//
+// It is the only way to change the volume of an instance once it is bound.
+// The operator removes the annotation once it has handled it.
+const AnnotationRecreate = "redis.operator.com/recreate"
+
 // RedisInstanceSpec defines the desired state of RedisInstance
-// +kubebuilder:validation:XValidation:rule="!has(self.storage.existingClaims) || self.storage.existingClaims.all(c, c.instanceOrdinal < self.instances)",message="storage.existingClaims[].instanceOrdinal must be lower than instances"
-// +kubebuilder:validation:XValidation:rule="has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims) && size(self.storage.existingClaims) >= self.instances)",message="storage.volumeClaimTemplate is required unless storage.existingClaims cover every instance"
+// +kubebuilder:validation:XValidation:rule="has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims) && self.storage.existingClaims.filter(c, c.instanceOrdinal < self.instances).size() == self.instances)",message="storage.volumeClaimTemplate is required unless storage.existingClaims cover every instance"
 type RedisInstanceSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
@@ -99,13 +113,18 @@ type ACLSpec struct {
 	DefaultUser DefaultUserMode `json:"defaultUser,omitempty"`
 }
 
+// StorageSpec chooses the volumes when the RedisInstance is created. After
+// that the operator alone manages them through status.volumes, so the volume
+// of a running instance can never be switched by an edit of the spec.
+// +kubebuilder:validation:XValidation:rule="has(self.existingClaims) == has(oldSelf.existingClaims) && (!has(self.existingClaims) || self.existingClaims == oldSelf.existingClaims)",message="storage.existingClaims is immutable; use the redis.operator.com/recreate annotation to move a replica to a new volume"
 type StorageSpec struct {
 	// VolumeClaimTemplate is used to generate a PVC for every instance
 	// not listed in ExistingClaims. Generated PVCs are owned by the operator.
 	// +optional
 	VolumeClaimTemplate *VolumeClaimTemplateSpec `json:"volumeClaimTemplate,omitempty"`
 	// ExistingClaims binds instances to PVCs created outside of the operator.
-	// The operator never deletes these PVCs.
+	// The operator never deletes these PVCs. An ordinal at or above instances
+	// reserves the PVC for scaling up.
 	// +optional
 	// +listType=map
 	// +listMapKey=instanceOrdinal
@@ -150,6 +169,54 @@ type RedisInstanceStatus struct {
 	// TargetPrimary is the Pod a switchover in progress moves the primary to.
 	// +optional
 	TargetPrimary string `json:"targetPrimary,omitempty"`
+
+	// Volumes binds every instance to its PVC. A binding is made once, when
+	// the instance first gets a volume, and stays until the instance is
+	// removed or recreated, so it is the memory of the operator: the spec
+	// only provides the initial choice.
+	// +listType=map
+	// +listMapKey=ordinal
+	// +optional
+	Volumes []VolumeStatus `json:"volumes,omitempty"`
+}
+
+// VolumeState is the observed state of the volume of one instance.
+// +kubebuilder:validation:Enum=Ready;Terminating;Missing;Lost;Detached
+type VolumeState string
+
+const (
+	// VolumeReady: the PVC exists, is the bound one and is not being deleted.
+	VolumeReady VolumeState = "Ready"
+	// VolumeTerminating: the PVC is being deleted, but a Pod still uses it.
+	VolumeTerminating VolumeState = "Terminating"
+	// VolumeMissing: the PVC does not exist, or a PVC with its name is not
+	// the bound one (another UID). The instance gets no Pod.
+	VolumeMissing VolumeState = "Missing"
+	// VolumeLost: the PVC lost its PersistentVolume.
+	VolumeLost VolumeState = "Lost"
+	// VolumeDetached: an external PVC of an instance removed by a scale-down.
+	// It is mounted again when the instance comes back.
+	VolumeDetached VolumeState = "Detached"
+)
+
+// VolumeStatus is the volume bound to one instance.
+type VolumeStatus struct {
+	Ordinal int32 `json:"ordinal"`
+	// ClaimName is the PVC of the instance.
+	ClaimName string `json:"claimName"`
+	// UID of the PVC when it was bound. A PVC with the same name and another
+	// UID was deleted and created again: it holds other data.
+	// +optional
+	UID types.UID `json:"uid,omitempty"`
+	// External is true for a PVC from spec.storage.existingClaims, which the
+	// operator never deletes.
+	// +optional
+	External bool `json:"external,omitempty"`
+	// +optional
+	State VolumeState `json:"state,omitempty"`
+	// Message explains a State other than Ready.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -152,11 +152,16 @@ spec:
                     type: object
                 type: object
               storage:
+                description: |-
+                  StorageSpec chooses the volumes when the RedisInstance is created. After
+                  that the operator alone manages them through status.volumes, so the volume
+                  of a running instance can never be switched by an edit of the spec.
                 properties:
                   existingClaims:
                     description: |-
                       ExistingClaims binds instances to PVCs created outside of the operator.
-                      The operator never deletes these PVCs.
+                      The operator never deletes these PVCs. An ordinal at or above instances
+                      reserves the PVC for scaling up.
                     items:
                       description: ExistingClaim binds one instance to an existing
                         PVC.
@@ -197,19 +202,21 @@ spec:
                     - size
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: storage.existingClaims is immutable; use the redis.operator.com/recreate
+                    annotation to move a replica to a new volume
+                  rule: has(self.existingClaims) == has(oldSelf.existingClaims) &&
+                    (!has(self.existingClaims) || self.existingClaims == oldSelf.existingClaims)
             required:
             - image
             - storage
             type: object
             x-kubernetes-validations:
-            - message: storage.existingClaims[].instanceOrdinal must be lower than
-                instances
-              rule: '!has(self.storage.existingClaims) || self.storage.existingClaims.all(c,
-                c.instanceOrdinal < self.instances)'
             - message: storage.volumeClaimTemplate is required unless storage.existingClaims
                 cover every instance
               rule: has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims)
-                && size(self.storage.existingClaims) >= self.instances)
+                && self.storage.existingClaims.filter(c, c.instanceOrdinal < self.instances).size()
+                == self.instances)
           status:
             description: status defines the observed state of RedisInstance
             properties:
@@ -291,6 +298,52 @@ spec:
                 description: TargetPrimary is the Pod a switchover in progress moves
                   the primary to.
                 type: string
+              volumes:
+                description: |-
+                  Volumes binds every instance to its PVC. A binding is made once, when
+                  the instance first gets a volume, and stays until the instance is
+                  removed or recreated, so it is the memory of the operator: the spec
+                  only provides the initial choice.
+                items:
+                  description: VolumeStatus is the volume bound to one instance.
+                  properties:
+                    claimName:
+                      description: ClaimName is the PVC of the instance.
+                      type: string
+                    external:
+                      description: |-
+                        External is true for a PVC from spec.storage.existingClaims, which the
+                        operator never deletes.
+                      type: boolean
+                    message:
+                      description: Message explains a State other than Ready.
+                      type: string
+                    ordinal:
+                      format: int32
+                      type: integer
+                    state:
+                      description: VolumeState is the observed state of the volume
+                        of one instance.
+                      enum:
+                      - Ready
+                      - Terminating
+                      - Missing
+                      - Lost
+                      - Detached
+                      type: string
+                    uid:
+                      description: |-
+                        UID of the PVC when it was bound. A PVC with the same name and another
+                        UID was deleted and created again: it holds other data.
+                      type: string
+                  required:
+                  - claimName
+                  - ordinal
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - ordinal
+                x-kubernetes-list-type: map
             type: object
         required:
         - spec

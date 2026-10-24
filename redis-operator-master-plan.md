@@ -282,6 +282,21 @@ Kryteria wyboru: ten sam `master_replid` co ostatnio znany primary, najwyższy `
   2. nie usuwa siłowo Poda, dopóki węzeł może wrócić (ryzyko podwójnego montowania RWO);
   3. jeśli węzeł ma taint `node.kubernetes.io/out-of-service` (Kubernetes non-graceful node shutdown), operator usuwa Pod i odtwarza instancję na innym węźle. Zależnie od storage będzie to ten sam PVC (storage sieciowy) albo nowy (storage lokalny, opcja `spec.storage.recreateOnNodeLoss: true`, tylko dla PVC generowanych).
 
+### Awarie woluminów (krok 4)
+
+Rozszerzenie modelu z sekcji 6 o automatyczną reakcję. Zasada: **wygenerowany wolumin repliki jest jednorazowy** (operator naprawia sam), **zewnętrzny należy do użytkownika** (tylko raport i `recreate` na żądanie), **wolumin primary nigdy nie jest odtwarzany pusty** (primary zawsze przenosimy na replikę).
+
+| Wolumin | Stan | Reakcja w kroku 4 |
+|---|---|---|
+| primary | `Terminating`, Pod działa | **automatyczny switchover** na najlepszą replikę (fence + zero lag, bez utraty danych); usunięcia PVC (`deletionTimestamp`) nie da się cofnąć, więc nie ma na co czekać. Po switchoverze stary ordinal jest repliką i dalej jak niżej. |
+| primary | `Missing`/`Lost` albo Pod niedostępny > `failover.delay` | **failover**: promote repliki z tym samym `replid` i najwyższym offsetem, bez fence i bez czekania na lag (możliwa utrata ostatnich zapisów). Stary ordinal wraca jako replika na nowym PVC. |
+| replika, generowany | `Terminating`, Pod działa | operator sam usuwa Pod (po jednej replice naraz, nigdy gdy trwa switchover/failover), żeby od razu przejść na nowy wolumin; dane tej repliki i tak przepadną przy zatrzymaniu Poda. Koszt: chwilowo jedna replika mniej w `-ro`. |
+| replika, generowany | `Lost` | automatycznie jak `recreate`: usunięcie Poda i PVC, nowy PVC, pełny sync. |
+| replika, generowany | `Missing` (Pod zniknął) | już w kroku 3.3: nowy pusty PVC. |
+| replika, zewnętrzny | `Missing`/`Lost`/`Terminating` | bez automatu: raport (`StorageReady=False`, Event), naprawa przez `recreate`. |
+
+Usuwa to lukę z kroku 3.3: primary bez woluminu i bez Poda nie zostaje już bez primary, bo awaria jego woluminu sama uruchamia failover.
+
 ### 3.6 Update istniejących Podów
 
 Zmiana `spec.image` lub konfiguracji, która wymaga restartu, uruchamia rolling update: najpierw repliki (po jednej, czekając na `master_link_status:up` i nadrobienie lagu), na końcu switchover primary na zaktualizowaną replikę i restart starego primary. Zmiany, które da się zastosować przez `CONFIG SET`, idą bez restartu.
@@ -849,15 +864,17 @@ redis-operator/
 - **Krok 3.1:** kontroler bierze primary ze `status.currentPrimary` (pusty → ordinal 0), etykiety `role` i Services `-rw`/`-ro` idą za nim; `/replicaof` trafia do każdej repliki w fazie Running (nie tylko Ready, sekcja 3.6), błąd IM startującego Poda to tylko ponowienie (log `V(1)`); skalowanie w dół nigdy nie usuwa primary (Warning Event `ScaleDownBlocked`, trzeba najpierw zrobić switchover).
 - **Krok 3.2a:** API IM `POST /fence {epoch}` (`CLIENT PAUSE <1h> WRITE`: zapisy czekają, odczyty, `INFO` i strumień replikacji działają) i `POST /promote {epoch}` (`REPLICAOF NO ONE` + `CLIENT UNPAUSE`); `/replicaof` zdejmuje pauzę po `REPLICAOF` (zdegradowany primary odpowiada `READONLY` zamiast wieszać klientów); `/status` raportuje `replID` i `offset`; wspólna obsługa epoch i błędów 409/503 (`runCommand`).
 - **Krok 3.2b:** switchover przez adnotację `redis.operator.com/promote=<pod>`: walidacja (jest primary, cel ≠ primary, cel to Ready Pod instancji; inaczej Event `SwitchoverRejected`), `status.targetPrimary` + `primaryEpoch++` + condition `Switchover`, fence → zero lag → promote → `currentPrimary`, Events `SwitchoverCompleted`/`SwitchoverFailed` (timeout 1 min zdejmuje fence); adnotacja zdejmowana po obsłużeniu. Test e2e: switchover na `-1` i z powrotem, bez utraty danych, stary primary (Running, nie Ready) dostaje `/replicaof`.
+- **Krok 3.3:** model woluminów z sekcji 6: `existingClaims` niezmienne po utworzeniu (CEL na `StorageSpec`, porównanie list typu map bez kolejności), wpisy ordinali ≥ `instances` jako rezerwa na skalowanie w górę; `status.volumes` (`claimName`, `uid`, `external`, `state`, `message`) zapisywany zaraz po przypisaniu, przed utworzeniem Poda; Pod powstaje tylko na woluminie `Ready`; wygenerowana nazwa nigdy nie przejmuje PVC, którego operator nie utworzył; PVC z innym UID = inny wolumin; auto-odtworzenie wygenerowanego PVC repliki bez Poda (Event `VolumeRecreated`), nigdy primary; `Detached` dla zewnętrznego PVC po skalowaniu w dół i ponowne podpięcie przy skalowaniu w górę (kontrola UID); adnotacja `redis.operator.com/recreate=<pod>` (tylko replika, wymaga template; status zapisany przed zdjęciem adnotacji); condition `StorageReady` i Warning Event `VolumeUnavailable` przy wejściu w stan inny niż `Ready`; watch na niezarządzane PVC (mapowanie po `existingClaims`/`status.volumes`) zamiast pollingu. Testy: envtest na każdy przypadek z sekcji 6 i reguły CEL, osobny scenariusz e2e w Kind (UID, niezmienność, utrata statusu, usunięty PVC repliki, podmieniony zewnętrzny PVC + `recreate`, odrzucony `recreate` primary, rezerwa i `Detached` przy skalowaniu, odzyskanie primary przez switchover, brak pustego primary).
 
 ### Świadomie tymczasowe uproszczenia
-- Primary przenosi tylko planowany switchover; automatyczny failover w kroku 4.
+- Primary przenosi tylko planowany, ręczny switchover; brak automatycznego switchoveru i failoveru przy jakiejkolwiek awarii primary (Pod, PVC, PV, węzeł, sieć) — wszystko w kroku 4 („Zakres kroku 4” w sekcji 17).
 - Primary startuje bez fence i bez porównania danych z replikami (bezpieczny start primary z sekcji 3.3, krok 4 razem z failoverem). Restart starego primary w trakcie switchoveru gubi fence (pauza żyje w procesie `redis-server`).
 - Po switchoverze etykiety `role` przestawia pętla Podów w następnym reconcile: `-rw` przez chwilę wskazuje stary primary, który odpowiada wtedy `READONLY` (jest już fenced albo repliką), więc zapisy nigdy nie trafiają do dwóch primary.
 - Fence trwa najwyżej godzinę (`fenceTimeout`), switchover czeka na kandydata minutę (`switchoverTimeout`); oba na stałe w kodzie.
 - Fence nie rozłącza klientów: zapisy czekają, a po demote dostają `READONLY`.
 - Brak update Podów przy zmianie `spec` (krok 3.4).
-- `existingClaims` wciąż edytowalne i bez kontroli UID PVC: usunięcie Poda odtworzy go z woluminem z bieżącej spec (model z sekcji 6 w kroku 3.3).
+- Ograniczenia woluminów z sekcji 6 („Ograniczenia”): status nie przeżywa restore z gita/Velero, obce dane przy tworzeniu przechodzą, brak `attached-to`, środkowy zewnętrzny ordinal bez template nie do odtworzenia.
+- Primary bez woluminu i bez Poda (PVC usunięty, Pod usunięty przed switchoverem) zostaje bez Poda: switchover wymaga działającego primary, więc wyjściem jest dopiero failover (krok 4, „Awarie woluminów” w sekcji 3.5). Do tego czasu brak też automatycznej reakcji na `Terminating`/`Lost` (operator tylko raportuje).
 - Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
 - Brak TLS Redisa, ACL użytkowników, PDB, backupu.
 
@@ -869,9 +886,9 @@ redis-operator/
 graph TD
     S0["0. Porządki<br/>API group, spec.storage, headless + DNS,<br/>-rw/-ro/-r, etykiety role, PVC managed/external,<br/>CEL, idempotentny REPLICAOF"]
     S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni,<br/>spec.resources + maxmemory z limitu"]
-    S2["2. IM v2<br/>/replicaof, /promote, /demote, /fence,<br/>epoch, bezpieczny start,<br/>SA + Role + RoleBinding per instancja"]
+    S2["2. IM v2<br/>/replicaof, epoch, bezpieczny start repliki,<br/>readiness po pierwszym syncu,<br/>SA + Role + RoleBinding per instancja"]
     S3["3. Reconciler → imclient<br/>3.1 primary ze statusu, /replicaof do nie-Ready replik<br/>3.2 /fence, /promote, switchover<br/>3.3 wolumeny: niezmienne existingClaims,<br/>status.volumes + UID, recreate<br/>3.4 rolling update<br/>3.5 spec.redis.parameters"]
-    S4["4. Failover<br/>PDB, anti-affinity, węzeł NotReady, drain"]
+    S4["4. Failover<br/>samo-fencing, bezpieczny start primary,<br/>failover.delay, wybór kandydata,<br/>awarie woluminów, PDB, anti-affinity,<br/>węzeł NotReady, drain (zakres niżej)"]
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]
     S7["7. Backup: ScheduledBackup, volumeSnapshot, builtin, restore"]
@@ -880,6 +897,31 @@ graph TD
     S10["10. RedisCluster + serwisy klastra"]
     S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10
 ```
+
+### Zakres kroku 4 (failover) — lista kontrolna
+
+Krok 4 jest skończony dopiero, gdy **każda** awaria primary kończy się bez ręcznej interwencji i bez dwóch primary przyjmujących zapisy. Do tego czasu operator świadomie nie robi automatycznego failoveru (sekcja 16), bo bez punktów 1–3 byłby niebezpieczny.
+
+Mechanizmy (muszą wejść razem):
+1. **Samo-fencing IM** (sekcja 3.3): IM watchuje własny `RedisInstance`; `currentPrimary` ≠ ja i wyższy `primaryEpoch` → sam degraduje się do repliki; utrata kontaktu z API serverem dłużej niż `failover.delay` → sam się fencuje (otwarta decyzja #2: domyślnie włączone czy opcja).
+2. **Bezpieczny start primary** (sekcja 3.3): Pod, który jest `currentPrimary`, startuje fenced; operator porównuje `replid`/offset z replikami i zdejmuje fence albo robi failover na lepszą replikę.
+3. **`spec.failover.delay`**: odróżnia restart Poda (failover zbędny, primary wraca na tym samym PVC) od awarii.
+4. **Wybór kandydata i failover** (sekcja 3.4): ten sam `replid`, najwyższy offset, remis → niższy ordinal; `primaryEpoch++` przed poleceniami; `/fence` starego best effort; `/promote`; `/replicaof` na pozostałych.
+5. **Awarie woluminów** (sekcja 3.5, „Awarie woluminów”): automatyczny switchover przy `Terminating` primary, failover przy `Missing`/`Lost` primary, automatyczny restart/odtworzenie wygenerowanej repliki.
+6. **Węzły i drain** (sekcja 3.5): PDB, anti-affinity, węzeł NotReady, `out-of-service`, `recreateOnNodeLoss`, switchover przy cordonie węzła primary.
+
+Kryteria akceptacji (każdy jako test e2e, plus testy chaosu z akapitu niżej):
+
+| Awaria primary | Oczekiwany wynik |
+|---|---|
+| Pod padł, PVC cały, wraca przed `failover.delay` | brak failoveru, primary wraca na tym samym PVC, repliki się podłączają |
+| Pod niedostępny dłużej niż `failover.delay` | failover na najlepszą replikę, stary wraca jako replika |
+| PVC usunięty, Pod działa (`Terminating`) | automatyczny switchover bez utraty danych, stary ordinal dostaje nowy PVC jako replika |
+| PVC i Pod utracone (`Missing`) | failover, stary ordinal wraca jako replika na nowym PVC (dziś: instancja bez primary) |
+| PV padł (`Lost`) | failover, odtworzenie starego ordinala jako repliki (dziś: tylko raport) |
+| Partycja sieci: primary odcięty od operatora i API | stary primary sam się fencuje, nowy primary po failoverze, po powrocie stary staje się repliką; nigdy dwa primary przyjmujące zapisy |
+| Primary wraca z pustym/starszym datasetem | bezpieczny start: failover na replikę zamiast `FULLRESYNC` replik z pustego primary |
+| Węzeł primary NotReady / cordon | failover / switchover zgodnie z sekcją 3.5 |
 
 Każdy krok jest realizowany pojedynczo, z unit testami builderów (`internal/resources`), testem envtest kontrolera i testem w klastrze homelab przed przejściem dalej. Testy chaosu (kill primary, partycja sieci przez NetworkPolicy, drain węzła) wchodzą od kroku 4 i są odpalane przy każdej zmianie logiki failoveru.
 

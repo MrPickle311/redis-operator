@@ -10,7 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
@@ -38,7 +37,7 @@ func (r *RedisInstanceReconciler) reconcileSwitchover(ctx context.Context, insta
 		if reason := r.switchoverRejection(ctx, instance, target); reason != "" {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "SwitchoverRejected", "Switchover",
 				"Cannot switch over to %s: %s", target, reason)
-			return ctrl.Result{}, r.removePromoteAnnotation(ctx, instance)
+			return ctrl.Result{}, r.removeAnnotation(ctx, instance, redisv1.AnnotationPromote)
 		}
 		if err := r.startSwitchover(ctx, instance, target); err != nil {
 			return ctrl.Result{}, err
@@ -130,7 +129,7 @@ func (r *RedisInstanceReconciler) finishSwitchover(ctx context.Context, instance
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "SwitchoverCompleted", "Switchover",
 		"Moved the primary from %s to %s", from, to)
-	return r.removePromoteAnnotation(ctx, instance)
+	return r.removeAnnotation(ctx, instance, redisv1.AnnotationPromote)
 }
 
 // abortSwitchover gives up when the target does not catch up in time and lets
@@ -148,7 +147,7 @@ func (r *RedisInstanceReconciler) abortSwitchover(ctx context.Context, instance 
 		return err
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "SwitchoverFailed", "Switchover", message)
-	return r.removePromoteAnnotation(ctx, instance)
+	return r.removeAnnotation(ctx, instance, redisv1.AnnotationPromote)
 }
 
 func (r *RedisInstanceReconciler) setSwitchoverCondition(instance *redisv1.RedisInstance, status metav1.ConditionStatus, reason, message string) {
@@ -159,16 +158,6 @@ func (r *RedisInstanceReconciler) setSwitchoverCondition(instance *redisv1.Redis
 		Message:            message,
 		ObservedGeneration: instance.Generation,
 	})
-}
-
-// removePromoteAnnotation marks the request as handled, so it is not served twice.
-func (r *RedisInstanceReconciler) removePromoteAnnotation(ctx context.Context, instance *redisv1.RedisInstance) error {
-	if _, ok := instance.Annotations[redisv1.AnnotationPromote]; !ok {
-		return nil
-	}
-	patch := client.MergeFrom(instance.DeepCopy())
-	delete(instance.Annotations, redisv1.AnnotationPromote)
-	return r.Patch(ctx, instance, patch)
 }
 
 // caughtUp reports whether the target holds every write of the fenced

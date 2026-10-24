@@ -76,15 +76,23 @@ func serverCertDNSName(instance *redisv1.RedisInstance) string {
 	return fmt.Sprintf("*.%s.%s.svc", headlessServiceName(instance), instance.Namespace)
 }
 
-// pvcName returns the PVC name used by the instance with the given ordinal.
-// The second value is true when the PVC comes from spec.storage.existingClaims.
+// pvcName returns the PVC the spec chooses for the instance with the given
+// ordinal. The second value is true when it comes from
+// spec.storage.existingClaims. It is read only when the instance is bound to
+// a volume; after that status.volumes decides.
 func pvcName(instance *redisv1.RedisInstance, ordinal int32) (string, bool) {
 	for _, c := range instance.Spec.Storage.ExistingClaims {
 		if c.InstanceOrdinal == ordinal {
 			return c.ClaimName, true
 		}
 	}
-	return fmt.Sprintf("%s-%d-data", instance.Name, ordinal), false
+	return generatedPVCName(instance, ordinal), false
+}
+
+// generatedPVCName returns the name of the PVC the operator generates for the
+// instance with the given ordinal from spec.storage.volumeClaimTemplate.
+func generatedPVCName(instance *redisv1.RedisInstance, ordinal int32) string {
+	return fmt.Sprintf("%s-%d-data", instance.Name, ordinal)
 }
 
 // primaryOrdinal returns the ordinal of the current primary: the Pod in

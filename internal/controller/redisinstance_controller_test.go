@@ -144,6 +144,7 @@ var _ = Describe("RedisInstance controller", func() {
 		const name = "existing-claims-test"
 
 		BeforeEach(func() {
+			Expect(k8sClient.Create(ctx, newPVC("pvc-0"))).To(Succeed())
 			instance := newRedisInstance(name, 1, redisv1.StorageSpec{ExistingClaims: existingClaims(0)})
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
@@ -151,6 +152,7 @@ var _ = Describe("RedisInstance controller", func() {
 
 		AfterEach(func() {
 			Expect(k8sClient.Delete(ctx, newRedisInstance(name, 1, redisv1.StorageSpec{}))).To(Succeed())
+			deletePVCNow("pvc-0")
 		})
 
 		It("mounts the external PVC and does not create one of its own", func() {
@@ -240,6 +242,7 @@ var _ = Describe("RedisInstance controller", func() {
 
 			Expect(k8sClient.Get(ctx, objectKey(name+"-1"), &corev1.Pod{})).To(Succeed(), "the primary Pod was deleted")
 			Expect(pvcDeleted(name+"-1-data")).To(BeFalse(), "the PVC of the primary was deleted")
+			Expect(volume(getInstance(name), 1).State).To(Equal(redisv1.VolumeReady), "the primary lost its volume binding")
 			Expect(recorder.Events).To(Receive(ContainSubstring("ScaleDownBlocked")))
 		})
 	})
@@ -304,8 +307,11 @@ var _ = Describe("RedisInstance controller", func() {
 		Entry("rejects a missing volumeClaimTemplate when existingClaims do not cover every instance",
 			redisv1.StorageSpec{ExistingClaims: existingClaims(0)},
 			false),
-		Entry("rejects an existingClaims ordinal outside of instances",
+		Entry("accepts an existingClaims ordinal reserved for scaling up",
 			redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate(), ExistingClaims: existingClaims(5)},
+			true),
+		Entry("rejects existingClaims that cover the count but not the ordinals of every instance",
+			redisv1.StorageSpec{ExistingClaims: existingClaims(0, 5)},
 			false),
 		Entry("accepts existingClaims covering every instance without a volumeClaimTemplate",
 			redisv1.StorageSpec{ExistingClaims: existingClaims(0, 1)},

@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
@@ -70,12 +71,13 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 
-func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage string) *corev1.Pod {
+// buildRedisPod returns the Pod of the instance with the given ordinal, with
+// claimName, the PVC bound in status.volumes, as its data volume.
+func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage, claimName string) *corev1.Pod {
 	runAsNonRoot := true
 	automountToken := false
 	runAsUser := int64(999)
 	allowPrivEsc := false
-	claimName, _ := pvcName(instance, ordinal)
 
 	containerSecurity := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: &allowPrivEsc,
@@ -323,7 +325,7 @@ func (r *RedisInstanceReconciler) ensureService(ctx context.Context, instance *r
 
 func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) *corev1.PersistentVolumeClaim {
 	volumeClaimTemplate := instance.Spec.Storage.VolumeClaimTemplate
-	name, _ := pvcName(instance, ordinal)
+	name := generatedPVCName(instance, ordinal)
 
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -340,25 +342,6 @@ func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) *corev1.Persi
 			StorageClassName: volumeClaimTemplate.StorageClassName,
 		},
 	}
-}
-
-func (r *RedisInstanceReconciler) ensurePVC(ctx context.Context, instance *redisv1.RedisInstance, ordinal int32) error {
-	if instance.Spec.Storage.VolumeClaimTemplate == nil {
-		return fmt.Errorf("instance %d has no existing claim and storage.volumeClaimTemplate is not set", ordinal)
-	}
-
-	desiredPVC := buildRedisPVC(instance, ordinal)
-	if err := ctrl.SetControllerReference(instance, desiredPVC, r.Scheme); err != nil {
-		return err
-	}
-
-	var existing corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKeyFromObject(desiredPVC), &existing)
-	if apierrors.IsNotFound(err) {
-		logf.FromContext(ctx).Info("creating PVC", "name", desiredPVC.Name)
-		return ignoreAlreadyExists(r.Create(ctx, desiredPVC))
-	}
-	return err
 }
 
 // ensureRoleLabel sets the role label on an existing Pod. The -rw and -ro
@@ -378,11 +361,11 @@ func (r *RedisInstanceReconciler) ensureRoleLabel(ctx context.Context, pod *core
 	return r.Patch(ctx, pod, patch)
 }
 
-// deleteOwnedPVC deletes the PVC of the given ordinal, but only when the
-// RedisInstance owns it. A PVC created by the user, even one with a matching
-// name, holds data the operator must never touch.
+// deleteOwnedPVC deletes the generated PVC of the given ordinal, but only
+// when the RedisInstance owns it. A PVC created by the user, even one with a
+// matching name, holds data the operator must never touch.
 func (r *RedisInstanceReconciler) deleteOwnedPVC(ctx context.Context, instance *redisv1.RedisInstance, ordinal int32) error {
-	currentPvcName, _ := pvcName(instance, ordinal)
+	currentPvcName := generatedPVCName(instance, ordinal)
 
 	var pvc corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, types.NamespacedName{Name: currentPvcName, Namespace: instance.Namespace}, &pvc); err != nil {
@@ -441,14 +424,33 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	for ordinal := int32(0); ordinal < instance.Spec.Instances; ordinal++ {
-		if _, external := pvcName(&instance, ordinal); !external {
-			if err := r.ensurePVC(ctx, &instance, ordinal); err != nil {
-				return ctrl.Result{}, err
-			}
+	if err := r.reconcileRecreate(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
+	podExists, err := r.existingPods(ctx, &instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	claims, err := r.reconcileVolumes(ctx, &instance, podExists)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Right away, before any Pod mounts a volume: the binding and the UID of
+	// its PVC must be recorded even when this pass returns early below.
+	if !equality.Semantic.DeepEqual(oldStatus, &instance.Status) {
+		if err := r.Status().Update(ctx, &instance); err != nil {
+			return ctrl.Result{}, err
+		}
+		oldStatus = instance.Status.DeepCopy()
+	}
+
+	for ordinal := range instance.Spec.Instances {
+		claimName, ok := claims[ordinal]
+		if !ok && !podExists[ordinal] {
+			continue // no usable volume, reported in StorageReady
 		}
 
-		desiredPod := buildRedisPod(&instance, ordinal, r.OperatorImage)
+		desiredPod := buildRedisPod(&instance, ordinal, r.OperatorImage, claimName)
 
 		if err := ctrl.SetControllerReference(&instance, desiredPod, r.Scheme); err != nil {
 			return ctrl.Result{}, err
@@ -461,6 +463,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}, &existingPod)
 
 		if apierrors.IsNotFound(err) {
+			if !ok {
+				continue // the Pod was deleted meanwhile, and its volume is not usable
+			}
 			logger.Info("Creating pod...", "name", desiredPod.Name)
 			if err := r.Create(ctx, desiredPod); err != nil {
 				return ctrl.Result{}, ignoreAlreadyExists(err)
@@ -553,6 +558,21 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
+// existingPods tells which ordinals have a Pod, including one being deleted.
+func (r *RedisInstanceReconciler) existingPods(ctx context.Context, instance *redisv1.RedisInstance) (map[int32]bool, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(instance.Namespace), client.MatchingLabels(instanceSelector(instance))); err != nil {
+		return nil, err
+	}
+	exists := make(map[int32]bool, len(pods.Items))
+	for _, pod := range pods.Items {
+		if ordinal, err := ordinalFromPodName(pod.Name, instance.Name); err == nil {
+			exists[ordinal] = true
+		}
+	}
+	return exists, nil
+}
+
 func isPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady {
@@ -576,6 +596,9 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		// External PVCs are not owned, but their deletion or replacement
+		// changes the state of the volume of an instance.
+		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.instancesUsingPVC)).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
