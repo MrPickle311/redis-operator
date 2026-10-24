@@ -108,6 +108,10 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		for i := range redisInstances {
 			Eventually(podReady).WithArguments(podName(i)).Should(BeTrue(), "Pod %s is not Ready", podName(i))
 		}
+		Eventually(readyCondition).Should(Equal("True Ready"))
+		// What a user or a CI pipeline runs to wait for the instance.
+		_, err := kubectl("wait", "redisinstance", redisName, "-n", redisNamespace, "--for=condition=Ready", "--timeout=1m")
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("runs the Instance Manager as PID 1 with redis-server as its child", func() {
@@ -381,7 +385,9 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		By("watching that at most one instance is down and the primary is updated last")
 		var order []string
 		mostDown := 0
+		reasons := map[string]bool{}
 		Eventually(func(g Gomega) {
+			reasons[readyCondition()] = true
 			down := 0
 			for i := range redisInstances {
 				name := podName(i)
@@ -397,6 +403,8 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}).WithPolling(time.Second).WithTimeout(6 * time.Minute).Should(Succeed())
 		Expect(mostDown).To(BeNumerically("<=", 1), "more than one instance was down at once")
 		Expect(order[redisInstances-1]).To(Equal(primary), "the primary was not updated last: %v", order)
+		Expect(reasons).To(HaveKey("False RollingUpdate"), "the Ready condition did not show the rolling update")
+		Eventually(readyCondition).Should(Equal("True Ready"))
 
 		By("checking that the primary moved to the lowest replica, and every instance has the data")
 		out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
@@ -440,6 +448,13 @@ func podReady(name string) bool {
 	out, err := kubectl("get", "pod", name, "-n", redisNamespace,
 		"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
 	return err == nil && out == "True"
+}
+
+// readyCondition returns the status and reason of the Ready condition of the RedisInstance.
+func readyCondition() string {
+	out, _ := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
+		`jsonpath={.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].reason}`)
+	return out
 }
 
 func podIP(name string) string {
