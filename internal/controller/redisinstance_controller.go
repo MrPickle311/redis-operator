@@ -85,7 +85,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 	}
 	controllerMount := corev1.VolumeMount{Name: controllerVolume, MountPath: controllerDir}
 
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%d", instance.Name, ordinal),
 			Namespace: instance.Namespace,
@@ -188,6 +188,9 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 			},
 		},
 	}
+
+	pod.Annotations = map[string]string{annotationSpecHash: specHash(&pod.Spec)}
+	return pod
 }
 
 // instanceCommand runs the Instance Manager, which starts redis-server.
@@ -401,6 +404,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var readyCount int32 = 0
 	memoryUnlimited := false
+	var outdated []int32
 
 	// Before the Pods: they cannot start until the Secrets they mount exist.
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
@@ -480,8 +484,12 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 
-		if isPodReady(&existingPod) {
+		// A deleted Pod is going down even while it still reports Ready.
+		if isPodReady(&existingPod) && existingPod.DeletionTimestamp.IsZero() {
 			readyCount++
+		}
+		if isOutdated(&existingPod, desiredPod) {
+			outdated = append(outdated, ordinal)
 		}
 		memoryUnlimited = memoryUnlimited || !hasMemoryLimit(&existingPod)
 	}
@@ -490,6 +498,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// Before the switchover: the update of the primary starts one.
+	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, readyCount == instance.Spec.Instances)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	// Before the primary is read: a completed switchover changes it, and the
 	// replication loop below then demotes the old primary.
 	if result, err := r.reconcileSwitchover(ctx, &instance); err != nil || !result.IsZero() {
@@ -555,7 +568,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: retryRollout}, nil
 }
 
 // existingPods tells which ordinals have a Pod, including one being deleted.
