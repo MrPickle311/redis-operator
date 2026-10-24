@@ -44,6 +44,11 @@ const AnnotationPromote = "redis.operator.com/promote"
 // whose volume is not.
 const ConditionStorageReady = "StorageReady"
 
+// ConditionReady is True when every instance is Ready, up to date and on a
+// Ready volume, and no switchover is running. It sums up the instance for
+// tools that read one condition, like the health check of Argo CD.
+const ConditionReady = "Ready"
+
 // AnnotationRecreate asks to recreate the named replica on a new generated
 // volume, e.g. after its PVC was lost:
 //
@@ -221,6 +226,10 @@ type VolumeStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].reason"
+// +kubebuilder:printcolumn:name="Primary",type=string,JSONPath=".status.currentPrimary"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // RedisInstance is the Schema for the redisinstances API
 type RedisInstance struct {

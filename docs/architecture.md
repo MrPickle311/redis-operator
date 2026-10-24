@@ -328,8 +328,9 @@ Known limits:
 ## Switchover
 
 A switchover moves the primary to a replica while both are healthy, with no
-lost writes. Use it before maintenance of the primary's node; the rolling
-update (step 3) and failover (step 4) build on it.
+lost writes. Use it before maintenance of the primary's node. The
+[rolling update](#rolling-update) uses it to replace the primary, and
+failover (step 4) will build on it.
 
 ```sh
 kubectl annotate redisinstance cache redis.operator.com/promote=cache-1
@@ -412,7 +413,7 @@ gives another hash, the Pod is outdated and the operator replaces it.
 ```mermaid
 flowchart TD
     A{"outdated Pods?"} -->|no| Z["nothing to do"]
-    A -->|yes| B{"every instance Ready,<br/>no switchover running,<br/>no promote annotation?"}
+    A -->|yes| B{"every instance Ready,<br/>every volume Ready,<br/>no switchover running,<br/>no promote annotation?"}
     B -->|no| W["wait for the next reconcile"]
     B -->|yes| C{"an outdated replica?"}
     C -->|yes| D["delete it (Event RollingUpdate);<br/>the Pod loop creates it again<br/>on the same volume"]
@@ -422,9 +423,15 @@ flowchart TD
 ```
 
 - **One Pod at a time.** The operator acts only while every instance is
-  Ready, and a Pod being deleted does not count as Ready. A replica is Ready
-  only after its first sync, so the next Pod goes only when the new one
-  replicates again.
+  Ready, and a Pod being deleted does not count as Ready (nor in
+  `status.readyInstances`). A replica is Ready only after its first sync, so
+  the next Pod goes only when the new one replicates again.
+- **Never on a volume in trouble.** A Pod whose volume is not `Ready` (e.g.
+  its PVC is `Terminating` or `Lost`) is never outdated: without a usable
+  volume there is no desired Pod to compare with, and replacing it would
+  leave the instance without a Pod. While any volume is not `Ready` the
+  whole rolling update waits, so a second instance never goes down next to
+  one that is about to lose its volume.
 - **Why a hash and not a comparison of the Pods.** The API server fills in
   defaults (`dnsPolicy`, `terminationMessagePath`, ...), so the live PodSpec
   never equals the built one. The hash is computed from what the operator
@@ -433,6 +440,9 @@ flowchart TD
 - **The primary goes last,** through a planned switchover with no lost
   writes (see Switchover). With `instances: 1` there is no replica to take
   over, so the operator restarts the primary and clients see an outage.
+- **The switchover is validated like a requested one** (see Switchover); if
+  it would be rejected, e.g. no primary is recorded yet, the rolling update
+  waits.
 - **A failed switchover** does not repeat at once: the rolling update waits
   5 minutes before it fences the primary again.
 - **A switchover the user asked for goes first:** the rolling update waits
@@ -471,14 +481,60 @@ intended way to start a rolling update. Until the steps below are done:
   3.0). With label tracking Argo CD reads `app.kubernetes.io/instance`, which
   the operator also sets on its Pods and Services (moving to an own label is
   step 3.4e).
-- Argo CD shows the `RedisInstance` as healthy during a rolling update until
-  it has a `Ready` condition and a health check (step 3.4c).
+- **Add a health check**, so Argo CD shows a rolling update or a switchover
+  as `Progressing` instead of `Healthy` (see [Ready condition](#ready-condition)).
+
+## Ready condition
+
+The condition `Ready` sums up the instance. When several things are wrong,
+the first in this order is the reason:
+
+| `status` | `reason` | When | Passes on its own |
+|---|---|---|---|
+| `False` | `StorageNotReady` | the condition `StorageReady` is not `True` | no: see [Volumes](#volumes) |
+| `False` | `Switchover` | a switchover runs or the `promote` annotation is set | yes |
+| `False` | `RollingUpdate` | some Pods run an outdated spec | yes |
+| `False` | `InstancesNotReady` | fewer Ready instances than `spec.instances` | usually: Pods start, replicas sync |
+| `True` | `Ready` | none of the above | |
+
+Its `observedGeneration` is the `metadata.generation` it was computed for.
+Right after a change of the spec the condition still holds the old answer,
+so a tool must ignore it until both match.
+
+```sh
+kubectl get redisinstance
+# NAME    READY   REASON          PRIMARY   AGE
+# cache   False   RollingUpdate   cache-0   3d
+kubectl wait redisinstance cache --for=condition=Ready --timeout=10m
+```
+
+Health check for Argo CD, in `argocd-cm` (or `configs.cm` of its Helm chart):
+
+```yaml
+resource.customizations.health.redis.operator.com_RedisInstance: |
+  hs = {status = "Progressing", message = "Waiting for the operator"}
+  if obj.status ~= nil and obj.status.conditions ~= nil then
+    for _, c in ipairs(obj.status.conditions) do
+      if c.type == "Ready" and c.observedGeneration == obj.metadata.generation then
+        hs.message = c.message
+        if c.status == "True" then
+          hs.status = "Healthy"
+        elseif c.reason == "StorageNotReady" then
+          hs.status = "Degraded"
+        end
+      end
+    end
+  end
+  return hs
+```
 
 ## Reconcile loop
 
 One pass of `RedisInstanceReconciler.Reconcile`. The operator re-runs it on
 every change of the `RedisInstance` or an owned object, and requeues after
-5 s while replication is not set up (every second during a switchover).
+5 s while replication is not set up, every second during a switchover, and
+after the remaining delay when a rolling update waits after a failed
+switchover.
 The primary is the Pod in `status.currentPrimary` (`cache-0` for a new
 instance).
 
@@ -507,9 +563,10 @@ sequenceDiagram
         OP->>API: Create Pod (only on a Ready volume), or patch its role label
     end
     OP->>API: Delete Pods and generated PVCs above spec.instances (never the primary)
-    opt outdated Pods and every instance Ready (see Rolling update)
+    opt outdated Pods, every instance and every volume Ready (see Rolling update)
         OP->>API: Delete one outdated replica, or start a switchover away from the primary
     end
+    OP->>API: Update status if the Ready condition changed<br/>(before the switchover, which may return early)
     opt promote annotation or status.targetPrimary set
         OP->>OP: one step of the switchover (see Switchover)
     end
@@ -527,7 +584,7 @@ sequenceDiagram
             IM-->>OP: {changed}
         end
     end
-    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited, StorageReady and Switchover conditions)
+    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited condition)
     opt a Pod has no memory limit (first time)
         OP->>API: Warning Event MemoryLimitMissing
     end

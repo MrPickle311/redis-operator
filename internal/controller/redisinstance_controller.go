@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -501,6 +502,14 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Before the switchover: the update of the primary starts one.
 	healthy := readyCount == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
 	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, healthy)
+	// Written now, as a waiting switchover returns early below.
+	meta.SetStatusCondition(&instance.Status.Conditions, readyCondition(&instance, readyCount, len(outdated)))
+	if !equality.Semantic.DeepEqual(oldStatus, &instance.Status) {
+		if err := r.Status().Update(ctx, &instance); err != nil {
+			return ctrl.Result{}, err
+		}
+		oldStatus = instance.Status.DeepCopy()
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
