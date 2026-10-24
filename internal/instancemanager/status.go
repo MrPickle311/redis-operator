@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -65,6 +67,30 @@ func apiHandler(rdb *redis.Client, epochPath string) http.Handler {
 		if epoch, ok := decodeEpoch(w, r); ok {
 			runCommand(w, guard, epoch, func() (bool, error) { return promote(r.Context(), rdb) })
 		}
+	})
+
+	// No epoch: the configuration does not depend on which Pod is the primary.
+	var configMu sync.Mutex
+	mux.HandleFunc("POST /config", func(w http.ResponseWriter, r *http.Request) {
+		var req ConfigRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.MaxmemoryPolicy == "" || req.MaxmemoryRatio < 1 ||
+			!slices.Contains([]string{PersistenceAOF, PersistenceRDB, PersistenceNone}, req.Persistence) {
+			http.Error(w, "expected a JSON body with persistence, maxmemoryPolicy and maxmemoryRatio", http.StatusBadRequest)
+			return
+		}
+		configMu.Lock()
+		defer configMu.Unlock()
+		limit, err := memoryLimit(cgroupMemoryMax)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		resp, err := applyConfig(r.Context(), rdb, req, limit, aofDir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, resp)
 	})
 	return mux
 }

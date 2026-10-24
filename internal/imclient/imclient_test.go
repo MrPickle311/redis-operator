@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -107,6 +108,36 @@ func TestFenceAndPromoteSendTheEpoch(t *testing.T) {
 	}
 	if !promoted {
 		t.Error("Promote() = false, want the Changed of the response")
+	}
+}
+
+func TestConfigSendsTheConfigurationAndReturnsTheRejectedOptions(t *testing.T) {
+	ca := mustCA(t)
+	var got instancemanager.ConfigRequest
+	client := newTestClient(t, ca, startInstanceManager(t, ca, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/config" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(instancemanager.ConfigResponse{
+			Changed: true, Rejected: map[string]string{"databases": "can't set immutable config"},
+		})
+	}))
+
+	req := instancemanager.ConfigRequest{
+		Persistence: "aof", MaxmemoryPolicy: "noeviction", MaxmemoryRatio: 75,
+		Parameters: map[string]string{"hz": "20"},
+	}
+	resp, err := client.Config(context.Background(), "localhost", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, req) {
+		t.Errorf("Config() sent %+v, want %+v", got, req)
+	}
+	if !resp.Changed || resp.Rejected["databases"] == "" {
+		t.Errorf("Config() = %+v, want Changed and the rejected option", resp)
 	}
 }
 

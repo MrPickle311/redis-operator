@@ -88,6 +88,14 @@ func (c *Client) Promote(ctx context.Context, host string, epoch int64) (bool, e
 	return resp.Changed, err
 }
 
+// Config makes the running Redis at host match req. Options Redis refuses
+// are in the response; the others are applied anyway.
+func (c *Client) Config(ctx context.Context, host string, req instancemanager.ConfigRequest) (instancemanager.ConfigResponse, error) {
+	var resp instancemanager.ConfigResponse
+	err := c.do(ctx, http.MethodPost, host, "/config", req, &resp)
+	return resp, err
+}
+
 // do sends body as JSON, unless it is nil, and decodes the response into out.
 func (c *Client) do(ctx context.Context, method, host, path string, body, out any) error {
 	var reqBody io.Reader

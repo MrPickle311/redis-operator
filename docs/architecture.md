@@ -90,7 +90,7 @@ flowchart TB
             IM["Instance Manager<br/>/controller/manager instance run<br/>PID 1"]:::proc
             RS["redis-server<br/>:6379"]:::proc
             PROBE[":8001 HTTP<br/>/healthz /readyz"]:::proc
-            STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof /fence /promote"]:::proc
+            STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof /fence /promote /config"]:::proc
         end
 
         CTRL[("emptyDir /controller<br/>manager binary<br/>redis.conf 0600")]:::vol
@@ -114,7 +114,8 @@ flowchart TB
     IM --- STATUS
     CERTS -- reloaded on every handshake --> STATUS
     PROBE -- PING as _operator --> RS
-    STATUS -- "INFO, REPLICAOF, CLIENT PAUSE/UNPAUSE<br/>as _operator" --> RS
+    STATUS -- "INFO, REPLICAOF, CLIENT PAUSE/UNPAUSE,<br/>CONFIG GET/SET, SAVE as _operator" --> RS
+    STATUS -- "removes appendonlydir<br/>when the AOF goes off" --> DATA
     STATUS -- highest accepted epoch --> DATA
     RS --- DATA
 ```
@@ -218,13 +219,15 @@ fields), `appendonly` and `save` (`persistence`), `tls-*`, `cluster-*`,
 one line.
 
 Some options cannot change while Redis runs (Redis 7.2 answers
-`can't set immutable config`). The ones worth setting have typed fields in
-`startup`: `databases` and `ioThreads`, with the defaults of Redis. They go
+`can't set immutable config`). **Only two of them are supported today**, as
+typed fields in `startup`: `databases` and `ioThreads`, with the defaults of
+Redis. They go
 into `redis.conf`, so changing one replaces every Pod in a
 [rolling update](#rolling-update); `parameters` rejects them. The other
 immutable options (`tcp-backlog`, `disable-thp`, `set-proc-title`,
-`always-show-logo`, `syslog-*`) have no field and end up in
-`ParametersApplied=False`.
+`always-show-logo`, `syslog-*`) have no field and cannot be set: in
+`parameters` they end up in `ParametersApplied=False`. A field is added when
+someone needs one.
 
 | `persistence` | Redis | Lost on a crash |
 |---|---|---|
