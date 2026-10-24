@@ -488,7 +488,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if isPodReady(&existingPod) && existingPod.DeletionTimestamp.IsZero() {
 			readyCount++
 		}
-		if isOutdated(&existingPod, desiredPod) {
+		if ok && isOutdated(&existingPod, desiredPod) {
 			outdated = append(outdated, ordinal)
 		}
 		memoryUnlimited = memoryUnlimited || !hasMemoryLimit(&existingPod)
@@ -499,7 +499,8 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Before the switchover: the update of the primary starts one.
-	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, readyCount == instance.Spec.Instances)
+	healthy := readyCount == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
+	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, healthy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

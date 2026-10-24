@@ -180,9 +180,10 @@ flowchart LR
 - **No memory limit:** `maxmemory 0` (no limit). The instance still starts,
   for development, but the condition `MemoryLimited` turns `False` and the
   operator emits one `Warning` Event `MemoryLimitMissing`.
-- **Changes** reach only new Pods for now: the Instance Manager writes the
-  settings to `redis.conf` at start. Applying them live with `CONFIG SET`
-  comes with the rolling update (step 3).
+- **Changes** of `resources`, `maxmemoryRatio` or `maxmemoryPolicy` change
+  the Pod, so they go through the rolling update (see Rolling update): the
+  Instance Manager writes the settings to `redis.conf` at start. Applying
+  them live with `CONFIG SET` comes with `spec.redis.parameters` (step 3.5).
 
 ## Runtime cooperation
 
@@ -401,6 +402,77 @@ Known limits:
 - `cache-rw` follows the role label, which the next reconcile moves. Until
   then it points at the old primary, which answers `READONLY`.
 
+## Rolling update
+
+Every Pod carries the annotation `redis.operator.com/spec-hash`: a hash of
+the PodSpec the operator built it from. When a change of the `RedisInstance`
+(`image`, `resources`, `redis.*`, `acl.defaultUser`) or a new operator image
+gives another hash, the Pod is outdated and the operator replaces it.
+
+```mermaid
+flowchart TD
+    A{"outdated Pods?"} -->|no| Z["nothing to do"]
+    A -->|yes| B{"every instance Ready,<br/>no switchover running,<br/>no promote annotation?"}
+    B -->|no| W["wait for the next reconcile"]
+    B -->|yes| C{"an outdated replica?"}
+    C -->|yes| D["delete it (Event RollingUpdate);<br/>the Pod loop creates it again<br/>on the same volume"]
+    C -->|"no, only the primary"| E{"instances: 1?"}
+    E -->|yes| F["delete the primary:<br/>clients wait until it is back"]
+    E -->|no| G["switch over to the lowest replica;<br/>the old primary is now an<br/>outdated replica"]
+```
+
+- **One Pod at a time.** The operator acts only while every instance is
+  Ready, and a Pod being deleted does not count as Ready. A replica is Ready
+  only after its first sync, so the next Pod goes only when the new one
+  replicates again.
+- **Why a hash and not a comparison of the Pods.** The API server fills in
+  defaults (`dnsPolicy`, `terminationMessagePath`, ...), so the live PodSpec
+  never equals the built one. The hash is computed from what the operator
+  built and compared with what it stored. The role label is not part of the
+  PodSpec, so a switchover restarts nothing.
+- **The primary goes last,** through a planned switchover with no lost
+  writes (see Switchover). With `instances: 1` there is no replica to take
+  over, so the operator restarts the primary and clients see an outage.
+- **A failed switchover** does not repeat at once: the rolling update waits
+  5 minutes before it fences the primary again.
+- **A switchover the user asked for goes first:** the rolling update waits
+  while the `promote` annotation is set.
+
+Known limits:
+
+- **An operator upgrade restarts every Redis Pod.** The `bootstrap`
+  initContainer runs the operator image, which copies the Instance Manager
+  into the Pod, so it is part of the hash. A new operator version makes
+  every Pod of every `RedisInstance` in the cluster outdated at once. Each
+  instance still replaces one Pod at a time, but all instances roll in
+  parallel: one switchover per instance (a short write pause and reconnects
+  for its clients) and a burst of resyncs over the whole cluster. There is no
+  way yet to delay it, spread it, or keep the old Instance Manager. Undecided
+  (open decision #5 in the plan).
+- A replacement waits for Ready, which means the first sync is done, not
+  for a zero replication lag. Only the primary waits for zero lag, through
+  the switchover.
+- The rolling update stalls, without an Event, while an instance is not
+  Ready (e.g. its volume is not `Ready`, see Volumes).
+
+### With GitOps (Argo CD, Flux)
+
+Keep the `RedisInstance` in git; the Pods, Services and PVCs are the
+operator's and never belong there. A change of `spec.image` in git is the
+intended way to start a rolling update. Until the steps below are done:
+
+- **Never put `promote` or `recreate` in git.** They are one-off requests:
+  the operator removes them when done, and a tool that heals drift puts them
+  back, so the request runs again. For `recreate` that means a new empty
+  volume and a full resync, over and over. Use `kubectl annotate` (making
+  them safe to keep in git is step 3.4d).
+- **Use annotation-based resource tracking** in Argo CD (the default since
+  3.0). With label tracking Argo CD reads `app.kubernetes.io/instance`, which
+  the operator also sets on its Pods and Services (moving to an own label is
+  step 3.4e).
+- Argo CD shows the `RedisInstance` as healthy during a rolling update until
+  it has a `Ready` condition and a health check (step 3.4c).
+
 ## Reconcile loop
 
 One pass of `RedisInstanceReconciler.Reconcile`. The operator re-runs it on
@@ -434,6 +506,9 @@ sequenceDiagram
         OP->>API: Create Pod (only on a Ready volume), or patch its role label
     end
     OP->>API: Delete Pods and generated PVCs above spec.instances (never the primary)
+    opt outdated Pods and every instance Ready (see Rolling update)
+        OP->>API: Delete one outdated replica, or start a switchover away from the primary
+    end
     opt promote annotation or status.targetPrimary set
         OP->>OP: one step of the switchover (see Switchover)
     end

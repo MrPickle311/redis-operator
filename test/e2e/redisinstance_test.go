@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -365,6 +366,50 @@ var _ = Describe("RedisInstance", Ordered, func() {
 
 		switchOver(1, 0, "2")
 		switchOver(0, 1, "3")
+	})
+
+	It("rolls a new image out one Pod at a time, the primary last, without losing writes", func() {
+		const newImage = "redis:7.4"
+		Expect(loadImageIntoKind(newImage)).To(Succeed())
+		Expect(redisCLI(Default, primary, "-h", redisName+"-rw", "SET", "rollout-key", "before")).To(Equal("OK"))
+
+		By("changing spec.image")
+		_, err := kubectl("patch", "redisinstance", redisName, "-n", redisNamespace, "--type=merge",
+			"-p", fmt.Sprintf(`{"spec":{"image":%q}}`, newImage))
+		Expect(err).NotTo(HaveOccurred())
+
+		By("watching that at most one instance is down and the primary is updated last")
+		var order []string
+		mostDown := 0
+		Eventually(func(g Gomega) {
+			down := 0
+			for i := range redisInstances {
+				name := podName(i)
+				image, _ := kubectl("get", "pod", name, "-n", redisNamespace, "-o", "jsonpath={.spec.containers[0].image}")
+				if !podReady(name) {
+					down++
+				} else if image == newImage && !slices.Contains(order, name) {
+					order = append(order, name)
+				}
+			}
+			mostDown = max(mostDown, down)
+			g.Expect(order).To(HaveLen(redisInstances))
+		}).WithPolling(time.Second).WithTimeout(6 * time.Minute).Should(Succeed())
+		Expect(mostDown).To(BeNumerically("<=", 1), "more than one instance was down at once")
+		Expect(order[redisInstances-1]).To(Equal(primary), "the primary was not updated last: %v", order)
+
+		By("checking that the primary moved to the lowest replica, and every instance has the data")
+		out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
+			"jsonpath={.status.currentPrimary} {.status.primaryEpoch}")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal(podName(1) + " 4"))
+		Eventually(func(g Gomega) {
+			for i := range redisInstances {
+				g.Expect(redisCLI(g, podName(i), "GET", "rollout-key")).To(Equal("before"), "Pod %s lost data", podName(i))
+				g.Expect(redisCLI(g, podName(i), "GET", "e2e-key")).To(Equal("hello"), "Pod %s lost data", podName(i))
+			}
+		}).Should(Succeed())
+		Expect(redisCLI(Default, podName(1), "-h", redisName+"-rw", "SET", "rollout-key", "after")).To(Equal("OK"))
 	})
 })
 
