@@ -132,11 +132,11 @@ var _ = Describe("RedisInstance controller", func() {
 				Expect(svc.Spec.Selector).To(Equal(wantSelector))
 			},
 			Entry("-rw sends reads and writes to the primary", "-rw",
-				map[string]string{labelInstance: name, labelRole: rolePrimary}),
+				map[string]string{"redis.operator.com/instance": name, "redis.operator.com/role": "primary"}),
 			Entry("-ro sends reads to replicas only", "-ro",
-				map[string]string{labelInstance: name, labelRole: roleReplica}),
+				map[string]string{"redis.operator.com/instance": name, "redis.operator.com/role": "replica"}),
 			Entry("-r sends reads to every instance", "-r",
-				map[string]string{labelInstance: name}),
+				map[string]string{"redis.operator.com/instance": name}),
 		)
 	})
 

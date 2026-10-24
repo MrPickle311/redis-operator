@@ -58,6 +58,12 @@ How the objects use each other:
 | Service `cache-r`           | selects every Pod                               | clients that read from any instance                      |
 | PVC `cache-N-data`          | Redis data                                      | Pod `cache-N`, mounted at `/data`                        |
 
+Every Pod carries the labels `app.kubernetes.io/name=redis`,
+`redis.operator.com/instance=cache` and `redis.operator.com/role`
+(`primary`/`replica`); the Services select by the last two. They are stable,
+so NetworkPolicies may use them. The operator does not set
+`app.kubernetes.io/instance`, which Argo CD uses for its own tracking.
+
 A PVC from `spec.storage.existingClaims` takes the place of the generated
 `cache-N-data`; the operator never owns or deletes it (see [Volumes](#volumes)).
 On scale-down the operator deletes the extra Pods and their generated PVCs,
@@ -505,10 +511,9 @@ intended way to start a rolling update. Until the steps below are done:
   value once and never removes the annotation, so self-heal has nothing to
   put back (see [Requests](#requests)). To repeat a request, commit a new
   value, e.g. `cache-2@2`. A restore without the status runs it once more.
-- **Use annotation-based resource tracking** in Argo CD (the default since
-  3.0). With label tracking Argo CD reads `app.kubernetes.io/instance`, which
-  the operator also sets on its Pods and Services (moving to an own label is
-  step 3.4e).
+- **Any resource tracking of Argo CD works.** Label tracking reads
+  `app.kubernetes.io/instance`, which the operator never sets on its objects,
+  so Argo CD does not take them for its own or prune them.
 - **Add a health check**, so Argo CD shows a rolling update or a switchover
   as `Progressing` instead of `Healthy` (see [Ready condition](#ready-condition)).
 

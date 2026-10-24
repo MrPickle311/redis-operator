@@ -12,8 +12,10 @@ const redisPort = 6379
 // Labels set on every Pod. Services select Pods by them, and users can rely on
 // them in their own NetworkPolicies, so they are part of the public contract.
 const (
-	labelName     = "app.kubernetes.io/name"
-	labelInstance = "app.kubernetes.io/instance"
+	labelName = "app.kubernetes.io/name"
+	// labelInstance is the operator's own: Argo CD with label tracking takes
+	// any object with app.kubernetes.io/instance for one of its own.
+	labelInstance = "redis.operator.com/instance"
 	labelRole     = "redis.operator.com/role"
 
 	rolePrimary = "primary"

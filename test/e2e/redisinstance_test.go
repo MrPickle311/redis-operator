@@ -176,6 +176,19 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}
 	})
 
+	It("labels its objects so that Argo CD label tracking does not take them for its own", func() {
+		out, err := kubectl("get", "pods,svc", "-n", redisNamespace, "-l", "app.kubernetes.io/instance", "-o", "name")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(BeEmpty(), "objects with app.kubernetes.io/instance")
+
+		out, err = kubectl("get", "pods", "-n", redisNamespace, "-l", "redis.operator.com/instance="+redisName, "-o", "name")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.Fields(out)).To(HaveLen(redisInstances))
+		out, err = kubectl("get", "svc", redisName+"-rw", "-n", redisNamespace, "-o", `jsonpath={.spec.selector.redis\.operator\.com/instance}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal(redisName))
+	})
+
 	It("creates the headless Service", func() {
 		out, err := kubectl("get", "svc", redisName+"-hl", "-n", redisNamespace,
 			"-o", "jsonpath={.spec.clusterIP} {.spec.publishNotReadyAddresses}")
