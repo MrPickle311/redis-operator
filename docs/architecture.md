@@ -447,8 +447,9 @@ Known limits:
   instance still replaces one Pod at a time, but all instances roll in
   parallel: one switchover per instance (a short write pause and reconnects
   for its clients) and a burst of resyncs over the whole cluster. There is no
-  way yet to delay it, spread it, or keep the old Instance Manager. Undecided
-  (open decision #5 in the plan).
+  way yet to delay or spread it (planned: a cluster-wide limit and a
+  maintenance window, step 3.4f), nor to keep `redis-server` running while
+  the Instance Manager is replaced (planned: in-place upgrade, step 11).
 - A replacement waits for Ready, which means the first sync is done, not
   for a zero replication lag. Only the primary waits for zero lag, through
   the switchover.

@@ -308,7 +308,8 @@ Zmiana `spec.image` lub konfiguracji, która wymaga restartu, uruchamia rolling 
 - **3.4d — idempotentne `promote` i `recreate`.** Dziś operator zdejmuje adnotację po obsłużeniu; narzędzie, które naprawia dryf (`selfHeal`), dodaje ją z powrotem i żądanie wykonuje się znowu (dla `recreate`: nowy pusty wolumin i pełny resync w pętli). Kierunek: operator nie zdejmuje adnotacji, zapisuje obsłużoną wartość w statusie i reaguje tylko na nową wartość; powtórzenie tego samego żądania przez dopisany token (`recreate=cache-2@2026-10-24`), jak `kubectl rollout restart`. Rolling update czeka wtedy tylko na nieobsłużone `promote`.
 - **3.4e — własna etykieta instancji.** Pody i Services mają `app.kubernetes.io/instance=<nazwa RedisInstance>`, a Argo CD w trybie label tracking (domyślnym przed 3.0) uznaje po niej zasoby za swoje (OutOfSync, ryzyko prune). Zmiana na `redis.operator.com/instance`; selektory Services zmieniają się na istniejących instancjach (Service aktualizowany na miejscu, Pody dostają nową etykietę przed zmianą selektora, żeby nie było chwili bez endpointów).
 
-**Upgrade operatora (otwarta decyzja #5, sekcja 13).** Hash obejmuje initContainer `bootstrap` z obrazem operatora, więc nowa wersja operatora czyni nieaktualnymi wszystkie Pody wszystkich instancji w klastrze naraz.
+**Upgrade operatora (decyzja #5, sekcja 13).** Hash obejmuje initContainer `bootstrap` z obrazem operatora, więc nowa wersja operatora czyni nieaktualnymi wszystkie Pody wszystkich instancji w klastrze naraz. Decyzja: na razie restart przez rolling update, z kontrolą tempa (krok 3.4f); docelowo upgrade IM bez restartu Redisa (sekcja 3.10, krok 11).
+- **3.4f — tempo rolling update.** Limit równolegle aktualizowanych `RedisInstance` w klastrze (flaga operatora, np. `--max-concurrent-rollouts`, domyślnie 1; instancja „w trakcie” = ma nieaktualne Pody, licznik w pamięci lidera odbudowywany z listy instancji) i okno serwisowe w `spec` (np. `spec.updatePolicy.maintenanceWindow`), poza którym rolling wywołany **wyłącznie** zmianą operatora czeka; zmiana `spec` użytkownika idzie od razu. Condition `Ready=False` z powodem `RolloutPending` pokazuje, że Pody czekają.
 
 **`/replicaof` także do replik, które nie są Ready.** Replika jest Ready dopiero po pierwszym syncu (sekcja 3.1), więc replika z nieaktualnym celem replikacji (np. wystartowała ze starym `replicaof` w `redis.conf` tuż przed switchoverem) nigdy nie zrobi syncu i nigdy nie będzie Ready. Dlatego operator wysyła `/replicaof` do każdej repliki w fazie Running, nie tylko Ready (krok 3.1); błąd IM w trakcie startu Poda oznacza tylko ponowienie reconcile.
 
@@ -375,6 +376,33 @@ Redis trzyma cały dataset w RAM, więc limit kontenera i `maxmemory` muszą do 
 - **`maxmemoryPolicy`** domyślnie `noeviction`, bo operator traktuje Redisa jako magazyn danych i nie kasuje kluczy po cichu. Dla cache'a użytkownik wybiera `allkeys-lru`/`allkeys-lfu`. CEL: enum polityk Redisa.
 - **Zmiany:** w kroku 1.5 IM zapisuje `maxmemory` i `maxmemory-policy` do `redis.conf` przy starcie Poda. Stosowanie `maxmemoryPolicy` i `maxmemoryRatio` w locie przez `CONFIG SET` dochodzi w kroku 3, razem z `spec.redis.parameters`. Zmiana `resources` wymaga nowego Poda, więc idzie przez rolling update (sekcja 3.6). In-place resize Podów (K8s ≥ 1.33) to możliwe rozszerzenie później.
 - **Później (krok 3):** ogólne `spec.redis.parameters` (mapa opcji `redis.conf`, jak `postgresql.parameters` w CNPG) z czarną listą opcji zarządzanych przez operator (`dir`, `port`, `replicaof`, `user`, `maxmemory`…) i podziałem na „CONFIG SET” / „wymaga restartu”.
+
+### 3.10 Upgrade Instance Managera w miejscu (krok 11)
+
+Nowa wersja operatora podmienia binarkę IM w działającym Podzie bez restartu `redis-server` (wzorzec CNPG, `ENABLE_INSTANCE_MANAGER_INPLACE_UPDATES`).
+
+**Dlaczego to robimy:**
+- **Upgrade operatora nie powinien dotykać danych.** To zmiana warstwy sterującej (control plane), a dziś restartuje płaszczyznę danych każdej bazy w klastrze. Użytkownik bazy nie zmienił nic, a jego klienci tracą połączenia.
+- **Koszt restartu Redisa rośnie z danymi.** Restart repliki to ładowanie RDB/AOF z dysku (przy dziesiątkach GB minuty) i resync; restart primary to switchover: pauza zapisów, reconnect, zerwane połączenia blokujące (`BLPOP`, `XREAD BLOCK`), subskrypcje pub/sub, client-side caching (tracking). W RedisCluster (krok 10) każda wymiana primary shardu to failover slotów i fala `MOVED` u klientów.
+- **Restarty zniechęcają do aktualizacji operatora.** Przy N instancjach każdy release, także łatka bezpieczeństwa (CVE w Go lub zależnościach), to N switchoverów. Zespoły odkładają wtedy upgrade, a stary operator to ryzyko. Upgrade bez wpływu na bazy usuwa ten hamulec.
+- **Skala.** Kontrola tempa (3.4f) rozkłada restarty w czasie, ale ich nie usuwa: przy setkach instancji rollout całego klastra trwa godziny po każdym releasie.
+
+**Dlaczego dopiero na końcu:**
+- Nowy IM musi przejąć cały stan starego. Każdy krok wcześniej dokłada stan do przejęcia (TLS i reload certów — 5, ACL — 6, backup w toku — 7, moduły). Zrobione wcześniej, przejęcie trzeba by poprawiać przy każdym kroku; na końcu robimy je raz, na kompletnym IM.
+- Wymaga stabilnego kontraktu API IM (`/update`, `/status` niezmienne między wersjami), który ustala się dopiero, gdy API przestaje rosnąć.
+- Do tego czasu restart z kontrolą tempa (3.4f) jest bezpieczny: switchover nie gubi zapisów. Krok 11 to optymalizacja dostępności, nie poprawność.
+
+**Jak:**
+1. `spec-hash` bez initContainera `bootstrap`; wersja IM w `/status` i w `status` instancji (spec Poda pokazuje wtedy stary obraz initContainera).
+2. `PUT /update` (mTLS, tylko certyfikat operatora): binarka + sha256 zgodny z binarką operatora; zapis `/controller/manager.new`, fsync, stara jako `manager.prev`, atomowy `rename`.
+3. `syscall.Exec` nowej binarki z flagą `--adopt=<pid redis-server>`: ten sam PID 1, `redis-server` zostaje dzieckiem. Nowy IM nie startuje Redisa, czeka na niego przez `Wait4`, przejmuje SIGTERM i sprzątanie zombie, podnosi od nowa :8000/:8001.
+4. Stan w pamięci na dysk przed krokiem 11: latch readiness (`/data/.operator/synced`), żeby replika nie wypadła z Services po `exec`. Epoch jest już na dysku, fence żyje w Redisie.
+5. Rollback: nowy IM, który nie zgłosi się zdrowo w N sekund, wraca do `manager.prev` (`exec`); restart kontenera po crashu uruchamia `manager.prev`, jeśli `manager` nie przeszedł startu. Operator aktualizuje po jednym Podzie i zatrzymuje się po pierwszej porażce (Event, condition).
+6. Flaga operatora, na start domyślnie wyłączona (jak w CNPG); domyślnie włączona po ustabilizowaniu.
+
+**Ryzyka:** `/update` z definicji uruchamia przysłany kod, więc wyciek CA operatora (`redis-operator-ca`) oznacza wykonanie kodu w każdym Podzie Redisa (dziś „tylko” fence/promote/replicaof) — opisać w docs, sprawdzać sha256. Version skew: nowy operator musi umieć wysłać `/update` do starego IM. Krótka dziura w probach między `exec` a `listen`. Pomaga tylko przy upgradzie operatora: zmiana `spec.image`, `resources` czy modułów dalej idzie przez rolling update.
+
+Test e2e: dwa obrazy operatora (v1 → v2); `redis-server` ma ten sam PID i `uptime_in_seconds` przed i po, brak switchovera, epoch bez zmian, wersja IM w statusie = v2; zepsuta binarka v2 → rollback do v1 bez restartu Redisa.
 
 ---
 
@@ -791,13 +819,13 @@ Webhook jest **wyłącznie warstwą UX** (szybki, czytelny błąd przy `kubectl 
 2. **Samo-fencing przy utracie API servera** — czy domyślnie włączone. Chroni przed split-brain, ale awaria control plane zatrzymuje zapisy we wszystkich bazach. CNPG ma to jako opcję.
 3. **Zakres wsparcia Redis ≥ 7.4 / 8.x** — technicznie działa, ale licencja RSAL/SSPL/AGPL może blokować część użytkowników. Czy testujemy w CI tylko Valkey + Redis 7.2?
 4. **Dostęp do RedisCluster spoza K8s przez jeden adres** *(do uzupełnienia na koniec, przy kroku 10)*. Wewnątrz klastra wystarcza Service `<name>` jako seed. Z zewnątrz zwykły LB (L4) nie działa: klient dostaje w `MOVED`/`ASK` adresy node'ów i musi łączyć się z nimi bezpośrednio. Kierunek: opcjonalne `spec.proxy` (Deployment Envoy `redis_proxy` + Service `<name>-proxy` typu LoadBalancer). Klient widzi pojedynczego Redisa, a proxy routuje po slocie. Ograniczenia do opisania w dokumentacji: komendy wieloklawiszowe tylko w obrębie slotu (`{hashtag}`), pub/sub, `MULTI`, `SCAN` po całym klastrze, komendy blokujące. Alternatywy odrzucone: LB per node (N adresów), jeden LB z routingiem SNI (reguła per node, wymaga TLS).
-5. **Upgrade operatora a restart Podów Redisa.** Obraz operatora jest w initContainer `bootstrap` (kopiuje binarkę IM), więc wchodzi do `spec-hash`. Każdy upgrade operatora (np. sync w Argo CD) uruchamia rolling update wszystkich `RedisInstance` w klastrze jednocześnie: w każdej po jednym Podzie naraz, ale wszystkie instancje równolegle. Skutki: switchover w każdej instancji (krótka pauza zapisów, reconnect klientów), fala resynców (sieć, dysk) w całym klastrze, brak wpływu na moment (okno serwisowe). Dziś bez możliwości opóźnienia czy rozłożenia. Opcje:
+5. ~~**Upgrade operatora a restart Podów Redisa.**~~ Obraz operatora jest w initContainer `bootstrap` (kopiuje binarkę IM), więc wchodzi do `spec-hash`. Każdy upgrade operatora (np. sync w Argo CD) uruchamia rolling update wszystkich `RedisInstance` w klastrze jednocześnie: w każdej po jednym Podzie naraz, ale wszystkie instancje równolegle. Skutki: switchover w każdej instancji (krótka pauza zapisów, reconnect klientów), fala resynców (sieć, dysk) w całym klastrze, brak wpływu na moment (okno serwisowe). Dziś bez możliwości opóźnienia czy rozłożenia. Opcje:
    - (a) **Zostawić** — najprościej, IM zawsze w wersji operatora; skutki opisane w docs (stan obecny).
    - (b) **Obraz operatora poza hashem, stary IM zostaje** do następnego restartu Poda — operator musi wtedy rozmawiać z kilkoma wersjami API IM (version skew, wersjonowanie API IM, testy zgodności).
    - (c) **Upgrade IM w miejscu** (wzorzec CNPG): operator wysyła nową binarkę do IM, IM robi `exec` sam siebie, `redis-server` (dziecko) działa dalej — bez restartu Redisa; najwięcej pracy (PID 1, przekazanie procesu dziecka, rollback).
    - (d) **Sterowanie tempem** jako dodatek do (a): limit równoległych rollingów w klastrze i/lub adnotacja/`spec` okna serwisowego, które odkłada rolling wywołany samą zmianą operatora.
 
-   Decyzja użytkownika — później.
+   **Rozstrzygnięte (2026-10-24):** teraz (a) + (d) (krok 3.4f), docelowo (c) jako krok 11 (sekcja 3.10, z uzasadnieniem). (b) odrzucone: version skew bez końca, bo stary IM mógłby zostać w Podzie na zawsze.
 
 ---
 
@@ -891,7 +919,7 @@ redis-operator/
 - Po switchoverze etykiety `role` przestawia pętla Podów w następnym reconcile: `-rw` przez chwilę wskazuje stary primary, który odpowiada wtedy `READONLY` (jest już fenced albo repliką), więc zapisy nigdy nie trafiają do dwóch primary.
 - Fence trwa najwyżej godzinę (`fenceTimeout`), switchover czeka na kandydata minutę (`switchoverTimeout`); oba na stałe w kodzie.
 - Fence nie rozłącza klientów: zapisy czekają, a po demote dostają `READONLY`.
-- Upgrade operatora restartuje wszystkie Pody Redisa w klastrze (otwarta decyzja #5). Rolling update bez condition `Ready`, adnotacje `promote`/`recreate` nieodporne na GitOps, etykieta `app.kubernetes.io/instance` koliduje z label tracking Argo CD (kroki 3.4c–e). Rolling update stoi bez Eventu, gdy któraś instancja nie jest Ready.
+- Upgrade operatora restartuje wszystkie Pody Redisa w klastrze, bez kontroli tempa (3.4f) i bez upgrade IM w miejscu (krok 11). Rolling update bez condition `Ready`, adnotacje `promote`/`recreate` nieodporne na GitOps, etykieta `app.kubernetes.io/instance` koliduje z label tracking Argo CD (kroki 3.4c–e). Rolling update stoi bez Eventu, gdy któraś instancja nie jest Ready.
 - Ograniczenia woluminów z sekcji 6 („Ograniczenia”): status nie przeżywa restore z gita/Velero, obce dane przy tworzeniu przechodzą, brak `attached-to`, środkowy zewnętrzny ordinal bez template nie do odtworzenia.
 - Primary bez woluminu i bez Poda (PVC usunięty, Pod usunięty przed switchoverem) zostaje bez Poda: switchover wymaga działającego primary, więc wyjściem jest dopiero failover (krok 4, „Awarie woluminów” w sekcji 3.5). Do tego czasu brak też automatycznej reakcji na `Terminating`/`Lost` (operator tylko raportuje).
 - Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
@@ -906,7 +934,7 @@ graph TD
     S0["0. Porządki<br/>API group, spec.storage, headless + DNS,<br/>-rw/-ro/-r, etykiety role, PVC managed/external,<br/>CEL, idempotentny REPLICAOF"]
     S1["1. IM v1<br/>initContainer copy, PID 1, GET /status,<br/>automountServiceAccountToken: false, role aggregate-to-*,<br/>wewnętrzna PKI + mTLS, użytkownicy wewnętrzni,<br/>spec.resources + maxmemory z limitu"]
     S2["2. IM v2<br/>/replicaof, epoch, bezpieczny start repliki,<br/>readiness po pierwszym syncu,<br/>SA + Role + RoleBinding per instancja"]
-    S3["3. Reconciler → imclient<br/>3.1 primary ze statusu, /replicaof do nie-Ready replik<br/>3.2 /fence, /promote, switchover<br/>3.3 wolumeny: niezmienne existingClaims,<br/>status.volumes + UID, recreate<br/>3.4 rolling update (spec-hash)<br/>3.4c condition Ready + health Argo<br/>3.4d idempotentne promote/recreate<br/>3.4e etykieta redis.operator.com/instance<br/>3.5 spec.redis.parameters"]
+    S3["3. Reconciler → imclient<br/>3.1 primary ze statusu, /replicaof do nie-Ready replik<br/>3.2 /fence, /promote, switchover<br/>3.3 wolumeny: niezmienne existingClaims,<br/>status.volumes + UID, recreate<br/>3.4 rolling update (spec-hash)<br/>3.4c condition Ready + health Argo<br/>3.4d idempotentne promote/recreate<br/>3.4e etykieta redis.operator.com/instance<br/>3.4f tempo rolling update, okno serwisowe<br/>3.5 spec.redis.parameters"]
     S4["4. Failover<br/>samo-fencing, bezpieczny start primary,<br/>failover.delay, wybór kandydata,<br/>awarie woluminów, PDB, anti-affinity,<br/>węzeł NotReady, drain (zakres niżej)"]
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]
@@ -914,7 +942,8 @@ graph TD
     S8["8. NetworkPolicy: managed/reference"]
     S9["9. Webhook: TargetRef (opcjonalny)"]
     S10["10. RedisCluster + serwisy klastra"]
-    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10
+    S11["11. Upgrade IM w miejscu<br/>(exec bez restartu redis-server, sekcja 3.10)"]
+    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> S11
 ```
 
 ### Zakres kroku 4 (failover) — lista kontrolna
