@@ -191,6 +191,61 @@ flowchart LR
   Instance Manager writes the settings to `redis.conf` at start. Applying
   them live with `CONFIG SET` comes with `spec.redis.parameters` (step 3.5).
 
+### Configuration and persistence (step 3.5, being built)
+
+```yaml
+spec:
+  redis:
+    persistence: aof            # aof (default) | rdb | none
+    startup:                    # read only at start: a change replaces the Pods
+      databases: 16
+      ioThreads: 1
+    parameters:                 # further options of redis.conf
+      hz: "20"
+      notify-keyspace-events: Ex
+```
+
+The Instance Manager sets these with `CONFIG SET` after `redis-server`
+starts and before the Pod reports Ready, and the operator sends every change
+to the running Pods, so no change restarts Redis. A wrong value is reported
+in the condition `ParametersApplied`; it never stops `redis-server`, as a bad
+line in `redis.conf` would.
+
+`parameters` rejects the options the operator manages: ports and sockets,
+`dir` and data files, replication, users and passwords, `maxmemory*` (own
+fields), `appendonly` and `save` (`persistence`), `tls-*`, `cluster-*`,
+`include`, `rename-command`, `loadmodule` and `enable-*-command`. Values are
+one line.
+
+Some options cannot change while Redis runs (Redis 7.2 answers
+`can't set immutable config`). The ones worth setting have typed fields in
+`startup`: `databases` and `ioThreads`, with the defaults of Redis. They go
+into `redis.conf`, so changing one replaces every Pod in a
+[rolling update](#rolling-update); `parameters` rejects them. The other
+immutable options (`tcp-backlog`, `disable-thp`, `set-proc-title`,
+`always-show-logo`, `syslog-*`) have no field and end up in
+`ParametersApplied=False`.
+
+| `persistence` | Redis | Lost on a crash |
+|---|---|---|
+| `aof` | `appendonly yes`, `appendfsync everysec`, plus RDB snapshots | up to ~1 s of writes |
+| `rdb` | RDB snapshots only | the writes since the last snapshot |
+| `none` | `appendonly no`, `save ""` | everything (a cache) |
+
+Switching modes is where Redis loses data, so the Instance Manager never
+lets `redis.conf` decide:
+
+- **Redis started with `appendonly yes` on a dataset kept only in RDB starts
+  empty**: it reads only the AOF. So `redis.conf` turns AOF on only when an
+  AOF exists on the volume; to enable it, the Instance Manager runs
+  `CONFIG SET appendonly yes` after the start, and Redis writes the AOF from
+  memory.
+- **An AOF left on the volume after it was turned off** would be loaded on
+  the next start and lose every write made since. So turning AOF off is
+  `CONFIG SET appendonly no`, then `SAVE`, then removing `appendonlydir`.
+
+With `none`, a `dump.rdb` already on the volume stays and a restart loads it.
+
 ## Runtime cooperation
 
 ```mermaid
@@ -493,7 +548,7 @@ Known limits:
   parallel: one switchover per instance (a short write pause and reconnects
   for its clients) and a burst of resyncs over the whole cluster. There is no
   way yet to delay or spread it (planned: a cluster-wide limit and a
-  maintenance window, step 3.4f), nor to keep `redis-server` running while
+  maintenance window, step 11), nor to keep `redis-server` running while
   the Instance Manager is replaced (planned: in-place upgrade, step 11).
 - A replacement waits for Ready, which means the first sync is done, not
   for a zero replication lag. Only the primary waits for zero lag, through

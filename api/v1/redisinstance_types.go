@@ -86,6 +86,18 @@ type RedisInstanceSpec struct {
 }
 
 type RedisSpec struct {
+	// Persistence is how the dataset survives a restart of Redis.
+	// +kubebuilder:default=aof
+	// +optional
+	Persistence Persistence `json:"persistence,omitempty"`
+
+	// Startup holds the options redis-server reads only when it starts.
+	// Changing any of them replaces every Pod, one at a time: a rolling
+	// update, with a switchover for the primary.
+	// +kubebuilder:default={}
+	// +optional
+	Startup RedisStartupSpec `json:"startup,omitzero"`
+
 	// MaxmemoryPolicy is what Redis does when it reaches maxmemory. The
 	// default noeviction rejects writes instead of silently deleting keys.
 	// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;volatile-random;volatile-ttl
@@ -101,7 +113,54 @@ type RedisSpec struct {
 	// +kubebuilder:default=75
 	// +optional
 	MaxmemoryRatio int32 `json:"maxmemoryRatio,omitempty"`
+
+	// Parameters are further options of redis.conf, set on every instance
+	// with CONFIG SET, without a restart, e.g. {"hz": "20"}.
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z][a-z0-9-]{0,63}$'))",message="parameter names are lowercase options of redis.conf"
+	// +kubebuilder:validation:XValidation:rule="!self.exists(k, k.matches('^(bind|port|unixsocket.*|protected-mode|dir|dbfilename|append(only|dirname|filename)|save|(replica|slave)of|master(user|auth)|replica-(announce-.*|read-only)|slave-read-only|user|aclfile|requirepass|maxmemory|maxmemory-policy|databases|io-threads.*|include|rename-command|loadmodule|daemonize|supervised|pidfile|logfile|enable-.*-(command|configs)|tls-.*|cluster-.*)$'))",message="parameters must not set options the operator manages: ports, files, replication, users, memory, persistence, TLS, cluster and commands that run code; databases and io-threads go to spec.redis.startup"
+	// +optional
+	Parameters map[string]ParameterValue `json:"parameters,omitempty"`
 }
+
+// RedisStartupSpec holds the options of redis.conf that Redis cannot change
+// while it runs: CONFIG SET answers "can't set immutable config".
+type RedisStartupSpec struct {
+	// Databases is the number of logical databases, selected with SELECT.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=16
+	// +optional
+	Databases int32 `json:"databases,omitempty"`
+
+	// IOThreads is the number of threads that serve clients; 1 is the main
+	// thread alone.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=128
+	// +kubebuilder:default=1
+	// +optional
+	IOThreads int32 `json:"ioThreads,omitempty"`
+}
+
+// Persistence is how Redis keeps its dataset on the volume.
+// +kubebuilder:validation:Enum=aof;rdb;none
+type Persistence string
+
+const (
+	// PersistenceAOF logs every write and fsyncs it every second, plus RDB
+	// snapshots: a crash loses at most about a second of writes.
+	PersistenceAOF Persistence = "aof"
+	// PersistenceRDB takes only RDB snapshots: a crash loses the writes since
+	// the last one, which can be minutes.
+	PersistenceRDB Persistence = "rdb"
+	// PersistenceNone keeps nothing, for a cache.
+	PersistenceNone Persistence = "none"
+)
+
+// ParameterValue is the value of an option of redis.conf. It is one line, so
+// it can never add another option.
+// +kubebuilder:validation:MaxLength=1024
+// +kubebuilder:validation:Pattern=`^[^\r\n]*$`
+type ParameterValue string
 
 // DefaultUserMode tells whether the default user of Redis is enabled.
 // +kubebuilder:validation:Enum=disabled;enabled

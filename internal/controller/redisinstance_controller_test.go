@@ -296,6 +296,56 @@ var _ = Describe("RedisInstance controller", func() {
 		)
 	})
 
+	It("defaults spec.redis.persistence to aof", func() {
+		instance := newRedisInstance("persistence-default", 1, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		Expect(instance.Spec.Redis.Persistence).To(Equal(redisv1.PersistenceAOF))
+		Expect(instance.Spec.Redis.Startup).To(Equal(redisv1.RedisStartupSpec{Databases: 16, IOThreads: 1}),
+			"the startup options must default to those of Redis")
+
+		instance.Spec.Redis.Startup.IOThreads = 200
+		Expect(errors.IsInvalid(k8sClient.Update(ctx, instance))).To(BeTrue(), "more I/O threads than Redis allows were accepted")
+		instance.Spec.Redis.Startup.IOThreads = 1
+
+		instance.Spec.Redis.Persistence = "disk"
+		Expect(errors.IsInvalid(k8sClient.Update(ctx, instance))).To(BeTrue(), "an unknown persistence mode was accepted")
+	})
+
+	DescribeTable("validating spec.redis.parameters with CEL rules",
+		func(parameters map[string]redisv1.ParameterValue, wantError string) {
+			instance := newRedisInstance("cel-parameters", 1, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+			instance.Spec.Redis.Parameters = parameters
+			err := k8sClient.Create(ctx, instance)
+
+			if wantError == "" {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+				return
+			}
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring(wantError))
+		},
+		Entry("accepts options the operator leaves to the user",
+			map[string]redisv1.ParameterValue{"hz": "20", "notify-keyspace-events": "Ex", "appendfsync": "always", "maxmemory-samples": "10"}, ""),
+		Entry("names every option the operator manages",
+			map[string]redisv1.ParameterValue{"hz": "20", "port": "7000"}, "options the operator manages"),
+		Entry("rejects the memory options, which have their own fields",
+			map[string]redisv1.ParameterValue{"maxmemory": "1gb", "maxmemory-policy": "allkeys-lru"}, "options the operator manages"),
+		Entry("rejects replication, users and files",
+			map[string]redisv1.ParameterValue{"replicaof": "evil 6379", "requirepass": "x", "dir": "/tmp"}, "options the operator manages"),
+		Entry("rejects persistence, TLS and cluster options",
+			map[string]redisv1.ParameterValue{"appendonly": "no", "tls-port": "6380", "cluster-enabled": "yes"}, "options the operator manages"),
+		Entry("rejects the commands that run code or reconfigure Redis",
+			map[string]redisv1.ParameterValue{"enable-debug-command": "yes", "enable-module-command": "yes", "enable-protected-configs": "yes"}, "options the operator manages"),
+		Entry("rejects a value spanning two lines",
+			map[string]redisv1.ParameterValue{"hz": "20\nuser default on nopass"}, "should match"),
+		Entry("sends the options that need a restart to spec.redis.startup",
+			map[string]redisv1.ParameterValue{"databases": "32", "io-threads": "4"}, "spec.redis.startup"),
+		Entry("rejects names that are not options",
+			map[string]redisv1.ParameterValue{"Hz": "20"}, "lowercase"),
+	)
+
 	DescribeTable("validating spec.storage with CEL rules",
 		func(storage redisv1.StorageSpec, accepted bool) {
 			instance := newRedisInstance("cel-test", 2, storage)
