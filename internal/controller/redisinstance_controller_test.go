@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -294,6 +295,18 @@ var _ = Describe("RedisInstance controller", func() {
 			Entry("a Pod of no instance", name+"-5", "not an instance"),
 			Entry("the current primary", name+"-0", "already the primary"),
 		)
+	})
+
+	It("defaults spec.failover to a 30s delay with fencing on API loss", func() {
+		instance := newRedisInstance("failover-default", 1, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		Expect(instance.Spec.Failover.Delay.Duration).To(Equal(30 * time.Second))
+		Expect(instance.Spec.Failover.FenceOnAPILoss).To(HaveValue(BeTrue()))
+
+		instance.Spec.Failover.Delay.Duration = time.Second
+		err := k8sClient.Update(ctx, instance)
+		Expect(errors.IsInvalid(err)).To(BeTrue(), "a delay shorter than the poll of the Instance Manager was accepted: %v", err)
 	})
 
 	It("defaults spec.redis.persistence to aof", func() {

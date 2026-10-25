@@ -36,9 +36,9 @@ type InstanceStatus struct {
 	Offset int64  `json:"offset"`
 }
 
-// apiHandler serves the API of the Instance Manager. epochPath is where it
-// keeps the highest epoch it has accepted.
-func apiHandler(rdb *redis.Client, epochPath string) http.Handler {
+// apiHandler serves the API of the Instance Manager. guard runs its commands
+// and keeps the highest epoch it has accepted.
+func apiHandler(rdb *redis.Client, guard *epochGuard) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		status, err := readStatus(r.Context(), rdb)
@@ -49,7 +49,6 @@ func apiHandler(rdb *redis.Client, epochPath string) http.Handler {
 		writeJSON(w, status)
 	})
 
-	guard := &epochGuard{path: epochPath}
 	mux.HandleFunc("POST /replicaof", func(w http.ResponseWriter, r *http.Request) {
 		var req ReplicaOfRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Epoch < 1 || req.PrimaryHost == "" {

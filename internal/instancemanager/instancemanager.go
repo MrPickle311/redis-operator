@@ -58,6 +58,9 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	defer func() { _ = rdb.Close() }()
 
 	ready := &readiness{rdb: rdb}
+	// One guard for the commands of the operator and the ones the Instance
+	// Manager takes on its own, so they run one at a time.
+	guard := &epochGuard{path: epochPath}
 	// Before waiting for the primary: the liveness probe must answer meanwhile.
 	probes := &http.Server{
 		Addr:              ":" + strconv.Itoa(ProbePort),
@@ -66,7 +69,7 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	}
 	status := &http.Server{
 		Addr:              ":" + strconv.Itoa(StatusPort),
-		Handler:           apiHandler(rdb, epochPath),
+		Handler:           apiHandler(rdb, guard),
 		TLSConfig:         serverTLSConfig(CertificatesDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -98,6 +101,15 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 		return err
 	}
 	go configureOnStart(ctx, rdb, config, limit, ready)
+	self := &selfFencing{
+		client: c,
+		key:    client.ObjectKeyFromObject(instance),
+		pod:    opts.PodName,
+		rdb:    rdb,
+		guard:  guard,
+		last:   instance, lastRead: time.Now(),
+	}
+	go self.run(ctx)
 	return Run(ctx, "redis-server", redisConfPath)
 }
 

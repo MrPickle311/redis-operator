@@ -107,7 +107,7 @@ flowchart TB
     IAUTH -- passwords --> IM
     CG -- memory limit --> IM
     TOKEN -- token --> IM
-    IM -- "get the RedisInstance<br/>before redis-server starts" --> API
+    IM -- "get the RedisInstance<br/>before redis-server starts,<br/>then every 2 s" --> API
     IM -- writes redis.conf --> CTRL
     IM -- starts, SIGTERM on shutdown --> RS
     IM --- PROBE
@@ -309,6 +309,42 @@ carries it:
 The operator no longer connects to Redis itself: `REPLICAOF` goes through
 `POST /replicaof`, which is idempotent and does nothing when the replica
 already follows the requested primary.
+
+## Self-fencing
+
+The operator may not reach a primary, e.g. during a network partition, so
+every Instance Manager also watches its own role: it reads its
+`RedisInstance` every 2 seconds, which also tells it whether the API server
+is reachable.
+
+```yaml
+spec:
+  failover:
+    delay: 30s            # default; at least 4s
+    fenceOnAPILoss: true  # default
+```
+
+| Redis | The read of the `RedisInstance` | The Instance Manager |
+|---|---|---|
+| replica | any | does nothing: the operator manages replicas |
+| primary | `status.currentPrimary` names another Pod | **demotes itself**: `REPLICAOF` the new primary, under the epoch guard of the API |
+| primary | failing for more than `delay/2` | **fences itself** (`CLIENT PAUSE WRITE`, renewed while it lasts) |
+| primary | works again, after it fenced itself | lifts its own fence, unless a switchover runs (that fence is the operator's) |
+
+- **Half the delay.** The operator promotes a replica only after `delay`
+  (failover, step 4.2), so a primary cut off from the API server has stopped
+  taking writes by then: no two primaries take writes at once.
+- **`fenceOnAPILoss: false`** keeps writes going while the API server is
+  down, at the risk of two primaries taking writes during a partition. It is
+  a choice per instance; the default favours the data.
+- **Any failed read counts,** a timeout as well as a `403`: the Instance
+  Manager cannot tell an API server that is down from one it cannot reach.
+- **A restart of the operator, or of the API server for less than
+  `delay/2`, changes nothing.**
+
+Known limit: a failure of the control plane longer than `delay/2` stops the
+writes of every primary in the cluster (reads go on). Turn `fenceOnAPILoss`
+off where that matters more than a split brain.
 
 ## Requests
 

@@ -66,6 +66,30 @@ spec:
                     - enabled
                     type: string
                 type: object
+              failover:
+                default: {}
+                description: Failover configures what happens when the primary is
+                  not available.
+                properties:
+                  delay:
+                    default: 30s
+                    description: |-
+                      Delay is how long the primary may be unavailable before a replica
+                      takes over. A primary that cannot read its RedisInstance fences itself
+                      after half of it, so it takes no more writes by then.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: delay must be at least 4s
+                      rule: duration(self) >= duration('4s')
+                  fenceOnAPILoss:
+                    default: true
+                    description: |-
+                      FenceOnAPILoss makes a primary that cannot read its RedisInstance for
+                      Delay/2 hold back writes, as a replica may be promoted meanwhile. With
+                      false, writes go on while the API server is down, at the risk of two
+                      primaries taking writes during a network partition.
+                    type: boolean
+                type: object
               image:
                 type: string
               instances:

@@ -78,7 +78,7 @@ func TestLiveOptions(t *testing.T) {
 }
 
 func TestConfigAPIRejectsBadRequests(t *testing.T) {
-	srv := httptest.NewServer(apiHandler(deadRedis(t), filepath.Join(t.TempDir(), "epoch")))
+	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}))
 	defer srv.Close()
 
 	for _, tt := range []struct {

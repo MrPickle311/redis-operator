@@ -67,7 +67,7 @@ func TestStatusAPIServesARenewedCertificateWithoutRestart(t *testing.T) {
 
 func TestStatusIsUnavailableWithoutRedis(t *testing.T) {
 	rdb := deadRedis(t)
-	srv := httptest.NewServer(apiHandler(rdb, filepath.Join(t.TempDir(), "epoch")))
+	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/status")

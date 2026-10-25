@@ -88,6 +88,30 @@ type RedisInstanceSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	Redis RedisSpec `json:"redis,omitzero"`
+
+	// Failover configures what happens when the primary is not available.
+	// +kubebuilder:default={}
+	// +optional
+	Failover FailoverSpec `json:"failover,omitzero"`
+}
+
+// FailoverSpec configures what happens when the primary is not available.
+type FailoverSpec struct {
+	// Delay is how long the primary may be unavailable before a replica
+	// takes over. A primary that cannot read its RedisInstance fences itself
+	// after half of it, so it takes no more writes by then.
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('4s')",message="delay must be at least 4s"
+	// +kubebuilder:default="30s"
+	// +optional
+	Delay metav1.Duration `json:"delay,omitzero"`
+
+	// FenceOnAPILoss makes a primary that cannot read its RedisInstance for
+	// Delay/2 hold back writes, as a replica may be promoted meanwhile. With
+	// false, writes go on while the API server is down, at the risk of two
+	// primaries taking writes during a network partition.
+	// +kubebuilder:default=true
+	// +optional
+	FenceOnAPILoss *bool `json:"fenceOnAPILoss,omitempty"`
 }
 
 type RedisSpec struct {
