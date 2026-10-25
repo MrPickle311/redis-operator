@@ -6,10 +6,13 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 
 	"github.com/redis/go-redis/v9"
+
+	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
 
 // aofDir is where Redis keeps the AOF, on the volume of the instance.
@@ -34,6 +37,21 @@ type ConfigRequest struct {
 	MaxmemoryPolicy string            `json:"maxmemoryPolicy"`
 	MaxmemoryRatio  int               `json:"maxmemoryRatio"`
 	Parameters      map[string]string `json:"parameters,omitempty"`
+}
+
+// ConfigFor returns the configuration of spec.redis of instance. The operator
+// sends it to every running Pod, and the Instance Manager applies it at start.
+func ConfigFor(instance *redisv1.RedisInstance) ConfigRequest {
+	parameters := make(map[string]string, len(instance.Spec.Redis.Parameters))
+	for name, value := range instance.Spec.Redis.Parameters {
+		parameters[name] = string(value)
+	}
+	return ConfigRequest{
+		Persistence:     string(instance.Spec.Redis.Persistence),
+		MaxmemoryPolicy: instance.Spec.Redis.MaxmemoryPolicy,
+		MaxmemoryRatio:  int(instance.Spec.Redis.MaxmemoryRatio),
+		Parameters:      parameters,
+	}
 }
 
 // ConfigResponse tells whether POST /config changed Redis, and which options
@@ -144,6 +162,14 @@ func applyPersistence(ctx context.Context, rdb *redis.Client, isAof bool, aofDir
 		return true, err
 	}
 	return true, os.RemoveAll(aofDir)
+}
+
+// aofExists reports whether an AOF is on the volume. Only then may Redis
+// start with appendonly yes: on a dataset kept in RDB alone it would start
+// empty, as it loads only the AOF.
+func aofExists(aofDir string) bool {
+	manifests, _ := filepath.Glob(filepath.Join(aofDir, "*.manifest"))
+	return len(manifests) > 0
 }
 
 // getConfigValue returns the value of an option, or "" for an unknown one.

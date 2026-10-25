@@ -35,11 +35,10 @@ type Options struct {
 	Namespace string
 	// DefaultUser enables the passwordless default user of Redis.
 	DefaultUser bool
-	// MaxmemoryRatio is the percent of the container memory limit that
-	// becomes maxmemory.
-	MaxmemoryRatio int
-	// MaxmemoryPolicy is what Redis does when it reaches maxmemory.
-	MaxmemoryPolicy string
+	// Databases and IOThreads are spec.redis.startup: Redis reads them only
+	// at start, so they come as flags, and a change replaces the Pod.
+	Databases int
+	IOThreads int
 }
 
 // RunInstance runs redis-server and serves the probes until redis-server exits.
@@ -58,10 +57,11 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	})
 	defer func() { _ = rdb.Close() }()
 
+	ready := &readiness{rdb: rdb}
 	// Before waiting for the primary: the liveness probe must answer meanwhile.
 	probes := &http.Server{
 		Addr:              ":" + strconv.Itoa(ProbePort),
-		Handler:           probeHandler(rdb),
+		Handler:           probeHandler(ready),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	status := &http.Server{
@@ -77,12 +77,12 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 
 	// Safe start: a replica starts as a replica, so it never takes writes or
 	// serves its stale dataset as a primary before the operator steps in.
-	primary, err := waitForPrimary(ctx, c, types.NamespacedName{Namespace: opts.Namespace, Name: opts.Instance})
+	instance, err := waitForInstance(ctx, c, types.NamespacedName{Namespace: opts.Namespace, Name: opts.Instance})
 	if err != nil {
 		return err
 	}
 	var replicaOf string
-	if primary != opts.PodName {
+	if primary := instance.Status.CurrentPrimary; primary != opts.PodName {
 		replicaOf = PodFQDN(primary, opts.Instance, opts.Namespace)
 	}
 
@@ -90,12 +90,32 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	if err != nil {
 		return err
 	}
-	conf := redisConfig(auth, opts, maxmemoryFor(limit, opts.MaxmemoryRatio), replicaOf)
+	config := ConfigFor(instance)
+	conf := redisConfig(auth, opts, maxmemoryFor(limit, config.MaxmemoryRatio), config.MaxmemoryPolicy,
+		replicaOf, aofExists(aofDir))
 	// 0600: the file holds the passwords, like the mounted Secret it comes from.
 	if err := os.WriteFile(redisConfPath, []byte(conf), 0o600); err != nil {
 		return err
 	}
+	go configureOnStart(ctx, rdb, config, limit, ready)
 	return Run(ctx, "redis-server", redisConfPath)
+}
+
+// configureOnStart applies config once redis-server answers, and only then
+// lets the Pod become Ready, so no client sees the defaults of Redis. Options
+// Redis refuses are left to the operator, which reports them.
+func configureOnStart(ctx context.Context, rdb *redis.Client, config ConfigRequest, limit int64, ready *readiness) {
+	for {
+		if _, err := applyConfig(ctx, rdb, config, limit, aofDir); err == nil {
+			ready.configured.Store(true)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // serve runs the server in the background, over TLS when it has a TLSConfig.

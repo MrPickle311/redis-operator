@@ -87,7 +87,7 @@ var _ = Describe("RedisInstance controller", func() {
 
 			redis := pod.Spec.Containers[0]
 			Expect(redis.Command).To(Equal([]string{"/controller/manager", "instance", "run",
-				"--instance=" + name, "--maxmemory-ratio=75", "--maxmemory-policy=noeviction"}))
+				"--instance=" + name, "--databases=16", "--io-threads=1"}))
 
 			By("sharing the binary through an emptyDir mounted in both containers")
 			Expect(pod.Spec.Volumes).To(ContainElement(HaveField("Name", "controller")))

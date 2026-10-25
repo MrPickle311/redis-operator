@@ -70,8 +70,8 @@ func main() {
 			flags := flag.NewFlagSet("instance run", flag.ExitOnError)
 			flags.StringVar(&opts.Instance, "instance", "", "Name of the RedisInstance of this Pod")
 			flags.BoolVar(&opts.DefaultUser, "default-user", false, "Enable the passwordless default user")
-			flags.IntVar(&opts.MaxmemoryRatio, "maxmemory-ratio", 75, "Percent of the container memory limit used as maxmemory")
-			flags.StringVar(&opts.MaxmemoryPolicy, "maxmemory-policy", "noeviction", "What Redis does when it reaches maxmemory")
+			flags.IntVar(&opts.Databases, "databases", 16, "Number of logical databases of Redis")
+			flags.IntVar(&opts.IOThreads, "io-threads", 1, "Number of threads that serve the clients of Redis")
 			_ = flags.Parse(os.Args[3:])
 			c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
 			if err == nil {

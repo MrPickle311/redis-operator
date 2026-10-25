@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -10,24 +9,7 @@ import (
 	"k8s.io/client-go/tools/events"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
-	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
-
-func TestConfigRequest(t *testing.T) {
-	instance := &redisv1.RedisInstance{Spec: redisv1.RedisInstanceSpec{Redis: redisv1.RedisSpec{
-		Persistence:     redisv1.PersistenceRDB,
-		MaxmemoryPolicy: "allkeys-lru",
-		MaxmemoryRatio:  80,
-		Parameters:      map[string]redisv1.ParameterValue{"hz": "20"},
-	}}}
-	want := instancemanager.ConfigRequest{
-		Persistence: "rdb", MaxmemoryPolicy: "allkeys-lru", MaxmemoryRatio: 80,
-		Parameters: map[string]string{"hz": "20"},
-	}
-	if got := configRequest(instance); !reflect.DeepEqual(got, want) {
-		t.Errorf("configRequest() = %+v, want %+v", got, want)
-	}
-}
 
 func TestParametersCondition(t *testing.T) {
 	recorder := events.NewFakeRecorder(10)

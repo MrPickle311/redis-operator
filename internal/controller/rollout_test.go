@@ -33,10 +33,23 @@ func TestSpecHash(t *testing.T) {
 		"memory limit": func(i *redisv1.RedisInstance) {
 			i.Spec.Resources.Limits = map[corev1.ResourceName]resource.Quantity{"memory": resource.MustParse("1Gi")}
 		},
-		"policy": func(i *redisv1.RedisInstance) { i.Spec.Redis.MaxmemoryPolicy = "allkeys-lru" },
+		"startup databases": func(i *redisv1.RedisInstance) { i.Spec.Redis.Startup.Databases = 32 },
 	} {
 		if build(mutate) == base {
 			t.Errorf("changing the %s did not change the hash", name)
+		}
+	}
+	// CONFIG SET applies these without a restart, so they must not replace the Pod.
+	for name, mutate := range map[string]func(*redisv1.RedisInstance){
+		"maxmemory policy": func(i *redisv1.RedisInstance) { i.Spec.Redis.MaxmemoryPolicy = "allkeys-lru" },
+		"maxmemory ratio":  func(i *redisv1.RedisInstance) { i.Spec.Redis.MaxmemoryRatio = 50 },
+		"persistence":      func(i *redisv1.RedisInstance) { i.Spec.Redis.Persistence = redisv1.PersistenceRDB },
+		"parameters": func(i *redisv1.RedisInstance) {
+			i.Spec.Redis.Parameters = map[string]redisv1.ParameterValue{"hz": "20"}
+		},
+	} {
+		if build(mutate) != base {
+			t.Errorf("changing the %s changed the hash, so it would restart every Pod", name)
 		}
 	}
 	// The role label moves with every switchover; it must not restart the Pod.

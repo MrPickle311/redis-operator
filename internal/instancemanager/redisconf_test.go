@@ -9,10 +9,10 @@ import (
 
 var testAuth = internalAuth{operatorPassword: "op-secret", replicationPassword: "repl-secret"}
 
-var testOptions = Options{MaxmemoryRatio: 75, MaxmemoryPolicy: "noeviction"}
+var testOptions = Options{Databases: 16, IOThreads: 1}
 
 func TestRedisConfigCreatesTheInternalUsers(t *testing.T) {
-	conf := redisConfig(testAuth, testOptions, 0, "")
+	conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false)
 
 	for _, line := range []string{
 		"user default off",
@@ -31,7 +31,7 @@ func TestRedisConfigCreatesTheInternalUsers(t *testing.T) {
 func TestRedisConfigEnablesThePasswordlessDefaultUserOnRequest(t *testing.T) {
 	opts := testOptions
 	opts.DefaultUser = true
-	conf := redisConfig(testAuth, opts, 0, "")
+	conf := redisConfig(testAuth, opts, 0, "noeviction", "", false)
 
 	if !hasLine(conf, "user default on nopass ~* &* +@all") || hasLine(conf, "user default off") {
 		t.Errorf("redis.conf does not enable the default user:\n%s", conf)
@@ -39,9 +39,7 @@ func TestRedisConfigEnablesThePasswordlessDefaultUserOnRequest(t *testing.T) {
 }
 
 func TestRedisConfigSetsTheMemoryLimit(t *testing.T) {
-	opts := testOptions
-	opts.MaxmemoryPolicy = "allkeys-lru"
-	conf := redisConfig(testAuth, opts, 100663296, "")
+	conf := redisConfig(testAuth, testOptions, 100663296, "allkeys-lru", "", false)
 
 	for _, line := range []string{"maxmemory 100663296", "maxmemory-policy allkeys-lru"} {
 		if !hasLine(conf, line) {
@@ -50,12 +48,31 @@ func TestRedisConfigSetsTheMemoryLimit(t *testing.T) {
 	}
 }
 
+func TestRedisConfigSetsTheStartupOptions(t *testing.T) {
+	conf := redisConfig(testAuth, Options{Databases: 32, IOThreads: 4}, 0, "noeviction", "", false)
+	for _, line := range []string{"databases 32", "io-threads 4"} {
+		if !hasLine(conf, line) {
+			t.Errorf("redis.conf has no line %q:\n%s", line, conf)
+		}
+	}
+}
+
+// Redis loads only the AOF when appendonly is yes, so the volume decides.
+func TestRedisConfigLoadsTheAOFOnlyWhenTheVolumeHasOne(t *testing.T) {
+	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); !hasLine(conf, "appendonly no") {
+		t.Errorf("redis.conf without an AOF on the volume:\n%s", conf)
+	}
+	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", true); !hasLine(conf, "appendonly yes") {
+		t.Errorf("redis.conf with an AOF on the volume:\n%s", conf)
+	}
+}
+
 func TestRedisConfigStartsAReplicaAsOne(t *testing.T) {
-	if conf := redisConfig(testAuth, testOptions, 0, ""); strings.Contains(conf, "replicaof") {
+	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); strings.Contains(conf, "replicaof") {
 		t.Errorf("the primary must not start with replicaof:\n%s", conf)
 	}
 
-	conf := redisConfig(testAuth, testOptions, 0, "cache-0.cache-hl.prod.svc")
+	conf := redisConfig(testAuth, testOptions, 0, "noeviction", "cache-0.cache-hl.prod.svc", false)
 	if !hasLine(conf, "replicaof cache-0.cache-hl.prod.svc 6379") {
 		t.Errorf("redis.conf of a replica has no replicaof line:\n%s", conf)
 	}

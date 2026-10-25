@@ -17,10 +17,13 @@ const ProbePort = 8001
 // of the primary, instead of serving an empty or stale one.
 var errNotSynced = errors.New("replica has not finished its first sync with the primary")
 
+// errNotConfigured keeps a starting Pod out of the Services until Redis has
+// the configuration of spec.redis instead of its defaults.
+var errNotConfigured = errors.New("redis-server does not have the configuration of spec.redis yet")
+
 // probeHandler serves the liveness and readiness probes of the Redis Pod.
-func probeHandler(rdb *redis.Client) http.Handler {
+func probeHandler(ready *readiness) http.Handler {
 	mux := http.NewServeMux()
-	ready := &readiness{rdb: rdb}
 
 	// Liveness: the Instance Manager answers, so the container is not stuck.
 	// It does not check Redis: loading a big dataset must not restart the Pod.
@@ -41,14 +44,19 @@ func probeHandler(rdb *redis.Client) http.Handler {
 // ready when the link to the primary drops later: during a primary outage the
 // replicas keep serving reads, slightly stale, instead of all leaving -ro at once.
 type readiness struct {
-	rdb    *redis.Client
-	synced atomic.Bool // the kubelet may probe concurrently
+	rdb *redis.Client
+	// The kubelet may probe concurrently.
+	synced     atomic.Bool
+	configured atomic.Bool // set once by configureOnStart
 }
 
 func (r *readiness) check(ctx context.Context) error {
 	// PING fails with LOADING while Redis reads its dataset from disk.
 	if err := r.rdb.Ping(ctx).Err(); err != nil {
 		return err
+	}
+	if !r.configured.Load() {
+		return errNotConfigured
 	}
 	if r.synced.Load() {
 		return nil

@@ -119,7 +119,7 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		// cmdline separates the arguments with NUL bytes.
 		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run",
-			"--instance="+redisName, "--maxmemory-ratio=75", "--maxmemory-policy=noeviction", ""))
+			"--instance="+redisName, "--databases=16", "--io-threads=1", ""))
 
 		Expect(redisCLI(Default, primary, "PING")).To(Equal("PONG"))
 	})
@@ -421,8 +421,9 @@ var _ = Describe("RedisInstance", Ordered, func() {
 			`jsonpath={.status.conditions[?(@.type=="ParametersApplied")].message}`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("hz"))
-		patchRedis(`{"parameters":{"hz":"15"}}`)
+		patchRedis(`{"parameters":{"hz":"15"},"maxmemoryPolicy":"allkeys-lru"}`)
 		Eventually(configOf).WithArguments("hz").Should(Equal(all("15")))
+		Eventually(configOf).WithArguments("maxmemory-policy").Should(Equal(all("allkeys-lru")))
 		Eventually(readyCondition).Should(Equal("True Ready"))
 
 		By("turning the AOF off: no AOF files stay, and no write is lost")
@@ -450,9 +451,9 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		Expect(loadImageIntoKind(newImage)).To(Succeed())
 		Expect(redisCLI(Default, primary, "-h", redisName+"-rw", "SET", "rollout-key", "before")).To(Equal("OK"))
 
-		By("changing spec.image")
+		By("changing spec.image and an option Redis reads only at start")
 		_, err := kubectl("patch", "redisinstance", redisName, "-n", redisNamespace, "--type=merge",
-			"-p", fmt.Sprintf(`{"spec":{"image":%q}}`, newImage))
+			"-p", fmt.Sprintf(`{"spec":{"image":%q,"redis":{"startup":{"databases":32}}}}`, newImage))
 		Expect(err).NotTo(HaveOccurred())
 
 		By("watching that at most one instance is down and the primary is updated last")
@@ -491,6 +492,16 @@ var _ = Describe("RedisInstance", Ordered, func() {
 			}
 		}).Should(Succeed())
 		Expect(redisCLI(Default, podName(1), "-h", redisName+"-rw", "SET", "rollout-key", "after")).To(Equal("OK"))
+
+		By("starting every new Pod with the configuration of spec.redis, before it was Ready")
+		for i := range redisInstances {
+			for option, want := range map[string]string{
+				"databases": "32", "hz": "15", "maxmemory-policy": "allkeys-lru", "appendonly": "yes",
+			} {
+				Expect(strings.Split(redisCLI(Default, podName(i), "CONFIG", "GET", option), "\n")[1]).To(Equal(want),
+					"%s %s", podName(i), option)
+			}
+		}
 	})
 })
 

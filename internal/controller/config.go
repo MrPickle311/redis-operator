@@ -17,27 +17,12 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
 
-// configRequest is the configuration of spec.redis that every running Redis
-// must have. The Instance Manager applies it with CONFIG SET.
-func configRequest(instance *redisv1.RedisInstance) instancemanager.ConfigRequest {
-	parameters := make(map[string]string, len(instance.Spec.Redis.Parameters))
-	for name, value := range instance.Spec.Redis.Parameters {
-		parameters[name] = string(value)
-	}
-	return instancemanager.ConfigRequest{
-		Persistence:     string(instance.Spec.Redis.Persistence),
-		MaxmemoryPolicy: instance.Spec.Redis.MaxmemoryPolicy,
-		MaxmemoryRatio:  int(instance.Spec.Redis.MaxmemoryRatio),
-		Parameters:      parameters,
-	}
-}
-
 // reconcileConfig sends the configuration to every running Pod and sets the
 // condition ParametersApplied from the options Redis refused. It returns true
 // while a Pod could not be reached, so the reconcile is repeated.
 func (r *RedisInstanceReconciler) reconcileConfig(ctx context.Context, instance *redisv1.RedisInstance) bool {
 	logger := logf.FromContext(ctx)
-	req := configRequest(instance)
+	req := instancemanager.ConfigFor(instance)
 	rejected := map[string]string{}
 	answered, pending := false, false
 

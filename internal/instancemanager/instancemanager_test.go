@@ -67,7 +67,7 @@ func TestCopySelfWritesAnExecutableCopy(t *testing.T) {
 
 func TestProbes(t *testing.T) {
 	rdb := deadRedis(t)
-	srv := httptest.NewServer(probeHandler(rdb))
+	srv := httptest.NewServer(probeHandler(&readiness{rdb: rdb}))
 	defer srv.Close()
 
 	tests := []struct {

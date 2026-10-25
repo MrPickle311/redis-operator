@@ -11,7 +11,44 @@ import (
 	"testing"
 
 	"github.com/redis/go-redis/v9"
+
+	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
+
+func TestConfigFor(t *testing.T) {
+	instance := &redisv1.RedisInstance{Spec: redisv1.RedisInstanceSpec{Redis: redisv1.RedisSpec{
+		Persistence:     redisv1.PersistenceRDB,
+		MaxmemoryPolicy: "allkeys-lru",
+		MaxmemoryRatio:  80,
+		Parameters:      map[string]redisv1.ParameterValue{"hz": "20"},
+	}}}
+	want := ConfigRequest{
+		Persistence: PersistenceRDB, MaxmemoryPolicy: "allkeys-lru", MaxmemoryRatio: 80,
+		Parameters: map[string]string{"hz": "20"},
+	}
+	if got := ConfigFor(instance); !reflect.DeepEqual(got, want) {
+		t.Errorf("ConfigFor() = %+v, want %+v", got, want)
+	}
+}
+
+func TestAOFExistsOnlyWithAManifest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "appendonlydir")
+	if aofExists(dir) {
+		t.Error("aofExists() = true without the directory")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if aofExists(dir) {
+		t.Error("aofExists() = true for an empty directory, which Redis would load as an empty dataset")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "appendonly.aof.manifest"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !aofExists(dir) {
+		t.Error("aofExists() = false with a manifest")
+	}
+}
 
 func TestLiveOptions(t *testing.T) {
 	req := ConfigRequest{
@@ -151,4 +188,28 @@ func TestApplyConfigOnRedis(t *testing.T) {
 		apply(req)
 		want("save", "")
 	})
+}
+
+// TestConfigureOnStartMakesThePodReady needs a real Redis, like TestApplyConfigOnRedis.
+func TestConfigureOnStartMakesThePodReady(t *testing.T) {
+	addr := os.Getenv("REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("REDIS_TEST_ADDR not set")
+	}
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	defer func() { _ = rdb.Close() }()
+	ready := &readiness{rdb: rdb}
+
+	if err := ready.check(ctx); err != errNotConfigured {
+		t.Fatalf("check() = %v before the configuration, want errNotConfigured", err)
+	}
+	config := ConfigRequest{Persistence: PersistenceAOF, MaxmemoryPolicy: "volatile-lru", MaxmemoryRatio: 50}
+	configureOnStart(ctx, rdb, config, 1<<30, ready)
+	if err := ready.check(ctx); err != nil {
+		t.Errorf("check() = %v after the configuration, want ready", err)
+	}
+	if got, _ := getConfigValue(ctx, rdb, "maxmemory-policy"); got != "volatile-lru" {
+		t.Errorf("maxmemory-policy = %q, want the one of spec.redis", got)
+	}
 }

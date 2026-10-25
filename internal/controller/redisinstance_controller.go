@@ -198,8 +198,9 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 func instanceCommand(instance *redisv1.RedisInstance) []string {
 	command := []string{managerPath, "instance", "run",
 		"--instance=" + instance.Name,
-		"--maxmemory-ratio=" + strconv.Itoa(int(instance.Spec.Redis.MaxmemoryRatio)),
-		"--maxmemory-policy=" + instance.Spec.Redis.MaxmemoryPolicy,
+		// Only what Redis reads at start: the rest goes with POST /config.
+		"--databases=" + strconv.Itoa(int(instance.Spec.Redis.Startup.Databases)),
+		"--io-threads=" + strconv.Itoa(int(instance.Spec.Redis.Startup.IOThreads)),
 	}
 	if instance.Spec.ACL.DefaultUser == redisv1.DefaultUserEnabled {
 		command = append(command, "--default-user")

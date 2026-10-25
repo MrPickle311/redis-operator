@@ -50,11 +50,12 @@ func readInternalAuth(dir string) (internalAuth, error) {
 	return auth, nil
 }
 
-// redisConfig returns the redis.conf with the internal users and the memory
-// settings. The default user is off unless opts.DefaultUser is set, when it
-// needs no password at all. A non-empty replicaOf makes Redis start as a
-// replica of that host.
-func redisConfig(auth internalAuth, opts Options, maxmemory int64, replicaOf string) string {
+// redisConfig returns the redis.conf: what Redis needs before it takes the
+// first command. The default user is off unless opts.DefaultUser is set, when
+// it needs no password at all. A non-empty replicaOf makes Redis start as a
+// replica of that host. aof tells whether an AOF is on the volume to load;
+// the rest of spec.redis comes with CONFIG SET after the start.
+func redisConfig(auth internalAuth, opts Options, maxmemory int64, maxmemoryPolicy, replicaOf string, aof bool) string {
 	defaultACL := "user default off"
 	if opts.DefaultUser {
 		defaultACL = "user default on nopass ~* &* +@all"
@@ -66,13 +67,23 @@ masteruser %s
 masterauth %s
 maxmemory %d
 maxmemory-policy %s
+databases %d
+io-threads %d
+appendonly %s
 `, defaultACL,
 		OperatorUser, auth.operatorPassword,
 		ReplicationUser, auth.replicationPassword,
 		ReplicationUser, auth.replicationPassword,
-		maxmemory, opts.MaxmemoryPolicy)
+		maxmemory, maxmemoryPolicy, opts.Databases, opts.IOThreads, yesNo(aof))
 	if replicaOf != "" {
 		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
 	}
 	return conf
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }

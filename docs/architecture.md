@@ -49,7 +49,7 @@ How the objects use each other:
 |-----------------------------|-------------------------------------------------|----------------------------------------------------------|
 | Secret `redis-operator-ca`  | CA cert and key                                 | operator: signs `cache-im-tls` and its own client certs  |
 | ServiceAccount `cache-instance` | token of the Instance Managers           | every Pod (`serviceAccountName`), redis container only   |
-| Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` only  | the Instance Manager reads `status.currentPrimary`       |
+| Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` only  | the Instance Manager reads its `RedisInstance` at start  |
 | Secret `cache-im-tls`       | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod, mounted at `/certificates`                    |
 | Secret `cache-internal-auth`| `operator-password`, `replication-password`     | every Pod at `/internal-auth`; operator for `REPLICAOF`  |
 | Service `cache-hl`          | headless                                        | stable DNS `cache-N.cache-hl.app.svc` for every Pod      |
@@ -107,7 +107,7 @@ flowchart TB
     IAUTH -- passwords --> IM
     CG -- memory limit --> IM
     TOKEN -- token --> IM
-    IM -- "get status.currentPrimary<br/>before redis-server starts" --> API
+    IM -- "get the RedisInstance<br/>before redis-server starts" --> API
     IM -- writes redis.conf --> CTRL
     IM -- starts, SIGTERM on shutdown --> RS
     IM --- PROBE
@@ -125,14 +125,18 @@ the redis container can run the Instance Manager with any Redis image.
 
 ## Safe start
 
-Before it starts `redis-server`, the Instance Manager reads
-`status.currentPrimary` of its own `RedisInstance` (waiting until the operator
-has set it):
+Before it starts `redis-server`, the Instance Manager reads its own
+`RedisInstance`, waiting until the operator has set `status.currentPrimary`:
 
 - **This Pod is the primary:** `redis.conf` has no `replicaof`.
 - **Another Pod is:** `redis.conf` gets `replicaof <primary>.cache-hl.app.svc 6379`,
   so a restarted replica never runs as a primary, not even for a moment, and
   takes no writes on a stale dataset.
+- **`spec.redis`:** `redis.conf` gets `maxmemory*`, `spec.redis.startup` and
+  `appendonly` (yes only when an AOF is on the volume). After the start, the
+  Instance Manager applies the whole configuration with `CONFIG SET` (see
+  [Configuration](#configuration-and-persistence-step-35)); `/readyz` answers
+  only then, so no client sees the defaults of Redis.
 
 The Pod keeps `automountServiceAccountToken: false`. The operator mounts a
 projected token of `cache-instance` into the redis container only, at the path
@@ -161,15 +165,15 @@ flowchart LR
 
     SPEC["spec.resources.limits.memory: 128Mi<br/>spec.redis.maxmemoryRatio: 75<br/>spec.redis.maxmemoryPolicy: noeviction"]:::cr
     OP["Operator"]:::k8s
-    POD["redis container<br/>resources + flags<br/>--maxmemory-ratio=75<br/>--maxmemory-policy=noeviction"]:::k8s
+    POD["redis container<br/>resources"]:::k8s
     CG["cgroup memory.max<br/>134217728, or max"]:::k8s
     IM["Instance Manager<br/>128Mi x 75 / 100"]:::pod
-    CONF["redis.conf<br/>maxmemory 100663296<br/>maxmemory-policy noeviction"]:::pod
+    CONF["redis.conf, then CONFIG SET<br/>maxmemory 100663296<br/>maxmemory-policy noeviction"]:::pod
     STATUS["status.conditions<br/>MemoryLimited"]:::cr
 
     SPEC --> OP --> POD
     POD -- kubelet --> CG --> IM
-    POD -- flags --> IM
+    SPEC -- "read at start,<br/>POST /config on a change" --> IM
     IM --> CONF
     OP -- checks the admitted Pods --> STATUS
 ```
@@ -187,10 +191,9 @@ flowchart LR
 - **No memory limit:** `maxmemory 0` (no limit). The instance still starts,
   for development, but the condition `MemoryLimited` turns `False` and the
   operator emits one `Warning` Event `MemoryLimitMissing`.
-- **Changes** of `resources`, `maxmemoryRatio` or `maxmemoryPolicy` change
-  the Pod, so they go through the rolling update (see Rolling update): the
-  Instance Manager writes the settings to `redis.conf` at start. Applying
-  them live with `CONFIG SET` comes with `spec.redis.parameters` (step 3.5).
+- **Changes** of `maxmemoryRatio` or `maxmemoryPolicy` apply live with
+  `CONFIG SET`. A change of `resources` changes the Pod, so it goes through
+  the [rolling update](#rolling-update).
 
 ### Configuration and persistence (step 3.5)
 
@@ -206,12 +209,10 @@ spec:
       notify-keyspace-events: Ex
 ```
 
-The operator sends this configuration to every running Pod on each
-reconcile (`POST /config`), and the Instance Manager applies what differs
-with `CONFIG SET`. Applying it also at the start of a Pod, before it reports
-Ready, comes with step 3.5d; until then a new Pod runs a few seconds with the
-defaults of Redis. The operator sends every change
-to the running Pods, so no change restarts Redis. A wrong value is reported
+The Instance Manager applies this configuration with `CONFIG SET` when a Pod
+starts, before it reports Ready, and the operator sends it to every running
+Pod on each reconcile (`POST /config`), so a change reaches Redis without a
+restart; only what differs is set. A wrong value is reported
 in the condition `ParametersApplied`; it never stops `redis-server`, as a bad
 line in `redis.conf` would.
 
@@ -502,7 +503,7 @@ Known limits:
 
 Every Pod carries the annotation `redis.operator.com/spec-hash`: a hash of
 the PodSpec the operator built it from. When a change of the `RedisInstance`
-(`image`, `resources`, `redis.*`, `acl.defaultUser`) or a new operator image
+(`image`, `resources`, `redis.startup`, `acl.defaultUser`) or a new operator image
 gives another hash, the Pod is outdated and the operator replaces it.
 
 ```mermaid

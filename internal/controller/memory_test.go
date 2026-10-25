@@ -53,7 +53,7 @@ var _ = Describe("Memory", func() {
 		)
 	})
 
-	It("passes the resources and the maxmemory settings to the redis container", func() {
+	It("passes the resources to the redis container, and the maxmemory settings only through POST /config", func() {
 		const name = "memory-settings-test"
 		instance := newInstance(name)
 		instance.Spec.Resources = memoryLimit("128Mi")
@@ -66,7 +66,8 @@ var _ = Describe("Memory", func() {
 		Expect(k8sClient.Get(ctx, objectKey(name+"-0"), pod)).To(Succeed())
 		redis := pod.Spec.Containers[0]
 		Expect(redis.Resources.Limits.Memory().String()).To(Equal("128Mi"))
-		Expect(redis.Command).To(ContainElements("--maxmemory-ratio=80", "--maxmemory-policy=allkeys-lru"))
+		Expect(redis.Command).NotTo(ContainElement(ContainSubstring("maxmemory")),
+			"a flag would make every change of the policy restart the Pods")
 	})
 
 	DescribeTable("reports the memory limit in the MemoryLimited condition",

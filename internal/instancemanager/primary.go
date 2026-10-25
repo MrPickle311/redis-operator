@@ -25,19 +25,17 @@ func PodFQDN(pod, instance, namespace string) string {
 	return fmt.Sprintf("%s.%s.%s.svc", pod, HeadlessServiceName(instance), namespace)
 }
 
-// waitForPrimary returns status.currentPrimary of the RedisInstance, waiting
-// until the operator has set it, which it does once the first Pod has an IP.
-func waitForPrimary(ctx context.Context, c client.Reader, key types.NamespacedName) (string, error) {
-	var primary string
+// waitForInstance returns the RedisInstance once its status.currentPrimary is
+// set, which the operator does once the first Pod has an IP.
+func waitForInstance(ctx context.Context, c client.Reader, key types.NamespacedName) (*redisv1.RedisInstance, error) {
+	var instance redisv1.RedisInstance
 	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
-		var instance redisv1.RedisInstance
 		if err := c.Get(ctx, key, &instance); err != nil {
 			// The API server may be unreachable for a moment: try again.
 			fmt.Fprintln(os.Stderr, "Could not read RedisInstance:", err)
 			return false, nil
 		}
-		primary = instance.Status.CurrentPrimary
-		return primary != "", nil
+		return instance.Status.CurrentPrimary != "", nil
 	})
-	return primary, err
+	return &instance, err
 }
