@@ -10,8 +10,8 @@ import (
 )
 
 // readyCondition sums up the instance in one condition. When False, the
-// Reason tells why; only StorageNotReady needs a human, every other Reason
-// passes on its own.
+// Reason tells why; StorageNotReady and ParametersNotApplied need a human,
+// every other Reason passes on its own.
 func readyCondition(instance *redisv1.RedisInstance, readyCount int32, outdated int) metav1.Condition {
 	_, promoteRequested := pendingRequest(instance, redisv1.AnnotationPromote)
 	instances := instance.Spec.Instances
@@ -20,6 +20,8 @@ func readyCondition(instance *redisv1.RedisInstance, readyCount int32, outdated 
 	switch {
 	case !meta.IsStatusConditionTrue(instance.Status.Conditions, redisv1.ConditionStorageReady):
 		reason, message = "StorageNotReady", "A volume is not Ready, see the condition StorageReady"
+	case meta.IsStatusConditionFalse(instance.Status.Conditions, redisv1.ConditionParametersApplied):
+		reason, message = "ParametersNotApplied", "Redis refused some options, see the condition ParametersApplied"
 	case instance.Status.TargetPrimary != "" || promoteRequested:
 		reason, message = "Switchover", "The primary is moving to another instance"
 	case outdated > 0:

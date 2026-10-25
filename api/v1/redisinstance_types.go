@@ -46,6 +46,11 @@ const AnnotationPromote = "redis.operator.com/promote"
 // whose volume is not.
 const ConditionStorageReady = "StorageReady"
 
+// ConditionParametersApplied is True when every running instance has the
+// configuration of spec.redis. When False, its message lists the options
+// Redis refused, e.g. a wrong value of a parameter.
+const ConditionParametersApplied = "ParametersApplied"
+
 // ConditionReady is True when every instance is Ready, up to date and on a
 // Ready volume, and no switchover is running. It sums up the instance for
 // tools that read one condition, like the health check of Argo CD.

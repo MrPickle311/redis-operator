@@ -385,6 +385,66 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		switchOver(0, 1, "3")
 	})
 
+	It("applies spec.redis.parameters and persistence to every instance without a restart", func() {
+		uids := map[string]string{}
+		for i := range redisInstances {
+			uid, err := kubectl("get", "pod", podName(i), "-n", redisNamespace, "-o", "jsonpath={.metadata.uid}")
+			Expect(err).NotTo(HaveOccurred())
+			uids[podName(i)] = uid
+		}
+		configOf := func(g Gomega, option string) []string {
+			var values []string
+			for i := range redisInstances {
+				values = append(values, strings.Split(redisCLI(g, podName(i), "CONFIG", "GET", option), "\n")[1])
+			}
+			return values
+		}
+		patchRedis := func(redis string) {
+			_, err := kubectl("patch", "redisinstance", redisName, "-n", redisNamespace, "--type=merge",
+				"-p", `{"spec":{"redis":`+redis+`}}`)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		all := func(value string) []string { return []string{value, value, value} }
+
+		By("turning the AOF on, as persistence defaults to aof")
+		Eventually(configOf).WithArguments("appendonly").Should(Equal(all("yes")))
+
+		By("setting parameters")
+		patchRedis(`{"parameters":{"hz":"20","notify-keyspace-events":"Ex"}}`)
+		Eventually(configOf).WithArguments("hz").Should(Equal(all("20")))
+		Eventually(configOf).WithArguments("notify-keyspace-events").Should(Equal(all("xE")))
+
+		By("reporting a value Redis refuses, and recovering once it is fixed")
+		patchRedis(`{"parameters":{"hz":"fast"}}`)
+		Eventually(readyCondition).Should(Equal("False ParametersNotApplied"))
+		out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
+			`jsonpath={.status.conditions[?(@.type=="ParametersApplied")].message}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("hz"))
+		patchRedis(`{"parameters":{"hz":"15"}}`)
+		Eventually(configOf).WithArguments("hz").Should(Equal(all("15")))
+		Eventually(readyCondition).Should(Equal("True Ready"))
+
+		By("turning the AOF off: no AOF files stay, and no write is lost")
+		Expect(redisCLI(Default, podName(0), "-h", redisName+"-rw", "SET", "persistence-key", "kept")).To(Equal("OK"))
+		patchRedis(`{"persistence":"rdb"}`)
+		Eventually(configOf).WithArguments("appendonly").Should(Equal(all("no")))
+		for i := range redisInstances {
+			Eventually(func() error {
+				_, err := kubectl("exec", podName(i), "-n", redisNamespace, "-c", "redis", "--", "ls", "/data/appendonlydir")
+				return err
+			}).Should(HaveOccurred(), "%s kept its AOF files", podName(i))
+			Expect(redisCLI(Default, podName(i), "GET", "persistence-key")).To(Equal("kept"))
+		}
+		patchRedis(`{"persistence":"aof"}`)
+		Eventually(configOf).WithArguments("appendonly").Should(Equal(all("yes")))
+
+		for name, uid := range uids {
+			Expect(kubectl("get", "pod", name, "-n", redisNamespace, "-o", "jsonpath={.metadata.uid}")).To(Equal(uid),
+				"%s was restarted for a change Redis applies live", name)
+		}
+	})
+
 	It("rolls a new image out one Pod at a time, the primary last, without losing writes", func() {
 		const newImage = "redis:7.4"
 		Expect(loadImageIntoKind(newImage)).To(Succeed())

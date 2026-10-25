@@ -565,6 +565,8 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	configPending := r.reconcileConfig(ctx, &instance)
+
 	r.setMemoryLimitedCondition(&instance, memoryUnlimited)
 	instance.Status.ReadyInstances = readyCount
 	instance.Status.Phase = fmt.Sprintf("%d/%d ready", readyCount, instance.Spec.Instances)
@@ -575,7 +577,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	if replicationPending {
+	if replicationPending || configPending {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 

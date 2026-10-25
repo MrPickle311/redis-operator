@@ -192,7 +192,7 @@ flowchart LR
   Instance Manager writes the settings to `redis.conf` at start. Applying
   them live with `CONFIG SET` comes with `spec.redis.parameters` (step 3.5).
 
-### Configuration and persistence (step 3.5, being built)
+### Configuration and persistence (step 3.5)
 
 ```yaml
 spec:
@@ -206,8 +206,11 @@ spec:
       notify-keyspace-events: Ex
 ```
 
-The Instance Manager sets these with `CONFIG SET` after `redis-server`
-starts and before the Pod reports Ready, and the operator sends every change
+The operator sends this configuration to every running Pod on each
+reconcile (`POST /config`), and the Instance Manager applies what differs
+with `CONFIG SET`. Applying it also at the start of a Pod, before it reports
+Ready, comes with step 3.5d; until then a new Pod runs a few seconds with the
+defaults of Redis. The operator sends every change
 to the running Pods, so no change restarts Redis. A wrong value is reported
 in the condition `ParametersApplied`; it never stops `redis-server`, as a bad
 line in `redis.conf` would.
@@ -583,6 +586,7 @@ the first in this order is the reason:
 | `status` | `reason` | When | Passes on its own |
 |---|---|---|---|
 | `False` | `StorageNotReady` | the condition `StorageReady` is not `True` | no: see [Volumes](#volumes) |
+| `False` | `ParametersNotApplied` | Redis refused an option, see the condition `ParametersApplied` | no: fix `spec.redis` |
 | `False` | `Switchover` | a switchover runs or a `promote` request is pending | yes |
 | `False` | `RollingUpdate` | some Pods run an outdated spec | yes |
 | `False` | `InstancesNotReady` | fewer Ready instances than `spec.instances` | usually: Pods start, replicas sync |
@@ -610,7 +614,7 @@ resource.customizations.health.redis.operator.com_RedisInstance: |
         hs.message = c.message
         if c.status == "True" then
           hs.status = "Healthy"
-        elseif c.reason == "StorageNotReady" then
+        elseif c.reason == "StorageNotReady" or c.reason == "ParametersNotApplied" then
           hs.status = "Degraded"
         end
       end
@@ -675,7 +679,12 @@ sequenceDiagram
             IM-->>OP: {changed}
         end
     end
-    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited condition)
+    loop each Running Pod, the primary too
+        OP->>IM: POST /config {persistence, maxmemory*, parameters} (mTLS)
+        IM->>RS: CONFIG GET, CONFIG SET what differs
+        IM-->>OP: {changed, rejected}
+    end
+    OP->>API: Update status if changed (readyInstances, phase, currentPrimary,<br/>primaryEpoch, MemoryLimited and ParametersApplied conditions)
     opt a Pod has no memory limit (first time)
         OP->>API: Warning Event MemoryLimitMissing
     end

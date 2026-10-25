@@ -32,6 +32,8 @@ func TestReadyCondition(t *testing.T) {
 		// Only this one needs a human, so it wins over every other reason.
 		{"a volume is not Ready", storage(metav1.ConditionFalse), "cache-1", true, 1, 2, "StorageNotReady"},
 		{"volumes not checked yet", nil, "", false, 3, 0, "StorageNotReady"},
+		{"Redis refused an option", append(storage(metav1.ConditionTrue), metav1.Condition{
+			Type: redisv1.ConditionParametersApplied, Status: metav1.ConditionFalse}), "", false, 2, 1, "ParametersNotApplied"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
