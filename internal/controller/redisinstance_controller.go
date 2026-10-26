@@ -407,6 +407,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	var readyCount int32 = 0
 	memoryUnlimited := false
 	var outdated []int32
+	ready := map[int32]bool{}
 
 	// Before the Pods: they cannot start until the Secrets they mount exist.
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
@@ -490,6 +491,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// A deleted Pod is going down even while it still reports Ready.
 		if isPodReady(&existingPod) && existingPod.DeletionTimestamp.IsZero() {
 			readyCount++
+			ready[ordinal] = true
 		}
 		if ok && isOutdated(&existingPod, desiredPod) {
 			outdated = append(outdated, ordinal)
@@ -511,6 +513,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	retryFailover = soonest(retryFailover, retrySafeStart)
+	if err := r.reconcileVolumeFailures(ctx, &instance, ready); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Before the switchover: the update of the primary starts one.
 	healthy := readyCount == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)

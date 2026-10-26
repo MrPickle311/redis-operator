@@ -124,18 +124,12 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 		Eventually(volBindings).Should(Equal(before))
 	})
 
-	It("generates a new volume for a replica whose PVC was deleted, and resyncs it", func() {
+	It("moves a replica whose PVC was deleted to a new volume on its own, and resyncs it", func() {
 		claim := volName + "-2-data"
 		oldUID := volPVCUID(claim)
 
-		By("deleting the PVC: it stays Terminating while the Pod uses it")
+		By("deleting the PVC: the operator deletes the Pod that holds it, so it can go")
 		_, err := kubectl("delete", "pvc", claim, "-n", volNamespace, "--wait=false")
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(volBinding).WithArguments(2, "state").Should(Equal("Terminating"))
-		Expect(volPodReady(2)).To(BeTrue(), "the replica must keep running on its old volume")
-
-		By("deleting the Pod")
-		_, err = kubectl("delete", "pod", volPod(2), "-n", volNamespace)
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func(g Gomega) {
@@ -147,6 +141,7 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 		Eventually(volPodReady).WithArguments(2).Should(BeTrue())
 		Expect(volCLI(Default, volPod(2), "GET", "vol-key")).To(Equal("kept"))
 		Expect(volEvents("VolumeRecreated")).NotTo(BeEmpty())
+		Expect(volEvents("ReplicaVolumeFailing")).NotTo(BeEmpty())
 	})
 
 	It("keeps a replica without a Pod when its external PVC was replaced", func() {
@@ -241,26 +236,20 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 		Eventually(volPodExists).WithArguments(3).Should(BeFalse())
 	})
 
-	It("recovers a primary whose PVC was deleted by switching over first", func() {
+	It("switches over on its own when the PVC of the primary is deleted, and moves the old primary to a new volume", func() {
 		oldPrimary := volPrimary()
 		ordinal := volOrdinal(oldPrimary)
 		claim := volPodClaim(ordinal)
+		Expect(claim).NotTo(Equal(volExternal), "the scenario needs a generated volume under the primary")
 		oldUID := volPVCUID(claim)
-		target := volPod((ordinal + 1) % 3)
 
 		By("deleting the PVC of the primary while it runs")
 		_, err := kubectl("delete", "pvc", claim, "-n", volNamespace, "--wait=false")
 		Expect(err).NotTo(HaveOccurred())
-		Eventually(volBinding).WithArguments(ordinal, "state").Should(Equal("Terminating"))
+		Eventually(volPrimary).ShouldNot(Equal(oldPrimary), "no switchover moved the primary off its going volume")
+		Expect(volEvents("PrimaryVolumeFailing")).NotTo(BeEmpty())
 
-		By("switching over to " + target)
-		_, err = kubectl("annotate", "redisinstance", volName, "-n", volNamespace, "redis.operator.com/promote="+target, "--overwrite")
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(volPrimary).Should(Equal(target))
-
-		By("deleting the old primary, now a replica: it gets a new empty volume and resyncs")
-		_, err = kubectl("delete", "pod", oldPrimary, "-n", volNamespace)
-		Expect(err).NotTo(HaveOccurred())
+		By("moving the old primary, now a replica, to a new empty volume, where it resyncs")
 		Eventually(func(g Gomega) {
 			uid := volPVCUIDOrEmpty(claim)
 			g.Expect(uid).NotTo(BeEmpty())
@@ -272,15 +261,20 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 	})
 
 	// Last: it leaves the instance without a primary.
-	It("never starts the primary on a new empty volume", func() {
+	It("never starts the primary on a new empty volume, and fails over instead", func() {
 		primary := volPrimary()
 		ordinal := volOrdinal(primary)
 		claim := volPodClaim(ordinal)
 
+		By("losing the Pod and the PVC of the primary while the operator is stopped")
+		// Running, it would switch over as soon as the PVC is going.
+		scaleOperator(0)
 		_, err := kubectl("delete", "pvc", claim, "-n", volNamespace, "--wait=false")
 		Expect(err).NotTo(HaveOccurred())
 		_, err = kubectl("delete", "pod", primary, "-n", volNamespace)
 		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() string { return volPVCUIDOrEmpty(claim) }).Should(BeEmpty())
+		scaleOperator(1)
 
 		Eventually(volBinding).WithArguments(ordinal, "state").Should(Equal("Missing"))
 		Expect(volBinding(ordinal, "message")).To(ContainSubstring("primary"))
@@ -294,6 +288,15 @@ var _ = Describe("RedisInstance volumes", Ordered, func() {
 			if i != ordinal {
 				Expect(volCLI(Default, volPod(i), "GET", "vol-key")).To(Equal("kept"))
 			}
+		}
+
+		By("failing over once the primary is gone for failover.delay")
+		Eventually(volPrimary).ShouldNot(Equal(primary))
+		Expect(volCLI(Default, volPrimary(), "GET", "vol-key")).To(Equal("kept"))
+		if claim != volExternal {
+			By("bringing the old primary back as a replica on a new generated volume")
+			Eventually(volPodReady).WithArguments(ordinal).Should(BeTrue())
+			Expect(volCLI(Default, primary, "GET", "vol-key")).To(Equal("kept"))
 		}
 	})
 })

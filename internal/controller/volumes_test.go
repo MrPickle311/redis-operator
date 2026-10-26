@@ -158,7 +158,14 @@ var _ = Describe("RedisInstance volumes", func() {
 			recorder := events.NewFakeRecorder(20)
 			Expect(reconcileWith(recorder, objectKey(name))).To(Succeed())
 
+			By("forgetting the old volume first, in the status, before any new PVC exists")
 			vol := volume(getInstance(name), 1)
+			Expect(vol.UID).To(BeEmpty())
+			Expect(vol.State).To(Equal(redisv1.VolumeMissing))
+			Expect(pvcDeleted(claim)).To(BeTrue())
+
+			Expect(reconcileWith(recorder, objectKey(name))).To(Succeed())
+			vol = volume(getInstance(name), 1)
 			Expect(vol.State).To(Equal(redisv1.VolumeReady))
 			Expect(vol.UID).NotTo(BeEmpty())
 			Expect(vol.UID).NotTo(Equal(oldUID))

@@ -166,15 +166,20 @@ var _ = Describe("RedisInstance rolling update", func() {
 			deleteInstance(name)
 		})
 
-		It("neither replaces that replica nor takes down another one", func() {
+		It("replaces only that replica, for its volume, and rolls nothing out", func() {
 			// The pvc-protection finalizer keeps the PVC Terminating.
 			Expect(k8sClient.Delete(ctx, newPVC(generatedPVCName(getInstance(name), 2)))).To(Succeed())
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 			Expect(volume(getInstance(name), 2).State).To(Equal(redisv1.VolumeTerminating))
 
+			// The replica on the going volume goes too (step 4.4), so it can
+			// move to a new one; the rollout must not take another one down.
+			Expect(existingPodNames(name, 3)).To(ConsistOf(name+"-0", name+"-1"))
+
 			setImage(name, "redis:7.4")
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
-			Expect(existingPodNames(name, 3)).To(HaveLen(3), "a Pod was replaced while a volume is not Ready")
+			Expect(existingPodNames(name, 3)).To(ConsistOf(name+"-0", name+"-1"), "the rollout replaced a Pod while a volume is not Ready")
+			Expect(podImage(name + "-1")).To(Equal("redis:7.2"))
 		})
 	})
 

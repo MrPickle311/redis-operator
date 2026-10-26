@@ -460,12 +460,24 @@ What the operator does on its own:
   is generated (Event `VolumeRecreated`) and the replica does a full sync.
 - **A generated name is taken by a PVC the operator did not create:** never
   adopted, the instance stays `Missing` until you delete or rename that PVC.
-- **The volume of the primary is gone:** never replaced on its own, because an
-  empty primary would make every replica drop its data in a full resync. The
-  primary keeps running while its PVC is `Terminating`: [switch over](#switchover)
-  to a replica, then delete the old primary's Pod, and it comes back as a
-  replica on a new volume. Once the Pod is gone too, only failover (step 4)
-  can move the primary.
+- **The volume of the primary is gone:** never replaced while it is the
+  primary, because an empty primary would make every replica drop its data in
+  a full resync. The primary moves instead, see below.
+
+When a volume fails under a running instance, the operator acts on one
+instance at a time, the lowest ordinal first, and only while every other
+instance is Ready and no switchover or failover runs:
+
+| Volume | State | The operator |
+|---|---|---|
+| of the primary | `Terminating` or `Lost`, the primary is Ready | **switches over** to the best replica (Event `PrimaryVolumeFailing`), without losing writes; the old primary is then a replica, below |
+| of the primary | the Pod is gone too (`Missing`) or not Ready | waits `failover.delay`, then **fails over** (see [Failover](#failover)) |
+| generated, of a replica | `Terminating` | deletes the Pod (Event `ReplicaVolumeFailing`), so the PVC goes; a new one is generated and the replica syncs again |
+| generated, of a replica | `Lost` | deletes the Pod and the PVC and binds the instance to a new generated PVC, like `recreate` |
+| external, of a replica | any | nothing: it belongs to you; it is reported in `StorageReady`, fix it with `recreate` |
+
+The deletion of a PVC cannot be undone, so there is nothing to wait for: the
+data of a replica on it is lost when its Pod stops anyway.
 
 The only way to change the volume of an instance is to recreate a replica:
 

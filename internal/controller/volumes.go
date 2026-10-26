@@ -108,26 +108,30 @@ func (r *RedisInstanceReconciler) reconcileMissingPVC(
 	}
 
 	// A known UID means the PVC existed and was deleted, with its data.
-	replacing := vol.UID != ""
-	if replacing {
+	if vol.UID != "" {
 		if reason := replaceBlocker(instance, vol.Ordinal, podExists); reason != "" {
 			setVolumeState(vol, redisv1.VolumeMissing, fmt.Sprintf("PVC %s was deleted; %s", vol.ClaimName, reason))
 			return nil
 		}
+		// Forget the old volume first and create the new one in the next pass:
+		// a PVC created before the status records the change would look like
+		// a foreign one if that write failed, and block the instance for good.
+		vol.UID = ""
+		setVolumeState(vol, redisv1.VolumeMissing, fmt.Sprintf("PVC %s was deleted; a new empty one follows", vol.ClaimName))
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "VolumeRecreated", "Reconcile",
+			"Creating a new empty PVC %s for replica %s; it syncs from the primary",
+			vol.ClaimName, instancePodName(instance, vol.Ordinal))
+		return nil
 	}
 
+	// A first binding: if the status write below fails, the next pass finds
+	// this PVC, controlled by the instance, and binds it, see bindPVC.
 	created, err := r.createDataPVC(ctx, instance, vol.Ordinal)
 	if err != nil {
 		return err
 	}
 	vol.UID = created.UID
 	setVolumeState(vol, redisv1.VolumeReady, "")
-
-	if replacing {
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "VolumeRecreated", "Reconcile",
-			"Created a new empty PVC %s for replica %s; it syncs from the primary",
-			vol.ClaimName, instancePodName(instance, vol.Ordinal))
-	}
 	return nil
 }
 
@@ -244,16 +248,10 @@ func (r *RedisInstanceReconciler) reconcileRecreate(ctx context.Context, instanc
 		return nil
 	}
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: target, Namespace: instance.Namespace}}
-	if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
+	if err := r.moveToNewVolume(ctx, instance, ordinal); err != nil {
 		return err
 	}
-	if err := r.deleteOwnedPVC(ctx, instance, ordinal); err != nil {
-		return err
-	}
-
 	vol := volumeOf(instance, ordinal)
-	*vol = redisv1.VolumeStatus{Ordinal: ordinal, ClaimName: generatedPVCName(instance, ordinal)}
 	markHandled(instance, redisv1.AnnotationRecreate)
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
@@ -262,6 +260,23 @@ func (r *RedisInstanceReconciler) reconcileRecreate(ctx context.Context, instanc
 	logf.FromContext(ctx).Info("Recreating replica on a new volume", "pod", target, "pvc", vol.ClaimName)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "InstanceRecreated", "Recreate",
 		"Recreating %s on a new generated PVC %s", target, vol.ClaimName)
+	return nil
+}
+
+// moveToNewVolume deletes the Pod of ordinal and its generated PVC (an
+// external PVC is only let go, never deleted) and binds the instance to a new
+// generated PVC, which reconcileVolumes creates once the old one is gone. The
+// caller writes the status.
+func (r *RedisInstanceReconciler) moveToNewVolume(ctx context.Context, instance *redisv1.RedisInstance, ordinal int32) error {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: instancePodName(instance, ordinal), Namespace: instance.Namespace}}
+	if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
+		return err
+	}
+	if err := r.deleteOwnedPVC(ctx, instance, ordinal); err != nil {
+		return err
+	}
+	vol := volumeOf(instance, ordinal)
+	*vol = redisv1.VolumeStatus{Ordinal: ordinal, ClaimName: generatedPVCName(instance, ordinal)}
 	return nil
 }
 
