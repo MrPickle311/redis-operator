@@ -22,6 +22,10 @@ func readyCondition(instance *redisv1.RedisInstance, readyCount int32, outdated 
 		reason, message = "StorageNotReady", "A volume is not Ready, see the condition StorageReady"
 	case meta.IsStatusConditionFalse(instance.Status.Conditions, redisv1.ConditionParametersApplied):
 		reason, message = "ParametersNotApplied", "Redis refused some options, see the condition ParametersApplied"
+	case meta.IsStatusConditionFalse(instance.Status.Conditions, redisv1.ConditionPrimaryAvailable):
+		reason, message = "PrimaryUnavailable", "The primary is unavailable, see the condition PrimaryAvailable"
+	case meta.IsStatusConditionTrue(instance.Status.Conditions, redisv1.ConditionFailover):
+		reason, message = "Failover", "A replica takes over from the failed primary"
 	case instance.Status.TargetPrimary != "" || promoteRequested:
 		reason, message = "Switchover", "The primary is moving to another instance"
 	case outdated > 0:

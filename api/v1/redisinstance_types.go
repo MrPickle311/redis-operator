@@ -51,6 +51,15 @@ const ConditionStorageReady = "StorageReady"
 // Redis refused, e.g. a wrong value of a parameter.
 const ConditionParametersApplied = "ParametersApplied"
 
+// ConditionPrimaryAvailable is True while the primary Pod is Ready. When
+// False, its lastTransitionTime is when the primary became unavailable: a
+// replica takes over after spec.failover.delay.
+const ConditionPrimaryAvailable = "PrimaryAvailable"
+
+// ConditionFailover is True while a replica takes over from a failed primary.
+// When False, its Reason tells how the last failover ended.
+const ConditionFailover = "Failover"
+
 // ConditionReady is True when every instance is Ready, up to date and on a
 // Ready volume, and no switchover is running. It sums up the instance for
 // tools that read one condition, like the health check of Argo CD.

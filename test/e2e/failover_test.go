@@ -184,3 +184,137 @@ func withoutServerFields(object string) string {
 	Expect(err).NotTo(HaveOccurred())
 	return string(data)
 }
+
+const (
+	afNamespace = "redis-e2e-autofailover"
+	afName      = "af"
+)
+
+var afManifest = fmt.Sprintf(`
+apiVersion: redis.operator.com/v1
+kind: RedisInstance
+metadata: {name: %s, namespace: %s}
+spec:
+  instances: 3
+  image: %s
+  storage:
+    volumeClaimTemplate: {size: 256Mi}
+  resources:
+    requests: {memory: 128Mi}
+    limits: {memory: 128Mi}
+  failover:
+    delay: 60s
+`, afName, afNamespace, redisImage)
+
+var afPassword string
+
+// Scenario: the primary stops answering. CLIENT PAUSE ALL makes /readyz fail
+// while /healthz, which checks only the Instance Manager, keeps the container.
+var _ = Describe("Automatic failover", Ordered, func() {
+	SetDefaultEventuallyTimeout(3 * time.Minute)
+	SetDefaultEventuallyPollingInterval(2 * time.Second)
+
+	var newPrimary string
+
+	BeforeAll(func() {
+		Expect(loadImageIntoKind(redisImage)).To(Succeed())
+		Expect(ensureRestrictedNamespace(afNamespace)).To(Succeed())
+		Expect(kubectlApply(afManifest)).To(Succeed())
+		Eventually(func(g Gomega) {
+			out, err := kubectl("get", "secret", afName+"-internal-auth", "-n", afNamespace,
+				"-o", "go-template={{index .data \"operator-password\" | base64decode}}")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).NotTo(BeEmpty())
+			afPassword = out
+		}).Should(Succeed())
+		for i := range 3 {
+			Eventually(func() bool { return podReadyIn(afNamespace, afPod(i)) }).Should(BeTrue())
+		}
+		Eventually(afReady).Should(Equal("True Ready"))
+		Expect(afCLI(Default, afPod(0), "SET", "af-key", "before")).To(Equal("OK"))
+	})
+
+	AfterAll(func() {
+		_, _ = kubectl("delete", "ns", afNamespace, "--ignore-not-found", "--timeout=2m")
+	})
+
+	AfterEach(func() {
+		if CurrentSpecReport().Failed() {
+			out, _ := kubectl("get", "redisinstance", afName, "-n", afNamespace, "-o", "jsonpath={.status}")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Status:\n%s\n", out)
+			out, _ = kubectl("logs", "-n", namespace, "-l", managerPodSelector, "--tail=50")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n%s\n", out)
+		}
+	})
+
+	It("keeps the primary when it comes back within failover.delay", func() {
+		Expect(afCLI(Default, afPod(0), "CLIENT", "PAUSE", "25000", "ALL")).To(Equal("OK"))
+		Eventually(afPrimaryAvailable).Should(Equal("False"))
+		Eventually(afPrimaryAvailable).Should(Equal("True"))
+		Expect(afGet("{.status.currentPrimary} {.status.primaryEpoch}")).To(Equal(afPod(0) + " 1"))
+	})
+
+	It("promotes the replica with the most writes once the primary is unavailable for failover.delay", func() {
+		_, err := kubectl("patch", "redisinstance", afName, "-n", afNamespace, "--type=merge",
+			"-p", `{"spec":{"failover":{"delay":"8s"}}}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(afCLI(Default, afPod(0), "SET", "af-key", "replicated")).To(Equal("OK"))
+		for i := 1; i < 3; i++ {
+			Eventually(func(g Gomega) { g.Expect(afCLI(g, afPod(i), "GET", "af-key")).To(Equal("replicated")) }).Should(Succeed())
+		}
+
+		By("making the primary stop answering for a minute")
+		Expect(afCLI(Default, afPod(0), "CLIENT", "PAUSE", "60000", "ALL")).To(Equal("OK"))
+		Eventually(func() string { return afGet("{.status.currentPrimary}") }).ShouldNot(Equal(afPod(0)))
+		newPrimary = afGet("{.status.currentPrimary}")
+
+		Expect(afGet("{.status.primaryEpoch}")).To(Equal("2"))
+		Expect(afGet(`{.status.conditions[?(@.type=="Failover")].reason}`)).To(Equal("Completed"))
+		events, err := kubectl("get", "events", "-n", afNamespace, "--field-selector", "reason=FailoverCompleted", "-o", "name")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(events).NotTo(BeEmpty())
+
+		By("taking writes on the new primary, through -rw, without losing the replicated ones")
+		Eventually(func(g Gomega) {
+			g.Expect(afCLI(g, newPrimary, "INFO", "replication")).To(ContainSubstring("role:master"))
+			g.Expect(afCLI(g, newPrimary, "-h", afName+"-rw", "SET", "af-after", "failover")).To(Equal("OK"))
+		}).Should(Succeed())
+		Expect(afCLI(Default, newPrimary, "GET", "af-key")).To(Equal("replicated"))
+	})
+
+	It("turns the old primary into a replica of the new one once it answers again", func() {
+		Eventually(func(g Gomega) {
+			info := afCLI(g, afPod(0), "INFO", "replication")
+			g.Expect(info).To(ContainSubstring("role:slave"))
+			g.Expect(info).To(ContainSubstring("master_host:" + afFQDN(newPrimary)))
+			g.Expect(info).To(ContainSubstring("master_link_status:up"))
+			g.Expect(afCLI(g, afPod(0), "GET", "af-after")).To(Equal("failover"))
+		}).Should(Succeed())
+		Eventually(afReady).Should(Equal("True Ready"))
+	})
+})
+
+func afPod(ordinal int) string { return fmt.Sprintf("%s-%d", afName, ordinal) }
+
+func afFQDN(pod string) string { return fmt.Sprintf("%s.%s-hl.%s.svc", pod, afName, afNamespace) }
+
+func afCLI(g Gomega, pod string, args ...string) string {
+	out, err := kubectl(append([]string{"exec", pod, "-n", afNamespace, "-c", "redis", "--",
+		"redis-cli", "--user", "_operator", "--pass", afPassword, "--no-auth-warning"}, args...)...)
+	g.Expect(err).NotTo(HaveOccurred())
+	return out
+}
+
+func afGet(jsonpath string) string {
+	out, err := kubectl("get", "redisinstance", afName, "-n", afNamespace, "-o", "jsonpath="+jsonpath)
+	Expect(err).NotTo(HaveOccurred())
+	return out
+}
+
+func afPrimaryAvailable() string {
+	return afGet(`{.status.conditions[?(@.type=="PrimaryAvailable")].status}`)
+}
+
+func afReady() string {
+	return afGet(`{.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].reason}`)
+}

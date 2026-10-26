@@ -29,6 +29,9 @@ const switchoverPollInterval = time.Second
 // Every step can be repeated: after a crash or a conflict, the next reconcile
 // continues from status.targetPrimary.
 func (r *RedisInstanceReconciler) reconcileSwitchover(ctx context.Context, instance *redisv1.RedisInstance) (ctrl.Result, error) {
+	if meta.IsStatusConditionTrue(instance.Status.Conditions, redisv1.ConditionFailover) {
+		return ctrl.Result{}, nil // status.targetPrimary belongs to the failover
+	}
 	if instance.Status.TargetPrimary == "" {
 		target, requested := pendingRequest(instance, redisv1.AnnotationPromote)
 		if !requested {

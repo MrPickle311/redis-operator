@@ -332,7 +332,7 @@ spec:
 | primary | works again, after it fenced itself | lifts its own fence, unless a switchover runs (that fence is the operator's) |
 
 - **Half the delay.** The operator promotes a replica only after `delay`
-  (failover, step 4.2), so a primary cut off from the API server has stopped
+  (see [Failover](#failover)), so a primary cut off from the API server has stopped
   taking writes by then: no two primaries take writes at once.
 - **`fenceOnAPILoss: false`** keeps writes going while the API server is
   down, at the risk of two primaries taking writes during a partition. It is
@@ -535,6 +535,57 @@ Known limits:
 - `cache-rw` follows the role label, which the next reconcile moves. Until
   then it points at the old primary, which answers `READONLY`.
 
+## Failover
+
+A failover promotes a replica when the primary has failed. Unlike a
+switchover, it cannot wait for the replica to catch up: the writes the old
+primary did not replicate yet are lost.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OP as Operator
+    participant API as Kubernetes API
+    participant OLD as IM cache-0 (failed primary)
+    participant NEW as IM cache-1 (best replica)
+    participant R2 as IM cache-2
+
+    Note over OP: Pod cache-0 not Ready, missing or being deleted
+    OP->>API: PrimaryAvailable=False (lastTransitionTime = when it failed)
+    Note over OP: failover.delay later, still unavailable
+    OP->>NEW: GET /status (each Ready replica)
+    OP->>R2: GET /status
+    Note over OP: highest offset, then lowest ordinal
+    OP->>API: status: targetPrimary=cache-1, primaryEpoch++,<br/>Failover=True (before any command)
+    OP-->>OLD: POST /fence {epoch} (best effort, 2 s)
+    OP->>NEW: POST /promote {epoch}
+    OP->>API: status: currentPrimary=cache-1, targetPrimary="",<br/>Failover=False/Completed
+    OP->>R2: POST /replicaof {epoch, cache-1}
+    Note over OLD: once it answers: /replicaof from the operator,<br/>or it demotes itself (Self-fencing)
+```
+
+- **When:** the primary Pod is not Ready, does not exist or is being deleted
+  for `spec.failover.delay` (default `30s`). The condition `PrimaryAvailable`
+  turns `False` at once; its `lastTransitionTime` is when the primary
+  failed, so a restart of the operator does not restart the delay. A primary
+  that comes back in time keeps its role.
+- **Which replica:** only Ready ones, which have finished their first sync;
+  of those the one with the highest replication offset, which holds the most
+  writes; a tie goes to the lowest ordinal.
+- **Without a Ready replica** (e.g. `instances: 1`) nothing happens; the
+  operator looks again every 5 seconds.
+- **The old primary** is fenced if it still answers. When it cannot be
+  reached it has fenced itself after `delay/2` (see
+  [Self-fencing](#self-fencing)), so it took no writes when the replica was
+  promoted. Once back, it becomes a replica of the new primary.
+- **Every step can be repeated,** as in a switchover: the epoch and the
+  target are written before the first command, and a crash of the operator
+  continues from `status.targetPrimary`. A failover takes over from a
+  switchover in progress (its condition turns `False` with reason
+  `Interrupted`).
+- Events: `FailoverStarted` (Warning) and `FailoverCompleted`. The condition
+  `Ready` is `False` with reason `PrimaryUnavailable`, then `Failover`.
+
 ## Rolling update
 
 Every Pod carries the annotation `redis.operator.com/spec-hash`: a hash of
@@ -624,6 +675,8 @@ the first in this order is the reason:
 |---|---|---|---|
 | `False` | `StorageNotReady` | the condition `StorageReady` is not `True` | no: see [Volumes](#volumes) |
 | `False` | `ParametersNotApplied` | Redis refused an option, see the condition `ParametersApplied` | no: fix `spec.redis` |
+| `False` | `PrimaryUnavailable` | the primary is not Ready; a failover follows after `failover.delay` | yes |
+| `False` | `Failover` | a replica takes over from the failed primary | yes |
 | `False` | `Switchover` | a switchover runs or a `promote` request is pending | yes |
 | `False` | `RollingUpdate` | some Pods run an outdated spec | yes |
 | `False` | `InstancesNotReady` | fewer Ready instances than `spec.instances` | usually: Pods start, replicas sync |

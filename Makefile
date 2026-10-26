@@ -100,7 +100,7 @@ test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated 
 	@cp config/manager/kustomization.yaml $(LOCALBIN)/manager-kustomization.yaml.bak; \
 		trap '$(E2E_RESTORE_KUSTOMIZATION); $(MAKE) --no-print-directory cleanup-test-e2e' EXIT; \
 		KUBECONFIG=$(E2E_KUBECONFIG) KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) \
-		go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+		go test -tags=e2e ./test/e2e/ -timeout 30m -v -ginkgo.v
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
@@ -121,7 +121,7 @@ test-e2e-fast: manifests generate fmt vet ## Run e2e tests against a persistent 
 	@cp config/manager/kustomization.yaml $(LOCALBIN)/manager-kustomization.yaml.bak; \
 		trap '$(E2E_RESTORE_KUSTOMIZATION)' EXIT; \
 		KUBECONFIG=$(E2E_KUBECONFIG) KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
-		go test -tags=e2e ./test/e2e/ -v -ginkgo.v $(if $(E2E_FOCUS),-ginkgo.focus="$(E2E_FOCUS)")
+		go test -tags=e2e ./test/e2e/ -timeout 30m -v -ginkgo.v $(if $(E2E_FOCUS),-ginkgo.focus="$(E2E_FOCUS)")
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

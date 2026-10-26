@@ -501,6 +501,12 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// Before the rollout and the switchover: both need a primary that works.
+	retryFailover, err := r.reconcileFailover(ctx, &instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Before the switchover: the update of the primary starts one.
 	healthy := readyCount == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
 	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, healthy)
@@ -526,7 +532,8 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		Name:      instancePodName(&instance, primary),
 		Namespace: instance.Namespace,
 	}, &primaryPod); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		// A primary that is gone may still need a failover.
+		return ctrl.Result{RequeueAfter: retryFailover}, client.IgnoreNotFound(err)
 	}
 
 	if primaryPod.Status.PodIP == "" {
@@ -582,7 +589,18 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: retryRollout}, nil
+	return ctrl.Result{RequeueAfter: soonest(retryRollout, retryFailover)}, nil
+}
+
+// soonest returns the shortest of the positive durations, or 0 for none.
+func soonest(durations ...time.Duration) time.Duration {
+	var first time.Duration
+	for _, d := range durations {
+		if d > 0 && (first == 0 || d < first) {
+			first = d
+		}
+	}
+	return first
 }
 
 // existingPods tells which ordinals have a Pod, including one being deleted.
