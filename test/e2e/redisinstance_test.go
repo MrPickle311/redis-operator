@@ -345,6 +345,12 @@ var _ = Describe("RedisInstance", Ordered, func() {
 				g.Expect(redisCLI(g, replica, "GET", "e2e-key")).To(Equal("hello"))
 			}).Should(Succeed(), "replica %s did not recover after the primary restart", replica)
 		}
+
+		By("keeping the primary: its dataset came back from the AOF, so the operator approved it")
+		out, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o",
+			"jsonpath={.status.currentPrimary} {.status.primaryEpoch}")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal(primary+" 1"), "the restart of the primary ended in a failover")
 	})
 
 	It("switches over to a replica on request and back, without losing writes", func() {

@@ -17,6 +17,10 @@ const ProbePort = 8001
 // of the primary, instead of serving an empty or stale one.
 var errNotSynced = errors.New("replica has not finished its first sync with the primary")
 
+// errAwaitingApproval keeps a restarted primary out of the Services until the
+// operator has compared its dataset with the replicas.
+var errAwaitingApproval = errors.New("the restarted primary waits for the operator to approve its dataset")
+
 // errNotConfigured keeps a starting Pod out of the Services until Redis has
 // the configuration of spec.redis instead of its defaults.
 var errNotConfigured = errors.New("redis-server does not have the configuration of spec.redis yet")
@@ -48,6 +52,9 @@ type readiness struct {
 	// The kubelet may probe concurrently.
 	synced     atomic.Bool
 	configured atomic.Bool // set once by configureOnStart
+	// approved is false while a Pod that started as the primary waits for
+	// the operator to compare its dataset with the replicas; /promote sets it.
+	approved atomic.Bool
 }
 
 func (r *readiness) check(ctx context.Context) error {
@@ -67,7 +74,11 @@ func (r *readiness) check(ctx context.Context) error {
 	}
 	replication := info["Replication"]
 	if replication["role"] == "master" {
-		return nil // not remembered: a demoted primary must sync before serving again
+		// Not remembered: a demoted primary must sync before serving again.
+		if !r.approved.Load() {
+			return errAwaitingApproval
+		}
+		return nil
 	}
 	if !initialSyncDone(replication) {
 		return errNotSynced

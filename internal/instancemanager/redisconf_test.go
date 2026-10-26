@@ -17,7 +17,7 @@ func TestRedisConfigCreatesTheInternalUsers(t *testing.T) {
 	for _, line := range []string{
 		"user default off",
 		"user _operator on >op-secret ~* &* +@all",
-		"user _replication on >repl-secret +psync +replconf +ping",
+		"user _replication off >repl-secret +psync +replconf +ping",
 		// Every instance can become a replica, so each one logs in to its primary.
 		"masteruser _replication",
 		"masterauth repl-secret",
@@ -64,6 +64,17 @@ func TestRedisConfigLoadsTheAOFOnlyWhenTheVolumeHasOne(t *testing.T) {
 	}
 	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", true); !hasLine(conf, "appendonly yes") {
 		t.Errorf("redis.conf with an AOF on the volume:\n%s", conf)
+	}
+}
+
+// A primary lets replicas sync only after the operator approved its dataset.
+func TestRedisConfigOpensReplicationOnlyOnAReplica(t *testing.T) {
+	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); !hasLine(conf, "user _replication off >repl-secret +psync +replconf +ping") {
+		t.Errorf("a primary starts with replication open:\n%s", conf)
+	}
+	conf := redisConfig(testAuth, testOptions, 0, "noeviction", "cache-0.cache-hl.prod.svc", false)
+	if !hasLine(conf, "user _replication on >repl-secret +psync +replconf +ping") {
+		t.Errorf("a replica starts with replication closed:\n%s", conf)
 	}
 }
 

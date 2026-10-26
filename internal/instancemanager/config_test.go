@@ -2,11 +2,14 @@ package instancemanager
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,7 +81,7 @@ func TestLiveOptions(t *testing.T) {
 }
 
 func TestConfigAPIRejectsBadRequests(t *testing.T) {
-	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}))
+	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}, &readiness{}))
 	defer srv.Close()
 
 	for _, tt := range []struct {
@@ -200,6 +203,7 @@ func TestConfigureOnStartMakesThePodReady(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: addr})
 	defer func() { _ = rdb.Close() }()
 	ready := &readiness{rdb: rdb}
+	ready.approved.Store(true) // a primary the operator approved already
 
 	if err := ready.check(ctx); err != errNotConfigured {
 		t.Fatalf("check() = %v before the configuration, want errNotConfigured", err)
@@ -211,5 +215,65 @@ func TestConfigureOnStartMakesThePodReady(t *testing.T) {
 	}
 	if got, _ := getConfigValue(ctx, rdb, "maxmemory-policy"); got != "volatile-lru" {
 		t.Errorf("maxmemory-policy = %q, want the one of spec.redis", got)
+	}
+}
+
+// TestApprovalOfARestartedPrimary needs a real Redis, like TestApplyConfigOnRedis.
+func TestApprovalOfARestartedPrimary(t *testing.T) {
+	addr := os.Getenv("REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("REDIS_TEST_ADDR not set")
+	}
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	defer func() { _ = rdb.Close() }()
+	// As redis.conf of a starting primary leaves it.
+	if err := rdb.Do(ctx, "ACL", "SETUSER", ReplicationUser, "off", ">secret", "+psync", "+replconf", "+ping").Err(); err != nil {
+		t.Fatal(err)
+	}
+	ready := &readiness{rdb: rdb}
+	ready.configured.Store(true)
+	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}, ready))
+	defer srv.Close()
+	status := func() InstanceStatus {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var s InstanceStatus
+		if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	if !status().AwaitingApproval {
+		t.Error("a primary that started is not awaiting approval")
+	}
+	if err := ready.check(ctx); !errors.Is(err, errAwaitingApproval) {
+		t.Errorf("check() = %v, want errAwaitingApproval", err)
+	}
+
+	resp, err := http.Post(srv.URL+"/promote", "application/json", strings.NewReader(`{"epoch": 1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var promoted CommandResponse
+	_ = json.NewDecoder(resp.Body).Decode(&promoted)
+	_ = resp.Body.Close()
+	if !promoted.Changed {
+		t.Error("the approval of a restarted primary did not count as a change")
+	}
+	if status().AwaitingApproval {
+		t.Error("the primary still awaits approval after /promote")
+	}
+	if err := ready.check(ctx); err != nil {
+		t.Errorf("check() = %v after the approval, want ready", err)
+	}
+	users, _ := rdb.Do(ctx, "ACL", "LIST").StringSlice()
+	if !slices.ContainsFunc(users, func(u string) bool { return strings.HasPrefix(u, "user "+ReplicationUser+" on ") }) {
+		t.Errorf("replication is still closed after /promote: %v", users)
 	}
 }

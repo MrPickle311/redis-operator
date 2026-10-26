@@ -138,6 +138,42 @@ Before it starts `redis-server`, the Instance Manager reads its own
   [Configuration](#configuration-and-persistence-step-35)); `/readyz` answers
   only then, so no client sees the defaults of Redis.
 
+### A restarted primary waits for approval
+
+A primary that comes back with an empty or old dataset is the classic way
+Redis loses data: its replicas connect, find a history they do not know, do
+a full resync and drop everything they hold. So a Pod that starts as the
+primary lets no replica sync: `redis.conf` turns the `_replication` user
+off, and `/readyz` fails until the operator decides.
+
+The operator compares the primary (`GET /status`: replication ID, offset,
+number of keys) with the Ready replicas:
+
+| Situation | Decision |
+|---|---|
+| no Ready replica | approve: nothing better to promote |
+| same replication ID, offset not behind any replica | approve: a partial resync |
+| every replica is empty | approve: nothing to lose |
+| the primary is empty, a replica is not | **failover** to the best replica |
+| `persistence: aof` and the primary loaded keys | approve: its AOF is at most ~1 s behind the crash, like a replica |
+| `persistence: rdb` or `none` | **failover**: a snapshot may be minutes older than the replicas |
+
+Approving is `POST /promote`: it turns the `_replication` user on, and the
+Pod becomes Ready. Whether a primary waits for approval is a state of the
+Instance Manager process, set when it starts as the primary, not read from
+the ACL: a user who turns `_replication` off by hand is not overruled. A failover goes as in [Failover](#failover), with the
+reason in the condition `Failover`; the old primary then syncs from the new
+one.
+
+Why not compare offsets alone: Redis 7.2 starts with a new replication ID and
+an offset from 0 after every restart, a clean shutdown as well as a crash,
+when it loads an AOF. The offsets of the replicas then tell nothing, so the
+size of the dataset and how it was kept decide.
+
+Known limits: an AOF that Redis loads only in part (`aof-load-truncated`)
+still has keys and is approved; while the operator is down, a restarted
+primary stays not Ready.
+
 The Pod keeps `automountServiceAccountToken: false`. The operator mounts a
 projected token of `cache-instance` into the redis container only, at the path
 client-go expects, so the init container gets no token. The Role allows `get`
@@ -327,7 +363,7 @@ spec:
 | Redis | The read of the `RedisInstance` | The Instance Manager |
 |---|---|---|
 | replica | any | does nothing: the operator manages replicas |
-| primary | `status.currentPrimary` names another Pod | **demotes itself**: `REPLICAOF` the new primary, under the epoch guard of the API |
+| primary | `status.currentPrimary` names another Pod, and no switchover or failover runs | **demotes itself**: `REPLICAOF` the new primary, under the epoch guard of the API |
 | primary | failing for more than `delay/2` | **fences itself** (`CLIENT PAUSE WRITE`, renewed while it lasts) |
 | primary | works again, after it fenced itself | lifts its own fence, unless a switchover runs (that fence is the operator's) |
 
@@ -337,6 +373,9 @@ spec:
 - **`fenceOnAPILoss: false`** keeps writes going while the API server is
   down, at the risk of two primaries taking writes during a partition. It is
   a choice per instance; the default favours the data.
+- **Not while the primary moves.** A Pod the operator has just promoted still
+  reads the old `currentPrimary` until the operator records the new one; with
+  `status.targetPrimary` set, the Instance Manager leaves its role alone.
 - **Any failed read counts,** a timeout as well as a `403`: the Instance
   Manager cannot tell an API server that is down from one it cannot reach.
 - **A restart of the operator, or of the API server for less than
@@ -585,6 +624,33 @@ sequenceDiagram
   `Interrupted`).
 - Events: `FailoverStarted` (Warning) and `FailoverCompleted`. The condition
   `Ready` is `False` with reason `PrimaryUnavailable`, then `Failover`.
+
+What makes a primary unavailable, and so leads to a failover once it lasts
+for `failover.delay`:
+
+| Cause | What the operator sees | Failover |
+|---|---|---|
+| The node of the primary fails | after ~40 s (`node-monitor-grace-period`) the Pod is no longer Ready | after ~40 s + `delay` |
+| A network partition between the node and the control plane | the same; the old primary also fences itself (see [Self-fencing](#self-fencing)) | yes |
+| Redis hangs or is overloaded: PING misses the 1 s probe timeout | `/readyz` fails | once it lasts `delay` |
+| The Pod is deleted or evicted and does not come back (image, volume) | no Pod, or a Pod that is not Ready | once it lasts `delay` |
+| `redis-server` crashes on every start | the Pod never becomes Ready | yes |
+| One restart of the container | not Ready for a few seconds | no, it is back in time |
+| Loading a large dataset after a restart (PING answers `LOADING`) | not Ready until the load ends | **yes, if loading takes longer than `delay`** |
+
+**Choosing `delay`:** it must be longer than the time the primary needs to
+load its dataset from the volume, or every restart of the primary ends in a
+failover. Redis loads roughly a few hundred MB per second from an AOF or an
+RDB, so a dataset of tens of GB needs a `delay` of minutes. A shorter
+`delay` moves the primary sooner, with the risk of failovers for restarts
+that would have healed; the self-fencing of the old primary comes after
+`delay/2` either way.
+
+Not covered by a failover: an operator that cannot reach a Ready primary (a
+network problem of the operator alone must not move the primary); Redis that
+answers PING but refuses writes, e.g. `MISCONF` on a full disk; the volume of
+a running primary failing (step 4.4); planned changes, which use a
+switchover.
 
 ## Rolling update
 

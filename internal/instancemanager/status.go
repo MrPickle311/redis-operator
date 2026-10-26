@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
@@ -34,11 +35,17 @@ type InstanceStatus struct {
 	// write of the primary.
 	ReplID string `json:"replID,omitempty"`
 	Offset int64  `json:"offset"`
+	// Keys is the number of keys in every database.
+	Keys int64 `json:"keys"`
+	// AwaitingApproval tells that this restarted primary lets no replica
+	// sync until the operator approves its dataset with /promote.
+	AwaitingApproval bool `json:"awaitingApproval,omitempty"`
 }
 
 // apiHandler serves the API of the Instance Manager. guard runs its commands
-// and keeps the highest epoch it has accepted.
-func apiHandler(rdb *redis.Client, guard *epochGuard) http.Handler {
+// and keeps the highest epoch it has accepted; ready holds whether the
+// operator approved this primary.
+func apiHandler(rdb *redis.Client, guard *epochGuard, ready *readiness) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		status, err := readStatus(r.Context(), rdb)
@@ -46,6 +53,7 @@ func apiHandler(rdb *redis.Client, guard *epochGuard) http.Handler {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
+		status.AwaitingApproval = status.Role == "master" && !ready.approved.Load()
 		writeJSON(w, status)
 	})
 
@@ -64,7 +72,13 @@ func apiHandler(rdb *redis.Client, guard *epochGuard) http.Handler {
 	})
 	mux.HandleFunc("POST /promote", func(w http.ResponseWriter, r *http.Request) {
 		if epoch, ok := decodeEpoch(w, r); ok {
-			runCommand(w, guard, epoch, func() (bool, error) { return promote(r.Context(), rdb) })
+			runCommand(w, guard, epoch, func() (bool, error) {
+				changed, err := promote(r.Context(), rdb)
+				if err == nil && !ready.approved.Swap(true) {
+					changed = true // the approval of a restarted primary
+				}
+				return changed, err
+			})
 		}
 	})
 
@@ -129,11 +143,31 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func readStatus(ctx context.Context, rdb *redis.Client) (InstanceStatus, error) {
-	info, err := rdb.InfoMap(ctx, "replication").Result()
+	info, err := rdb.InfoMap(ctx, "replication", "keyspace").Result()
 	if err != nil {
 		return InstanceStatus{}, err
 	}
-	return parseStatus(info["Replication"])
+	status, err := parseStatus(info["Replication"])
+	if err != nil {
+		return InstanceStatus{}, err
+	}
+	status.Keys = countKeys(info["Keyspace"])
+	return status, nil
+}
+
+// countKeys sums the keys of every database in INFO keyspace, whose lines
+// read "db0:keys=150,expires=0,avg_ttl=0".
+func countKeys(keyspace map[string]string) int64 {
+	var keys int64
+	for _, db := range keyspace {
+		for field := range strings.SplitSeq(db, ",") {
+			if value, ok := strings.CutPrefix(field, "keys="); ok {
+				n, _ := strconv.ParseInt(value, 10, 64)
+				keys += n
+			}
+		}
+	}
+	return keys
 }
 
 // parseStatus reads the fields of INFO replication the operator needs.

@@ -62,7 +62,7 @@ func redisConfig(auth internalAuth, opts Options, maxmemory int64, maxmemoryPoli
 	}
 	conf := fmt.Sprintf(`%s
 user %s on >%s ~* &* +@all
-user %s on >%s +psync +replconf +ping
+user %s %s >%s +psync +replconf +ping
 masteruser %s
 masterauth %s
 maxmemory %d
@@ -72,13 +72,22 @@ io-threads %d
 appendonly %s
 `, defaultACL,
 		OperatorUser, auth.operatorPassword,
-		ReplicationUser, auth.replicationPassword,
+		// A primary lets no replica sync until the operator approved its
+		// dataset with /promote: an empty one would wipe the replicas.
+		ReplicationUser, onOff(replicaOf != ""), auth.replicationPassword,
 		ReplicationUser, auth.replicationPassword,
 		maxmemory, maxmemoryPolicy, opts.Databases, opts.IOThreads, yesNo(aof))
 	if replicaOf != "" {
 		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
 	}
 	return conf
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 func yesNo(b bool) string {

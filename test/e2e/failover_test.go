@@ -292,6 +292,37 @@ var _ = Describe("Automatic failover", Ordered, func() {
 		}).Should(Succeed())
 		Eventually(afReady).Should(Equal("True Ready"))
 	})
+
+	It("promotes a replica instead of a primary that restarted with an empty dataset", func() {
+		// Only the safe start can fail over within this delay.
+		_, err := kubectl("patch", "redisinstance", afName, "-n", afNamespace, "--type=merge",
+			"-p", `{"spec":{"failover":{"delay":"10m"}}}`)
+		Expect(err).NotTo(HaveOccurred())
+		oldPrimary := newPrimary
+		Expect(afCLI(Default, oldPrimary, "SET", "af-safe", "kept")).To(Equal("OK"))
+		for i := range 3 {
+			Eventually(func(g Gomega) { g.Expect(afCLI(g, afPod(i), "GET", "af-safe")).To(Equal("kept")) }).Should(Succeed())
+		}
+
+		By("losing the files of the primary and killing redis-server, so it restarts empty")
+		_, _ = kubectl("exec", oldPrimary, "-n", afNamespace, "-c", "redis", "--", "sh", "-c",
+			`rm -rf /data/appendonlydir /data/dump.rdb; for p in /proc/[0-9]*; do `+
+				`[ "${p#/proc/}" != "$$" ] && grep -qa redis-server "$p/cmdline" 2>/dev/null && kill -9 "${p#/proc/}"; done`)
+
+		Eventually(func() string { return afGet("{.status.currentPrimary}") }).ShouldNot(Equal(oldPrimary))
+		newPrimary = afGet("{.status.currentPrimary}")
+		Expect(afGet(`{.status.conditions[?(@.type=="Failover")].message}`)).To(ContainSubstring("empty dataset"))
+		Expect(afGet("{.status.primaryEpoch}")).To(Equal("3"))
+
+		By("keeping the data on the replicas, and syncing the old primary from the new one")
+		Expect(afCLI(Default, newPrimary, "GET", "af-safe")).To(Equal("kept"))
+		Eventually(func(g Gomega) {
+			info := afCLI(g, oldPrimary, "INFO", "replication")
+			g.Expect(info).To(ContainSubstring("master_host:" + afFQDN(newPrimary)))
+			g.Expect(afCLI(g, oldPrimary, "GET", "af-safe")).To(Equal("kept"))
+		}).Should(Succeed())
+		Eventually(afReady).Should(Equal("True Ready"))
+	})
 })
 
 func afPod(ordinal int) string { return fmt.Sprintf("%s-%d", afName, ordinal) }

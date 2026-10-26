@@ -67,7 +67,7 @@ func TestStatusAPIServesARenewedCertificateWithoutRestart(t *testing.T) {
 
 func TestStatusIsUnavailableWithoutRedis(t *testing.T) {
 	rdb := deadRedis(t)
-	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}))
+	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}, &readiness{}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/status")
@@ -185,4 +185,14 @@ func mustCA(t *testing.T) pki.KeyPair {
 		t.Fatal(err)
 	}
 	return ca
+}
+
+func TestCountKeys(t *testing.T) {
+	keyspace := map[string]string{"db0": "keys=150,expires=0,avg_ttl=0", "db3": "keys=7,expires=2,avg_ttl=100"}
+	if got := countKeys(keyspace); got != 157 {
+		t.Errorf("countKeys() = %d, want the keys of every database", got)
+	}
+	if got := countKeys(nil); got != 0 {
+		t.Errorf("countKeys() = %d for no databases, want 0", got)
+	}
 }

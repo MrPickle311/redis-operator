@@ -32,6 +32,9 @@ func TestDecideSelfAction(t *testing.T) {
 		{"the primary is this Pod", withStatus("cache-0", ""), nil, 0, "master", false, keepRole},
 		{"another Pod became the primary", withStatus("cache-1", ""), nil, 0, "master", false, selfDemote},
 		{"no primary recorded yet", withStatus("", ""), nil, 0, "master", false, keepRole},
+		// Promoted a moment ago, before the operator recorded it: demoting
+		// now would leave the instance without a primary.
+		{"this Pod is being promoted", withStatus("cache-1", "cache-0"), nil, 0, "master", false, keepRole},
 		{"a replica follows the operator", withStatus("cache-1", ""), nil, 0, "slave", false, keepRole},
 		{"the API server is out of reach briefly", nil, fenceOnAPILoss(true), 10 * time.Second, "master", false, keepRole},
 		{"the API server is out of reach for half the delay", nil, fenceOnAPILoss(true), 16 * time.Second, "master", false, selfFence},

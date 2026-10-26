@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -53,7 +54,8 @@ func (r *RedisInstanceReconciler) reconcileFailover(ctx context.Context, instanc
 		logf.FromContext(ctx).Info("No replica can take over from the unavailable primary", "primary", instance.Status.CurrentPrimary)
 		return noCandidateRetry, nil
 	}
-	if err := r.startFailover(ctx, instance, target, unavailable); err != nil {
+	reason := fmt.Sprintf("%s for %s", unavailable, instance.Spec.Failover.Delay.Duration)
+	if err := r.startFailover(ctx, instance, target, reason); err != nil {
 		return 0, err
 	}
 	return 0, r.continueFailover(ctx, instance)
@@ -78,6 +80,12 @@ func (r *RedisInstanceReconciler) primaryUnavailability(ctx context.Context, ins
 
 // failoverCandidate returns the Ready replica with the most of the dataset.
 func (r *RedisInstanceReconciler) failoverCandidate(ctx context.Context, instance *redisv1.RedisInstance) (string, bool) {
+	best, ok := bestCandidate(r.readyReplicas(ctx, instance))
+	return instancePodName(instance, best), ok
+}
+
+// readyReplicas returns the status of every Ready replica that answers.
+func (r *RedisInstanceReconciler) readyReplicas(ctx context.Context, instance *redisv1.RedisInstance) []candidate {
 	primary := primaryOrdinal(instance)
 	var candidates []candidate
 	for ordinal := range instance.Spec.Instances {
@@ -99,8 +107,7 @@ func (r *RedisInstanceReconciler) failoverCandidate(ctx context.Context, instanc
 		}
 		candidates = append(candidates, candidate{ordinal: ordinal, status: status})
 	}
-	best, ok := bestCandidate(candidates)
-	return instancePodName(instance, best), ok
+	return candidates
 }
 
 // candidate is a replica that may become the primary.
@@ -146,7 +153,7 @@ func (r *RedisInstanceReconciler) startFailover(ctx context.Context, instance *r
 		return err
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "FailoverStarted", "Failover",
-		"Promoting %s, as %s for %s", target, reason, instance.Spec.Failover.Delay.Duration)
+		"Promoting %s: %s", target, reason)
 	logf.FromContext(ctx).Info("Started failover", "from", from, "to", target, "epoch", instance.Status.PrimaryEpoch)
 	return nil
 }
@@ -173,7 +180,10 @@ func (r *RedisInstanceReconciler) continueFailover(ctx context.Context, instance
 	}
 	instance.Status.CurrentPrimary = to
 	instance.Status.TargetPrimary = ""
-	r.setFailoverCondition(instance, metav1.ConditionFalse, "Completed", fmt.Sprintf("Promoted %s in place of %s", to, from))
+	// The reason of the failover stays, after "Promoting <target>: ".
+	_, reason, _ := strings.Cut(meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionFailover).Message, ": ")
+	r.setFailoverCondition(instance, metav1.ConditionFalse, "Completed",
+		fmt.Sprintf("Promoted %s in place of %s: %s", to, from, reason))
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}

@@ -50,7 +50,7 @@ func TestReplicaOfAPIRejectsBadRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	rdb := deadRedis(t) // the rejected requests never reach Redis
-	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: path}))
+	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: path}, &readiness{}))
 	defer srv.Close()
 
 	tests := []struct {
@@ -83,7 +83,7 @@ func TestFenceAndPromoteAPIsRejectBadRequests(t *testing.T) {
 	if err := writeEpoch(path, 5); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: path}))
+	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: path}, &readiness{}))
 	defer srv.Close()
 
 	for _, endpoint := range []string{"/fence", "/promote"} {

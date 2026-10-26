@@ -47,7 +47,9 @@ func decideSelfAction(instance, last *redisv1.RedisInstance, sinceRead time.Dura
 		}
 		return keepRole
 	}
-	if primary := instance.Status.CurrentPrimary; primary != "" && primary != pod {
+	// While a switchover or failover runs, the operator moves the primary:
+	// a target it just promoted still reads the old currentPrimary.
+	if primary := instance.Status.CurrentPrimary; primary != "" && primary != pod && instance.Status.TargetPrimary == "" {
 		return selfDemote
 	}
 	// Never during a switchover: that fence belongs to the operator.

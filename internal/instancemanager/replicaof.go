@@ -140,8 +140,9 @@ func fence(ctx context.Context, rdb *redis.Client) error {
 	return rdb.Do(ctx, "CLIENT", "PAUSE", fenceTimeout.Milliseconds(), "WRITE").Err()
 }
 
-// promote makes Redis a primary and lifts the fence. It returns true when
-// Redis was a replica before.
+// promote makes Redis a primary that takes writes and lets replicas sync: it
+// lifts the fence and opens replication, closed when a primary starts. It
+// returns true when Redis was a replica before.
 func promote(ctx context.Context, rdb *redis.Client) (bool, error) {
 	status, err := readStatus(ctx, rdb)
 	if err != nil {
@@ -153,5 +154,9 @@ func promote(ctx context.Context, rdb *redis.Client) (bool, error) {
 			return false, err
 		}
 	}
-	return changed, rdb.ClientUnpause(ctx).Err()
+	if err := rdb.ClientUnpause(ctx).Err(); err != nil {
+		return false, err
+	}
+	// Replicas may sync from now on, see redisConfig.
+	return changed, rdb.Do(ctx, "ACL", "SETUSER", ReplicationUser, "on").Err()
 }

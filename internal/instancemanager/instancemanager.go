@@ -69,7 +69,7 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	}
 	status := &http.Server{
 		Addr:              ":" + strconv.Itoa(StatusPort),
-		Handler:           apiHandler(rdb, guard),
+		Handler:           apiHandler(rdb, guard, ready),
 		TLSConfig:         serverTLSConfig(CertificatesDir),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -88,6 +88,8 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	if primary := instance.Status.CurrentPrimary; primary != opts.PodName {
 		replicaOf = PodFQDN(primary, opts.Instance, opts.Namespace)
 	}
+	// A replica needs no approval; a primary waits for one, see redisConfig.
+	ready.approved.Store(replicaOf != "")
 
 	limit, err := memoryLimit(cgroupMemoryMax)
 	if err != nil {

@@ -502,10 +502,15 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Before the rollout and the switchover: both need a primary that works.
+	retrySafeStart, err := r.reconcileSafeStart(ctx, &instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	retryFailover, err := r.reconcileFailover(ctx, &instance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	retryFailover = soonest(retryFailover, retrySafeStart)
 
 	// Before the switchover: the update of the primary starts one.
 	healthy := readyCount == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
