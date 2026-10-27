@@ -5,8 +5,10 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -28,7 +30,8 @@ const (
 	// reconcileMissingPVC; the replica syncs again.
 	deleteReplicaPod
 	// recreateReplica: a generated volume of a replica lost its
-	// PersistentVolume. The instance moves to a new generated PVC, like recreate.
+	// PersistentVolume, or its node (spec.storage.recreateOnNodeLoss). The
+	// instance moves to a new generated PVC, like recreate.
 	recreateReplica
 )
 
@@ -36,7 +39,9 @@ const (
 // It acts on one at a time, and only while every other instance is Ready, so
 // at most one instance is down for its volume. External volumes of replicas
 // belong to the user: they are only reported, in StorageReady.
-func volumeFailureAction(instance *redisv1.RedisInstance, ready map[int32]bool) (int32, volumeAction) {
+//
+// nodeLost tells which volumes are local to a node that is gone.
+func volumeFailureAction(instance *redisv1.RedisInstance, ready, nodeLost map[int32]bool) (int32, volumeAction) {
 	primary := primaryOrdinal(instance)
 	for ordinal := range instance.Spec.Instances {
 		i := slices.IndexFunc(instance.Status.Volumes, func(v redisv1.VolumeStatus) bool { return v.Ordinal == ordinal })
@@ -44,7 +49,7 @@ func volumeFailureAction(instance *redisv1.RedisInstance, ready map[int32]bool) 
 			continue
 		}
 		vol := instance.Status.Volumes[i]
-		failing := vol.State == redisv1.VolumeTerminating || vol.State == redisv1.VolumeLost
+		failing := vol.State == redisv1.VolumeTerminating || vol.State == redisv1.VolumeLost || nodeLost[ordinal]
 		if !failing || !othersReady(instance, ready, ordinal) {
 			continue
 		}
@@ -83,7 +88,15 @@ func (r *RedisInstanceReconciler) reconcileVolumeFailures(ctx context.Context, i
 		return nil // the switchover asked by the user moves the primary anyway
 	}
 
-	ordinal, action := volumeFailureAction(instance, ready)
+	nodeLost := map[int32]bool{}
+	if instance.Spec.Storage.RecreateOnNodeLoss {
+		for _, vol := range instance.Status.Volumes {
+			if !vol.External && vol.Ordinal != primaryOrdinal(instance) && vol.Ordinal < instance.Spec.Instances {
+				nodeLost[vol.Ordinal] = r.volumeNodeLost(ctx, instance, vol)
+			}
+		}
+	}
+	ordinal, action := volumeFailureAction(instance, ready, nodeLost)
 	name := instancePodName(instance, ordinal)
 	claim := volumeOf(instance, ordinal).ClaimName
 	logger := logf.FromContext(ctx)
@@ -103,8 +116,12 @@ func (r *RedisInstanceReconciler) reconcileVolumeFailures(ctx context.Context, i
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: instance.Namespace}}
 		return client.IgnoreNotFound(r.Delete(ctx, pod))
 	case recreateReplica:
+		why := "PVC " + claim + " lost its volume"
+		if nodeLost[ordinal] {
+			why = "the node of PVC " + claim + " is lost"
+		}
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "ReplicaVolumeFailing", "Recreate",
-			"Recreating %s on a new generated PVC: PVC %s lost its volume", name, claim)
+			"Recreating %s on a new generated PVC: %s", name, why)
 		logger.Info("Recreating a replica whose PVC lost its volume", "pod", name, "pvc", claim)
 		if err := r.moveToNewVolume(ctx, instance, ordinal); err != nil {
 			return err
@@ -112,4 +129,43 @@ func (r *RedisInstanceReconciler) reconcileVolumeFailures(ctx context.Context, i
 		return r.Status().Update(ctx, instance)
 	}
 	return nil
+}
+
+// volumeNodeLost reports whether the volume is local to a node that is gone,
+// or that an administrator marked as shut down with the out-of-service taint.
+// Then the volume cannot come back, and the Pod waits on it for good.
+func (r *RedisInstanceReconciler) volumeNodeLost(ctx context.Context, instance *redisv1.RedisInstance, vol redisv1.VolumeStatus) bool {
+	var pvc corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, types.NamespacedName{Name: vol.ClaimName, Namespace: instance.Namespace}, &pvc); err != nil || pvc.Spec.VolumeName == "" {
+		return false
+	}
+	var pv corev1.PersistentVolume
+	if err := r.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, &pv); err != nil {
+		return false
+	}
+	node := localNode(&pv)
+	if node == "" {
+		return false // not a local volume: it follows the Pod to another node
+	}
+	var n corev1.Node
+	if err := r.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+		return apierrors.IsNotFound(err)
+	}
+	return slices.ContainsFunc(n.Spec.Taints, func(t corev1.Taint) bool { return t.Key == corev1.TaintNodeOutOfService })
+}
+
+// localNode returns the node a local PersistentVolume is bound to by its
+// node affinity on the hostname, or "" for a volume any node can mount.
+func localNode(pv *corev1.PersistentVolume) string {
+	if pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
+		return ""
+	}
+	for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
+		for _, expr := range term.MatchExpressions {
+			if expr.Key == corev1.LabelHostname && expr.Operator == corev1.NodeSelectorOpIn && len(expr.Values) == 1 {
+				return expr.Values[0]
+			}
+		}
+	}
+	return ""
 }

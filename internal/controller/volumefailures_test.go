@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -8,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
@@ -28,23 +30,25 @@ func TestVolumeFailureAction(t *testing.T) {
 		name        string
 		instance    *redisv1.RedisInstance
 		ready       map[int32]bool
+		nodeLost    map[int32]bool
 		wantOrdinal int32
 		want        volumeAction
 	}{
-		{"every volume is Ready", instanceWith(vol(0, redisv1.VolumeReady, false), vol(1, redisv1.VolumeReady, false)), allReady, 0, noVolumeAction},
-		{"the volume of the primary is going", instanceWith(vol(0, redisv1.VolumeTerminating, false)), allReady, 0, switchOverPrimary},
-		{"the volume of the primary is lost", instanceWith(vol(0, redisv1.VolumeLost, true)), allReady, 0, switchOverPrimary},
-		{"a primary that is down takes a failover instead", instanceWith(vol(0, redisv1.VolumeLost, false)), map[int32]bool{1: true, 2: true}, 0, noVolumeAction},
-		{"a generated replica volume is going", instanceWith(vol(1, redisv1.VolumeTerminating, false)), allReady, 1, deleteReplicaPod},
-		{"a generated replica volume is lost", instanceWith(vol(2, redisv1.VolumeLost, false)), allReady, 2, recreateReplica},
-		{"an external replica volume belongs to the user", instanceWith(vol(1, redisv1.VolumeLost, true)), allReady, 0, noVolumeAction},
-		{"one instance at a time", instanceWith(vol(1, redisv1.VolumeTerminating, false)), map[int32]bool{0: true, 1: true}, 0, noVolumeAction},
-		{"the lowest ordinal first", instanceWith(vol(2, redisv1.VolumeLost, false), vol(1, redisv1.VolumeTerminating, false)), allReady, 1, deleteReplicaPod},
-		{"Missing is handled when the volume is bound", instanceWith(vol(1, redisv1.VolumeMissing, false)), allReady, 0, noVolumeAction},
+		{"every volume is Ready", instanceWith(vol(0, redisv1.VolumeReady, false), vol(1, redisv1.VolumeReady, false)), allReady, nil, 0, noVolumeAction},
+		{"the volume of the primary is going", instanceWith(vol(0, redisv1.VolumeTerminating, false)), allReady, nil, 0, switchOverPrimary},
+		{"the volume of the primary is lost", instanceWith(vol(0, redisv1.VolumeLost, true)), allReady, nil, 0, switchOverPrimary},
+		{"a primary that is down takes a failover instead", instanceWith(vol(0, redisv1.VolumeLost, false)), map[int32]bool{1: true, 2: true}, nil, 0, noVolumeAction},
+		{"a generated replica volume is going", instanceWith(vol(1, redisv1.VolumeTerminating, false)), allReady, nil, 1, deleteReplicaPod},
+		{"a generated replica volume is lost", instanceWith(vol(2, redisv1.VolumeLost, false)), allReady, nil, 2, recreateReplica},
+		{"an external replica volume belongs to the user", instanceWith(vol(1, redisv1.VolumeLost, true)), allReady, nil, 0, noVolumeAction},
+		{"one instance at a time", instanceWith(vol(1, redisv1.VolumeTerminating, false)), map[int32]bool{0: true, 1: true}, nil, 0, noVolumeAction},
+		{"the lowest ordinal first", instanceWith(vol(2, redisv1.VolumeLost, false), vol(1, redisv1.VolumeTerminating, false)), allReady, nil, 1, deleteReplicaPod},
+		{"the node of a generated replica volume is lost", instanceWith(vol(2, redisv1.VolumeReady, false)), map[int32]bool{0: true, 1: true}, map[int32]bool{2: true}, 2, recreateReplica},
+		{"Missing is handled when the volume is bound", instanceWith(vol(1, redisv1.VolumeMissing, false)), allReady, nil, 0, noVolumeAction},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ordinal, action := volumeFailureAction(tt.instance, tt.ready)
+			ordinal, action := volumeFailureAction(tt.instance, tt.ready, tt.nodeLost)
 			if action != tt.want || (action != noVolumeAction && ordinal != tt.wantOrdinal) {
 				t.Errorf("volumeFailureAction() = %d, %d; want %d, %d", ordinal, action, tt.wantOrdinal, tt.want)
 			}
@@ -102,3 +106,48 @@ var _ = Describe("RedisInstance volume failures", func() {
 		})
 	})
 })
+
+func TestVolumeNodeLost(t *testing.T) {
+	localPV := func(name, node string) *corev1.PersistentVolume {
+		return &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: corev1.PersistentVolumeSpec{NodeAffinity: &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key: "kubernetes.io/hostname", Operator: corev1.NodeSelectorOpIn, Values: []string{node},
+				}}}},
+			}}},
+		}
+	}
+	claim := func(name, volume string) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
+			Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: volume},
+		}
+	}
+	shutDown := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "shut-down"},
+		Spec:       corev1.NodeSpec{Taints: []corev1.Taint{{Key: corev1.TaintNodeOutOfService, Effect: corev1.TaintEffectNoExecute}}},
+	}
+	alive := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "alive"}}
+	r := &RedisInstanceReconciler{Client: fake.NewClientBuilder().WithObjects(
+		shutDown, alive,
+		localPV("pv-alive", "alive"), localPV("pv-shut-down", "shut-down"), localPV("pv-gone", "gone"),
+		&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-network"}},
+		claim("on-alive", "pv-alive"), claim("on-shut-down", "pv-shut-down"), claim("on-gone", "pv-gone"),
+		claim("on-network", "pv-network"), claim("unbound", ""),
+	).Build()}
+	instance := &redisv1.RedisInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "prod"}}
+
+	for claimName, want := range map[string]bool{
+		"on-alive":     false,
+		"on-shut-down": true, // the administrator confirmed the node is down
+		"on-gone":      true, // the node was removed, e.g. by the autoscaler
+		"on-network":   false,
+		"unbound":      false,
+		"missing":      false,
+	} {
+		if got := r.volumeNodeLost(context.Background(), instance, redisv1.VolumeStatus{ClaimName: claimName}); got != want {
+			t.Errorf("volumeNodeLost(%s) = %v, want %v", claimName, got, want)
+		}
+	}
+}

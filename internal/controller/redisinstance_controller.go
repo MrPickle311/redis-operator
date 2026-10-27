@@ -74,6 +74,7 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 
 // buildRedisPod returns the Pod of the instance with the given ordinal, with
 // claimName, the PVC bound in status.volumes, as its data volume.

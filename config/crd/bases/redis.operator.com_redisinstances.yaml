@@ -289,6 +289,14 @@ spec:
                     x-kubernetes-list-map-keys:
                     - instanceOrdinal
                     x-kubernetes-list-type: map
+                  recreateOnNodeLoss:
+                    description: |-
+                      RecreateOnNodeLoss moves a replica whose generated volume is local to a
+                      node that is gone, or tainted node.kubernetes.io/out-of-service, to a
+                      new generated volume, where it syncs from the primary. Without it such a
+                      replica waits for its node. External volumes and the primary are never
+                      moved: a failover takes over from a primary on a lost node first.
+                    type: boolean
                   volumeClaimTemplate:
                     description: |-
                       VolumeClaimTemplate is used to generate a PVC for every instance

@@ -151,3 +151,115 @@ func ndCLI(g Gomega, pod string, args ...string) string {
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
 }
+
+const (
+	nlNamespace = "redis-e2e-node-loss"
+	nlName      = "nl"
+)
+
+var nlManifest = fmt.Sprintf(`
+apiVersion: redis.operator.com/v1
+kind: RedisInstance
+metadata: {name: %s, namespace: %s}
+spec:
+  instances: 2
+  image: %s
+  storage:
+    volumeClaimTemplate: {size: 256Mi}
+    recreateOnNodeLoss: true
+  resources:
+    requests: {memory: 128Mi}
+    limits: {memory: 128Mi}
+  failover:
+    delay: 10s
+`, nlName, nlNamespace, redisImage)
+
+// Scenario: the node of the primary stops for good. Kind keeps every node in
+// a Docker container, so stopping the container stops the node; the volumes
+// of the local-path provisioner are local to their node.
+var _ = Describe("Node loss", Ordered, func() {
+	SetDefaultEventuallyTimeout(5 * time.Minute)
+	SetDefaultEventuallyPollingInterval(3 * time.Second)
+
+	var lost, oldPrimary, password string
+
+	BeforeAll(func() {
+		Expect(loadImageIntoKind(redisImage)).To(Succeed())
+		Expect(ensureRestrictedNamespace(nlNamespace)).To(Succeed())
+		Expect(kubectlApply(nlManifest)).To(Succeed())
+		Eventually(func(g Gomega) {
+			out, err := kubectl("get", "secret", nlName+"-internal-auth", "-n", nlNamespace,
+				"-o", "go-template={{index .data \"operator-password\" | base64decode}}")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).NotTo(BeEmpty())
+			password = out
+		}).Should(Succeed())
+		for i := range 2 {
+			Eventually(func() bool { return podReadyIn(nlNamespace, fmt.Sprintf("%s-%d", nlName, i)) }).Should(BeTrue())
+		}
+	})
+
+	AfterAll(func() {
+		if lost != "" {
+			By("bringing node " + lost + " back")
+			_, _ = utils.Run(exec.Command("docker", "start", lost))
+			_, _ = kubectl("taint", "node", lost, "node.kubernetes.io/out-of-service-")
+			_, _ = kubectl("wait", "--for=condition=Ready", "node/"+lost, "--timeout=3m")
+		}
+		_, _ = kubectl("delete", "ns", nlNamespace, "--ignore-not-found", "--timeout=2m")
+	})
+
+	cli := func(g Gomega, pod string, args ...string) string {
+		out, err := kubectl(append([]string{"exec", pod, "-n", nlNamespace, "-c", "redis", "--",
+			"redis-cli", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
+		g.Expect(err).NotTo(HaveOccurred())
+		return out
+	}
+	get := func(jsonpath string) string {
+		out, _ := kubectl("get", "redisinstance", nlName, "-n", nlNamespace, "-o", "jsonpath="+jsonpath)
+		return out
+	}
+	nodeOf := func(pod string) string {
+		out, _ := kubectl("get", "pod", pod, "-n", nlNamespace, "-o", "jsonpath={.spec.nodeName}")
+		return out
+	}
+
+	It("fails over once the node of the primary stops", func() {
+		oldPrimary = get("{.status.currentPrimary}")
+		Expect(cli(Default, oldPrimary, "SET", "nl-key", "kept")).To(Equal("OK"))
+		Eventually(func(g Gomega) {
+			for i := range 2 {
+				g.Expect(cli(g, fmt.Sprintf("%s-%d", nlName, i), "GET", "nl-key")).To(Equal("kept"))
+			}
+		}).Should(Succeed())
+
+		lost = nodeOf(oldPrimary)
+		By("stopping node " + lost)
+		_, err := utils.Run(exec.Command("docker", "stop", lost))
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func() string { return get("{.status.currentPrimary}") }).ShouldNot(Equal(oldPrimary))
+		newPrimary := get("{.status.currentPrimary}")
+		Expect(cli(Default, newPrimary, "GET", "nl-key")).To(Equal("kept"))
+	})
+
+	It("moves the old primary, now a replica, to a new volume on another node once the node is out of service", func() {
+		claim := oldPrimary + "-data"
+		oldUID := get(fmt.Sprintf("{.status.volumes[?(@.claimName==%q)].uid}", claim))
+
+		By("marking node " + lost + " as shut down, which lets Kubernetes delete its Pods")
+		_, err := kubectl("taint", "node", lost, "node.kubernetes.io/out-of-service=nodeshutdown:NoExecute")
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func() bool { return podReadyIn(nlNamespace, oldPrimary) }).Should(BeTrue())
+		Expect(nodeOf(oldPrimary)).NotTo(Equal(lost))
+		Expect(get(fmt.Sprintf("{.status.volumes[?(@.claimName==%q)].uid}", claim))).NotTo(Equal(oldUID))
+		Eventually(func(g Gomega) {
+			g.Expect(cli(g, oldPrimary, "INFO", "replication")).To(ContainSubstring("role:slave"))
+			g.Expect(cli(g, oldPrimary, "GET", "nl-key")).To(Equal("kept"))
+		}).Should(Succeed())
+		events, err := kubectl("get", "events", "-n", nlNamespace, "--field-selector", "reason=ReplicaVolumeFailing", "-o", "jsonpath={.items[*].message}")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(events).To(ContainSubstring("is lost"))
+	})
+})

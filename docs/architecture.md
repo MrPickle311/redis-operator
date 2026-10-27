@@ -720,6 +720,34 @@ sequenceDiagram
 - Without a Ready replica on a node that takes Pods, the operator does not
   switch over and the drain waits.
 
+**A node that fails** (power, kernel, network):
+
+1. After about 40 s the node is `NotReady` and its Pods are no longer Ready.
+   A primary among them is replaced by a [failover](#failover) after
+   `failover.delay`.
+2. The Pods stay on the node, later as `Terminating`, until it comes back:
+   Kubernetes cannot tell a dead node from one cut off from the network, and
+   mounting its volumes elsewhere could let two Pods write to one volume.
+3. **Once you know the node is down for good,** taint it:
+   `kubectl taint node <node> node.kubernetes.io/out-of-service=nodeshutdown:NoExecute`.
+   Kubernetes then deletes its Pods and detaches their volumes (non-graceful
+   node shutdown), and the operator creates them again: with network storage
+   on another node, with the same PVC.
+4. **Local volumes** (e.g. local-path, local PVs) cannot move: a new Pod on
+   such a volume stays `Pending`. With
+
+   ```yaml
+   spec:
+     storage:
+       recreateOnNodeLoss: true
+   ```
+
+   a replica whose generated volume is local to a node that is gone, or
+   tainted `out-of-service`, moves to a new generated volume and syncs from
+   the primary (Event `ReplicaVolumeFailing`). The primary never moves this
+   way: the failover makes it a replica first. External volumes are never
+   moved. Off by default, as a node that comes back would have its data again.
+
 ## Rolling update
 
 Every Pod carries the annotation `redis.operator.com/spec-hash`: a hash of

@@ -259,6 +259,14 @@ type StorageSpec struct {
 	// +listMapKey=instanceOrdinal
 	// +kubebuilder:validation:MaxItems=64
 	ExistingClaims []ExistingClaim `json:"existingClaims,omitempty"`
+
+	// RecreateOnNodeLoss moves a replica whose generated volume is local to a
+	// node that is gone, or tainted node.kubernetes.io/out-of-service, to a
+	// new generated volume, where it syncs from the primary. Without it such a
+	// replica waits for its node. External volumes and the primary are never
+	// moved: a failover takes over from a primary on a lost node first.
+	// +optional
+	RecreateOnNodeLoss bool `json:"recreateOnNodeLoss,omitempty"`
 }
 
 type VolumeClaimTemplateSpec struct {
