@@ -672,6 +672,16 @@ graph LR
 - **Brak `serverSecretRef`** → operator generuje wewnętrzną PKI (self-signed CA per `RedisInstance`, Secret `<name>-ca` i `<name>-server-tls`) i sam ją rotuje przed wygaśnięciem.
 - **Rotacja:** IM wykrywa zmianę zamontowanych plików (inotify + fallback polling, bo zamontowane Secrety podmieniają symlink `..data`) i wykonuje `CONFIG SET tls-cert-file/tls-key-file/tls-ca-cert-file`. Redis ładuje nowe certy przy `CONFIG SET` dla nowych połączeń, a istniejące połączenia zostają. Nie ma rolling restartu. To odpowiada na dawną otwartą decyzję #1: `CONFIG SET`, nie SIGHUP.
 
+**Krok 5 — decyzje (2026-10-28):** TLS **domyślnie włączony** (`spec.tls.enabled: true`; operator nie ma jeszcze wdrożeń, bezpieczny wariant domyślny); **tylko TLS** (`port 0`, `tls-port 6379`; bez równoległego plaintextu); `tls-cluster` (cluster bus) w kroku 10.
+
+**Krok 5 — PKI i rotacja (decyzje 2026-10-28):**
+- **CA per instancja** (`<name>-ca`: `ca.crt` + `ca.key`, ważne 10 lat), nie wspólne CA operatora: izolacja zaufania między bazami (klient ufa tylko swojej), rotacja CA jednej bazy bez dotykania innych, prosty `clientAuth` w 5.7. „CA” to tu tylko para kluczy z certyfikatem `CA:true` w Secrecie; certy podpisuje kod operatora (`internal/pki`), bez CRL/OCSP — zamiast unieważniania krótka ważność certów serwera (90 dni).
+- **Rotacja certu serwera:** automatyczna po 2/3 ważności, tym samym CA → update Secretu → kubelet podmienia pliki atomowo (`..data`) → IM co 30 s porównuje treść plików i robi `CONFIG SET tls-cert-file/tls-key-file/tls-ca-cert-file` → nowe połączenia dostają nowy cert, istniejące trwają; klienci i repliki bez zmian (ufają CA).
+- **Pody montują zawsze Secret zarządzany przez operatora** (`<name>-server-tls`), także przy `serverSecretRef`: operator waliduje nową wersję certu użytkownika (para, ważność, SAN) i dopiero wtedy kopiuje ją do swojego Secretu; zły cert → `TLSReady=False`, Pody serwują poprzedni. Jeden mechanizm rotacji dla obu źródeł.
+- **Rotacja CA odłożona:** w kroku 5 tylko ostrzeżenie (condition/Event), gdy do wygaśnięcia CA zostaje < 1 rok. Później: nowe CA, bundle stare+nowe w `ca.crt` dla klientów, po okresie przejściowym certy z nowego CA, potem usunięcie starego; wyzwalane adnotacją-żądaniem (`redis.operator.com/rotate-ca=<token>`, wzorzec `handledRequests`) albo automatycznie < 1 rok przed wygaśnięciem.
+
+**Podkroki:** 5.1 IM ↔ Redis przez unix socket w emptyDir (IM, probe'y i `/config` bez certu klienta) · 5.2 API `spec.tls` + CEL + condition `TLSReady` · 5.3 wewnętrzna PKI per instancja (`<name>-ca`, `<name>-server-tls`, SAN Services i wildcard headless, rotacja po 2/3) · 5.4 Redis z TLS (`tls-*`, `tls-replication`, `tls-auth-clients`; włączenie/wyłączenie przez rolling update) · 5.5 rotacja bez restartu (polling plików, `CONFIG SET tls-*`) · 5.6 własne certy `serverSecretRef` (watch, walidacja pary, ważności i SAN, `TLSReady=False` bez wdrażania złego certu) · 5.7 `clientAuth`/`clientCASecretRef` (osobny cert klienta replikacji przez `tls-client-cert-file`, `tls-ca-cert-file` jako bundle) · 5.8 docs i e2e całości.
+
 ---
 
 ## 8. Użytkownicy i ACL — trzy źródła
