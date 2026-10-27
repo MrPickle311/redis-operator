@@ -1096,3 +1096,41 @@ Prostszy wariant do zrobienia w tym samym osobnym projekcie, prawdopodobnie prze
 3. Transport syncera: własny protokół na TCP/TLS czy strumień przez istniejący broker.
 4. Semantyka TTL i usuwania kluczy między lokalizacjami.
 
+## 19. Odłożone: testy partycji sieci
+
+Dopisane 2026-10-28, poza zakresem roadmapy z sekcji 17. Test `Network partition` z kroku 4.7 sprawdza tylko jeden przypadek: primary odcięty od control plane'u, ale nie od replik. Niżej pełna lista podziałów sieci do przetestowania (`iptables` w kontenerach węzłów Kinda; kindnet ignoruje NetworkPolicy). Wszędzie obowiązuje ten sam niezmiennik: **nigdy dwa primary przyjmujące zapisy jednocześnie** (sonda zapisów na każdym Podzie co ~1 s), a po zagojeniu partycji każda instancja jest repliką jedynego primary.
+
+Wynik zależy od tego, po której stronie podziału jest **control plane** (API server, operator): operator widzi tylko to, co widzi API server, a kubelety odcięte od API po ~40 s oznaczają swoje Pody jako nie Ready.
+
+### Przypadek 1: klaster na pół, w każdej połowie część instancji
+
+**RedisInstance** (jeden primary; w każdej połowie są repliki, primary w jednej z nich):
+
+| Podział | Oczekiwane zachowanie | Do sprawdzenia |
+|---|---|---|
+| 1a. Połowa A: primary, repliki, control plane; połowa B: repliki | brak failoveru, zapisy działają; repliki w B tracą łącze (`master_link_status:down`), ale zostają Ready (latch z kroku 2.3) i serwują stare odczyty przez `-ro` | po zagojeniu repliki B robią partial resync; `minReplicasToWrite` liczy tylko repliki z A — przy zbyt wysokiej wartości zapisy staną (`NOREPLICAS`) |
+| 1b. Połowa A: primary i repliki; połowa B: repliki i control plane | primary bez API fencuje się po `delay/2`; węzły A są `NotReady` dla API, więc Pody A nie są Ready; failover na najlepszą replikę w B po `delay` | zapisy przyjęte w A przed samo-fencingiem trafiły tylko do replik w A i giną przy ich resyncu z nowego primary (granica utraty: `delay/2`, z `minReplicasToWrite` większym niż liczba replik w A — `minReplicasMaxLag`); po zagojeniu stary primary i repliki A są replikami nowego |
+| 1c. Obie połowy widzą control plane, ale nie siebie nawzajem | primary jest Ready (kubelet zdrowy), więc **brak failoveru**; repliki z drugiej połowy tracą łącze | brak dwóch primary; operator może nie dosięgnąć IM w drugiej połowie (`/replicaof`, `/config` ponawiane); `minReplicasToWrite` jak w 1a |
+
+**RedisCluster** (krok 10; w każdej połowie są mastery i repliki shardów): failover robi sam Redis Cluster (głosowanie masterów), operator nie może z nim konkurować.
+
+| Podział | Oczekiwane zachowanie | Do sprawdzenia |
+|---|---|---|
+| 1d. Większość masterów po stronie A | po `cluster-node-timeout` A promuje repliki shardów, których mastery są w B (jeśli te repliki są w A); mastery w B przestają przyjmować zapisy (brak większości, `CLUSTERDOWN` przy `cluster-require-full-coverage yes`) | dla każdego slotu najwyżej jeden master przyjmujący zapisy po `cluster-node-timeout`; utrata ograniczona do tego okna; po zagojeniu stare mastery z B są replikami; shard bez repliki w A jest niedostępny do zagojenia |
+| 1e. Podział po równo (brak większości po żadnej stronie) | żadna strona nie promuje replik; obie po `cluster-node-timeout` odrzucają zapisy | brak dwóch masterów dla slotu; dostępność wraca dopiero po zagojeniu |
+| 1f. Operator po stronie mniejszości | operator nie może promować replik „za” Redis Cluster ani zmieniać slotów | operator tylko raportuje; brak akcji sprzecznych z decyzją większości |
+
+### Przypadek 2: primary całkowicie odcięty od replik
+
+| Podział | Oczekiwane zachowanie | Do sprawdzenia |
+|---|---|---|
+| 2a. Primary odcięty od replik, ale widzi control plane i klientów | primary jest Ready, więc **brak failoveru**; zapisy idą dalej, ale do żadnej repliki | bez `minReplicasToWrite` zapisy są niezreplikowane (giną, jeśli primary potem padnie); z `minReplicasToWrite: 1` primary odrzuca zapisy po `minReplicasMaxLag` (koszt: niedostępność zapisów). Luka do rozważenia: operator mógłby wykrywać „primary bez żadnej połączonej repliki” (`/status`) i robić failover albo raportować condition |
+| 2b. Primary odcięty od replik i od control plane'u, klienci dalej do niego piszą | primary fencuje się po `delay/2`, failover po `delay` | opis niżej |
+| 2c. Primary odcięty od wszystkiego, także od klientów | failover po `delay`; do starego primary nie dociera żaden zapis | strata tylko lagu replikacji z chwili podziału |
+
+Przypadek 2b w szczegółach: test `Network partition` z kroku 4.7 odcina primary tylko od control plane'u (probe, API IM, API server); port 6379 zostaje otwarty, więc repliki dalej replikują i nic nie ginie. Brakuje najgorszego przypadku: primary odcięty **także od replik**, a klienci dalej do niego piszą. Zapisy z okna od utraty kontaktu do samo-fencingu (≤ `delay/2`) nie trafiają do żadnej repliki i po failoverze przepadają. Test: dodatkowa reguła `iptables` na węźle primary (`FORWARD -d <pod> --dport 6379` i `-s <pod> --sport 6379`, repliki są na innych węzłach przez anti-affinity; „klient” przez `kubectl exec` na `localhost` dalej pisze). Dwa warianty:
+
+1. bez `minReplicasToWrite`: zapisy z tego okna giną po failoverze (udokumentowana granica utraty danych) — test liczy, ile ich przepadło, i sprawdza, że nie więcej niż z `delay/2`;
+2. z `minReplicasToWrite: 1`: primary sam odrzuca zapisy (`NOREPLICAS`) po `minReplicasMaxLag`, więc strata ogranicza się do tych sekund.
+
+W obu: nigdy dwa primary przyjmujące zapisy, a po zdjęciu reguł stary primary staje się repliką nowego (jego niezreplikowane zapisy znikają w pełnym resyncu).
