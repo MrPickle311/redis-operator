@@ -161,8 +161,8 @@ spec:
                     - message: 'parameters must not set options the operator manages:
                         ports, files, replication, users, memory, persistence, TLS,
                         cluster and commands that run code; databases and io-threads
-                        go to spec.redis.startup'
-                      rule: '!self.exists(k, k.matches(''^(bind|port|unixsocket.*|protected-mode|dir|dbfilename|append(only|dirname|filename)|save|(replica|slave)of|master(user|auth)|replica-(announce-.*|read-only)|slave-read-only|user|aclfile|requirepass|maxmemory|maxmemory-policy|databases|io-threads.*|include|rename-command|loadmodule|daemonize|supervised|pidfile|logfile|enable-.*-(command|configs)|tls-.*|cluster-.*)$''))'
+                        go to spec.redis.startup, min-replicas-* to spec.replication'
+                      rule: '!self.exists(k, k.matches(''^(bind|port|unixsocket.*|protected-mode|dir|dbfilename|append(only|dirname|filename)|save|(replica|slave)of|master(user|auth)|replica-(announce-.*|read-only)|slave-read-only|user|aclfile|requirepass|maxmemory|maxmemory-policy|min-(replicas|slaves)-.*|databases|io-threads.*|include|rename-command|loadmodule|daemonize|supervised|pidfile|logfile|enable-.*-(command|configs)|tls-.*|cluster-.*)$''))'
                   persistence:
                     default: aof
                     description: Persistence is how the dataset survives a restart
@@ -196,6 +196,31 @@ spec:
                         minimum: 1
                         type: integer
                     type: object
+                type: object
+              replication:
+                default: {}
+                description: Replication bounds the writes a failover can lose.
+                properties:
+                  minReplicasMaxLag:
+                    default: 10
+                    description: |-
+                      MinReplicasMaxLag is the lag in seconds up to which a replica counts
+                      for MinReplicasToWrite.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  minReplicasToWrite:
+                    default: 0
+                    description: |-
+                      MinReplicasToWrite makes the primary refuse writes (NOREPLICAS) unless
+                      that many replicas are connected and lag at most MinReplicasMaxLag
+                      seconds. A primary cut off from its replicas then stops taking writes
+                      by itself, so a failover elsewhere loses at most MinReplicasMaxLag
+                      seconds of them. 0, the default, never refuses a write; any other value
+                      also stops writes while too few replicas run, e.g. during a rollout.
+                    format: int32
+                    minimum: 0
+                    type: integer
                 type: object
               resources:
                 description: |-
@@ -327,6 +352,10 @@ spec:
             - storage
             type: object
             x-kubernetes-validations:
+            - message: replication.minReplicasToWrite must be below instances, or
+                the primary refuses every write
+              rule: '!has(self.replication) || !has(self.replication.minReplicasToWrite)
+                || self.replication.minReplicasToWrite < self.instances'
             - message: storage.volumeClaimTemplate is required unless storage.existingClaims
                 cover every instance
               rule: has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims)

@@ -75,6 +75,7 @@ const ConditionReady = "Ready"
 const AnnotationRecreate = "redis.operator.com/recreate"
 
 // RedisInstanceSpec defines the desired state of RedisInstance
+// +kubebuilder:validation:XValidation:rule="!has(self.replication) || !has(self.replication.minReplicasToWrite) || self.replication.minReplicasToWrite < self.instances",message="replication.minReplicasToWrite must be below instances, or the primary refuses every write"
 // +kubebuilder:validation:XValidation:rule="has(self.storage.volumeClaimTemplate) || (has(self.storage.existingClaims) && self.storage.existingClaims.filter(c, c.instanceOrdinal < self.instances).size() == self.instances)",message="storage.volumeClaimTemplate is required unless storage.existingClaims cover every instance"
 type RedisInstanceSpec struct {
 	// +kubebuilder:validation:Minimum=1
@@ -103,10 +104,38 @@ type RedisInstanceSpec struct {
 	// +optional
 	Failover FailoverSpec `json:"failover,omitzero"`
 
+	// Replication bounds the writes a failover can lose.
+	// +kubebuilder:default={}
+	// +optional
+	Replication ReplicationSpec `json:"replication,omitzero"`
+
 	// Affinity places the instances on the nodes.
 	// +kubebuilder:default={}
 	// +optional
 	Affinity AffinitySpec `json:"affinity,omitzero"`
+}
+
+// ReplicationSpec bounds the writes a failover can lose. Replication is
+// asynchronous: a primary acknowledges a write before any replica has it, so
+// the writes of its last moments may be missing on the replica promoted.
+type ReplicationSpec struct {
+	// MinReplicasToWrite makes the primary refuse writes (NOREPLICAS) unless
+	// that many replicas are connected and lag at most MinReplicasMaxLag
+	// seconds. A primary cut off from its replicas then stops taking writes
+	// by itself, so a failover elsewhere loses at most MinReplicasMaxLag
+	// seconds of them. 0, the default, never refuses a write; any other value
+	// also stops writes while too few replicas run, e.g. during a rollout.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=0
+	// +optional
+	MinReplicasToWrite int32 `json:"minReplicasToWrite,omitempty"`
+
+	// MinReplicasMaxLag is the lag in seconds up to which a replica counts
+	// for MinReplicasToWrite.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=10
+	// +optional
+	MinReplicasMaxLag int32 `json:"minReplicasMaxLag,omitempty"`
 }
 
 // AffinitySpec places the instances on the nodes.
@@ -181,7 +210,7 @@ type RedisSpec struct {
 	// with CONFIG SET, without a restart, e.g. {"hz": "20"}.
 	// +kubebuilder:validation:MaxProperties=64
 	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z][a-z0-9-]{0,63}$'))",message="parameter names are lowercase options of redis.conf"
-	// +kubebuilder:validation:XValidation:rule="!self.exists(k, k.matches('^(bind|port|unixsocket.*|protected-mode|dir|dbfilename|append(only|dirname|filename)|save|(replica|slave)of|master(user|auth)|replica-(announce-.*|read-only)|slave-read-only|user|aclfile|requirepass|maxmemory|maxmemory-policy|databases|io-threads.*|include|rename-command|loadmodule|daemonize|supervised|pidfile|logfile|enable-.*-(command|configs)|tls-.*|cluster-.*)$'))",message="parameters must not set options the operator manages: ports, files, replication, users, memory, persistence, TLS, cluster and commands that run code; databases and io-threads go to spec.redis.startup"
+	// +kubebuilder:validation:XValidation:rule="!self.exists(k, k.matches('^(bind|port|unixsocket.*|protected-mode|dir|dbfilename|append(only|dirname|filename)|save|(replica|slave)of|master(user|auth)|replica-(announce-.*|read-only)|slave-read-only|user|aclfile|requirepass|maxmemory|maxmemory-policy|min-(replicas|slaves)-.*|databases|io-threads.*|include|rename-command|loadmodule|daemonize|supervised|pidfile|logfile|enable-.*-(command|configs)|tls-.*|cluster-.*)$'))",message="parameters must not set options the operator manages: ports, files, replication, users, memory, persistence, TLS, cluster and commands that run code; databases and io-threads go to spec.redis.startup, min-replicas-* to spec.replication"
 	// +optional
 	Parameters map[string]ParameterValue `json:"parameters,omitempty"`
 }

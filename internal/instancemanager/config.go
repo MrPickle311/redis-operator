@@ -33,10 +33,13 @@ const (
 // ConfigRequest is the body of POST /config: the configuration of
 // spec.redis that the running Redis must have.
 type ConfigRequest struct {
-	Persistence     string            `json:"persistence"`
-	MaxmemoryPolicy string            `json:"maxmemoryPolicy"`
-	MaxmemoryRatio  int               `json:"maxmemoryRatio"`
-	Parameters      map[string]string `json:"parameters,omitempty"`
+	Persistence     string `json:"persistence"`
+	MaxmemoryPolicy string `json:"maxmemoryPolicy"`
+	MaxmemoryRatio  int    `json:"maxmemoryRatio"`
+	// MinReplicasToWrite and MinReplicasMaxLag are spec.replication.
+	MinReplicasToWrite int               `json:"minReplicasToWrite"`
+	MinReplicasMaxLag  int               `json:"minReplicasMaxLag"`
+	Parameters         map[string]string `json:"parameters,omitempty"`
 }
 
 // ConfigFor returns the configuration of spec.redis of instance. The operator
@@ -51,6 +54,9 @@ func ConfigFor(instance *redisv1.RedisInstance) ConfigRequest {
 		MaxmemoryPolicy: instance.Spec.Redis.MaxmemoryPolicy,
 		MaxmemoryRatio:  int(instance.Spec.Redis.MaxmemoryRatio),
 		Parameters:      parameters,
+
+		MinReplicasToWrite: int(instance.Spec.Replication.MinReplicasToWrite),
+		MinReplicasMaxLag:  int(instance.Spec.Replication.MinReplicasMaxLag),
 	}
 }
 
@@ -79,6 +85,8 @@ func liveOptions(req ConfigRequest, memoryLimit int64) []option {
 		{"maxmemory", strconv.FormatInt(maxmemoryFor(memoryLimit, req.MaxmemoryRatio), 10)},
 		{"maxmemory-policy", req.MaxmemoryPolicy},
 		{"save", save},
+		{"min-replicas-to-write", strconv.Itoa(req.MinReplicasToWrite)},
+		{"min-replicas-max-lag", strconv.Itoa(req.MinReplicasMaxLag)},
 	}
 	for _, name := range slices.Sorted(maps.Keys(req.Parameters)) {
 		options = append(options, option{name, req.Parameters[name]})
