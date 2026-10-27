@@ -33,6 +33,8 @@ flowchart LR
     RI --> RW["Service cache-rw"]:::svc
     RI --> RO["Service cache-ro"]:::svc
     RI --> R["Service cache-r"]:::svc
+    RI --> PDBP["PDB cache-primary"]:::rbac
+    RI --> PDBR["PDB cache-replica"]:::rbac
     RI --> P0["Pod cache-0<br/>primary"]:::pod
     RI --> D0["PVC cache-0-data"]:::pvc
     RI --> P1["Pod cache-1<br/>replica"]:::pod
@@ -57,6 +59,8 @@ How the objects use each other:
 | Service `cache-ro`          | selects `redis.operator.com/role=replica`       | clients that only read                                   |
 | Service `cache-r`           | selects every Pod                               | clients that read from any instance                      |
 | PVC `cache-N-data`          | Redis data                                      | Pod `cache-N`, mounted at `/data`                        |
+| PDB `cache-primary`         | `minAvailable: 1`, the Pod with `role=primary`  | a drain: the primary leaves only after a switchover     |
+| PDB `cache-replica`         | `minAvailable: <replicas - 1>`, the Pods with `role=replica` | a drain: one replica at a time              |
 
 Every Pod carries the labels `app.kubernetes.io/name=redis`,
 `redis.operator.com/instance=cache` and `redis.operator.com/role`
@@ -663,6 +667,58 @@ network problem of the operator alone must not move the primary); Redis that
 answers PING but refuses writes, e.g. `MISCONF` on a full disk; the volume of
 a running primary failing (step 4.4); planned changes, which use a
 switchover.
+
+## Nodes and maintenance
+
+**Placement.** The instances keep to different nodes (pod anti-affinity on
+`redis.operator.com/instance`, per `kubernetes.io/hostname`), so a node that
+fails takes at most one of them and a replica is left for a failover.
+
+```yaml
+spec:
+  affinity:
+    podAntiAffinityType: required   # default; preferred places an instance anyway
+```
+
+With `required`, an instance without a free node stays `Pending`: three
+instances need three nodes that take Pods. `preferred` is for small
+clusters. With local volumes an instance stays on the node of its volume
+after the first placement.
+
+**Maintenance of a node** (`kubectl drain`, an upgrade of the node pool):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ADM as Administrator
+    participant API as Kubernetes API
+    participant OP as Operator
+    participant N as Node of cache-0 (primary)
+
+    ADM->>API: kubectl drain node: cordon first
+    API-->>OP: the node is unschedulable (watch on nodes)
+    ADM->>API: evict cache-0
+    API-->>ADM: 429: PDB cache-primary allows no disruption
+    OP->>OP: switchover to a Ready replica on another node<br/>(Event PrimaryNodeCordoned)
+    Note over OP: cache-0 is now a replica,<br/>the role labels move the budgets along
+    ADM->>API: evict cache-0 (retry)
+    API-->>ADM: allowed by PDB cache-replica
+```
+
+- **PodDisruptionBudgets** hold only voluntary disruptions, which go through
+  the Eviction API (drain, cluster autoscaler, node upgrades). A crash of a
+  node or a `kubectl delete pod` is what failover is for.
+- Both budgets are `minAvailable` counts, kept up to date with
+  `spec.instances`: `maxUnavailable` needs the owner of the Pods to have a
+  scale subresource, which a `RedisInstance` has not, and then allows no
+  disruption at all.
+- A Pod that is not Ready never blocks a drain
+  (`unhealthyPodEvictionPolicy: AlwaysAllow`).
+- **With `instances: 1` there are no budgets:** there is no replica to switch
+  over to, so a budget would block a drain for good. The drain takes the
+  primary, with an outage until it is back.
+- Without a Ready replica on a node that takes Pods, the operator does not
+  switch over and the drain waits.
 
 ## Rolling update
 

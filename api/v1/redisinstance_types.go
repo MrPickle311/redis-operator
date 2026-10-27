@@ -102,7 +102,32 @@ type RedisInstanceSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	Failover FailoverSpec `json:"failover,omitzero"`
+
+	// Affinity places the instances on the nodes.
+	// +kubebuilder:default={}
+	// +optional
+	Affinity AffinitySpec `json:"affinity,omitzero"`
 }
+
+// AffinitySpec places the instances on the nodes.
+type AffinitySpec struct {
+	// PodAntiAffinityType keeps the instances on different nodes, so a node
+	// that fails takes at most one of them. required leaves an instance
+	// Pending without a free node; preferred places it anyway, e.g. on a
+	// small cluster for development.
+	// +kubebuilder:validation:Enum=required;preferred
+	// +kubebuilder:default=required
+	// +optional
+	PodAntiAffinityType PodAntiAffinityType `json:"podAntiAffinityType,omitempty"`
+}
+
+// PodAntiAffinityType tells how strictly the instances avoid each other.
+type PodAntiAffinityType string
+
+const (
+	PodAntiAffinityRequired  PodAntiAffinityType = "required"
+	PodAntiAffinityPreferred PodAntiAffinityType = "preferred"
+)
 
 // FailoverSpec configures what happens when the primary is not available.
 type FailoverSpec struct {

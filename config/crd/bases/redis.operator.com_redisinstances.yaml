@@ -66,6 +66,22 @@ spec:
                     - enabled
                     type: string
                 type: object
+              affinity:
+                default: {}
+                description: Affinity places the instances on the nodes.
+                properties:
+                  podAntiAffinityType:
+                    default: required
+                    description: |-
+                      PodAntiAffinityType keeps the instances on different nodes, so a node
+                      that fails takes at most one of them. required leaves an instance
+                      Pending without a free node; preferred places it anyway, e.g. on a
+                      small cluster for development.
+                    enum:
+                    - required
+                    - preferred
+                    type: string
+                type: object
               failover:
                 default: {}
                 description: Failover configures what happens when the primary is

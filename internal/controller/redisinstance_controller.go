@@ -42,6 +42,7 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/imclient"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	"github.com/MrPickle311/redis-operator/internal/pki"
+	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 )
 
@@ -71,6 +72,8 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // buildRedisPod returns the Pod of the instance with the given ordinal, with
 // claimName, the PVC bound in status.volumes, as its data volume.
@@ -97,6 +100,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 			},
 		},
 		Spec: corev1.PodSpec{
+			Affinity:                     podAffinity(instance),
 			Hostname:                     instancePodName(instance, ordinal),
 			Subdomain:                    headlessServiceName(instance),
 			ServiceAccountName:           instanceAccountName(instance),
@@ -419,6 +423,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.ensureInstanceAccount(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcilePDBs(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	for _, svc := range []*corev1.Service{
 		buildHeadlessService(&instance),
@@ -514,6 +521,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	retryFailover = soonest(retryFailover, retrySafeStart)
 	if err := r.reconcileVolumeFailures(ctx, &instance, ready); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileCordon(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -658,6 +668,9 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
+		// A cordoned node of a primary needs a switchover, see reconcileCordon.
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.instancesOnCordonedNode)).
 		Named("redisinstance").
 		Complete(r)
 }

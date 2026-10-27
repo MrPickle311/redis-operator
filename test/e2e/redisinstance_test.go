@@ -60,6 +60,8 @@ spec:
   resources:
     requests: {memory: 128Mi}
     limits: {memory: 128Mi}
+  # A spec adds a fourth instance, one more than the workers of Kind.
+  affinity: {podAntiAffinityType: preferred}
 `, redisName, redisNamespace, redisInstances, redisImage)
 
 // Passwords of the internal users, read from the Secret the operator generates.

@@ -46,6 +46,8 @@ spec:
   resources:
     requests: {memory: 128Mi}
     limits: {memory: 128Mi}
+  # The scenario scales to 4 instances, one more than the workers of Kind.
+  affinity: {podAntiAffinityType: preferred}
 `, volName, volNamespace, volExternal, volSpare, redisImage)
 
 var volPassword string

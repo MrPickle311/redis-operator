@@ -1,0 +1,9 @@
+# Three workers: the instances of a RedisInstance keep to different nodes
+# (required pod anti-affinity), and cordon and drain need more than one node.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker
