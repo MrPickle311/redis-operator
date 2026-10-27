@@ -24,10 +24,11 @@ func TestConfigFor(t *testing.T) {
 		MaxmemoryPolicy: "allkeys-lru",
 		MaxmemoryRatio:  80,
 		Parameters:      map[string]redisv1.ParameterValue{"hz": "20"},
-	}}}
+	}, Replication: redisv1.ReplicationSpec{MinReplicasToWrite: 1, MinReplicasMaxLag: 5}}}
 	want := ConfigRequest{
 		Persistence: PersistenceRDB, MaxmemoryPolicy: "allkeys-lru", MaxmemoryRatio: 80,
-		Parameters: map[string]string{"hz": "20"},
+		Parameters:         map[string]string{"hz": "20"},
+		MinReplicasToWrite: 1, MinReplicasMaxLag: 5,
 	}
 	if got := ConfigFor(instance); !reflect.DeepEqual(got, want) {
 		t.Errorf("ConfigFor() = %+v, want %+v", got, want)
@@ -59,12 +60,16 @@ func TestLiveOptions(t *testing.T) {
 		MaxmemoryPolicy: "allkeys-lru",
 		MaxmemoryRatio:  75,
 		Parameters:      map[string]string{"notify-keyspace-events": "Ex", "hz": "20"},
+
+		MinReplicasToWrite: 1, MinReplicasMaxLag: 10,
 	}
 	got := liveOptions(req, 1<<30)
 	want := []option{
 		{"maxmemory", "805306368"},
 		{"maxmemory-policy", "allkeys-lru"},
 		{"save", snapshotSchedule},
+		{"min-replicas-to-write", "1"},
+		{"min-replicas-max-lag", "10"},
 		{"hz", "20"}, // the parameters come last, sorted, so the order is stable
 		{"notify-keyspace-events", "Ex"},
 	}

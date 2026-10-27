@@ -6,10 +6,13 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/MrPickle311/redis-operator/test/utils"
 )
 
 const (
@@ -322,6 +325,169 @@ var _ = Describe("Automatic failover", Ordered, func() {
 			g.Expect(afCLI(g, oldPrimary, "GET", "af-safe")).To(Equal("kept"))
 		}).Should(Succeed())
 		Eventually(afReady).Should(Equal("True Ready"))
+	})
+
+	It("switches over when the PersistentVolume of the primary is lost, and moves the old primary to a new volume", func() {
+		oldPrimary := afGet("{.status.currentPrimary}")
+		claim := oldPrimary + "-data"
+		uidOf := func() string { return afGet(fmt.Sprintf("{.status.volumes[?(@.claimName==%q)].uid}", claim)) }
+		oldUID := uidOf()
+		pv, err := kubectl("get", "pvc", claim, "-n", afNamespace, "-o", "jsonpath={.spec.volumeName}")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("deleting PersistentVolume " + pv + " under the bound PVC, which turns the PVC Lost")
+		_, err = kubectl("delete", "pv", pv, "--wait=false")
+		Expect(err).NotTo(HaveOccurred())
+		_, err = kubectl("patch", "pv", pv, "--type=merge", "-p", `{"metadata":{"finalizers":null}}`)
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func() string { return afGet("{.status.currentPrimary}") }).ShouldNot(Equal(oldPrimary))
+		events, err := kubectl("get", "events", "-n", afNamespace, "--field-selector", "reason=PrimaryVolumeFailing", "-o", "jsonpath={.items[*].message}")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(events).To(ContainSubstring("Lost"))
+
+		By("bringing the old primary back as a replica on a new volume")
+		Eventually(uidOf).ShouldNot(Equal(oldUID))
+		Eventually(func(g Gomega) {
+			g.Expect(podReadyIn(afNamespace, oldPrimary)).To(BeTrue())
+			g.Expect(afCLI(g, oldPrimary, "INFO", "replication")).To(ContainSubstring("role:slave"))
+			g.Expect(afCLI(g, oldPrimary, "GET", "af-safe")).To(Equal("kept"))
+		}).Should(Succeed())
+	})
+})
+
+const (
+	npNamespace = "redis-e2e-partition"
+	npName      = "np"
+)
+
+var npManifest = fmt.Sprintf(`
+apiVersion: redis.operator.com/v1
+kind: RedisInstance
+metadata: {name: %s, namespace: %s}
+spec:
+  instances: 3
+  image: %s
+  storage:
+    volumeClaimTemplate: {size: 256Mi}
+  resources:
+    requests: {memory: 128Mi}
+    limits: {memory: 128Mi}
+  failover:
+    delay: 10s
+`, npName, npNamespace, redisImage)
+
+// Scenario: a network partition cuts the primary off from the API server, the
+// operator and the kubelet probes, while clients may still reach Redis on
+// 6379. Kind runs kindnet, which ignores NetworkPolicies, so iptables on the
+// node of the primary cuts the traffic.
+var _ = Describe("Network partition", Ordered, func() {
+	SetDefaultEventuallyTimeout(3 * time.Minute)
+	SetDefaultEventuallyPollingInterval(time.Second)
+
+	var password, oldPrimary, node string
+	var rules [][]string
+
+	pod := func(i int) string { return fmt.Sprintf("%s-%d", npName, i) }
+	get := func(jsonpath string) string {
+		out, _ := kubectl("get", "redisinstance", npName, "-n", npNamespace, "-o", "jsonpath="+jsonpath)
+		return out
+	}
+	cli := func(g Gomega, p string, args ...string) string {
+		out, err := kubectl(append([]string{"exec", p, "-n", npNamespace, "-c", "redis", "--",
+			"redis-cli", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
+		g.Expect(err).NotTo(HaveOccurred())
+		return out
+	}
+	// takesWrites tells whether a write on the Pod succeeds within 2 seconds:
+	// a replica answers READONLY, a fenced primary makes it wait.
+	takesWrites := func(p string) bool {
+		out, err := kubectl("exec", p, "-n", npNamespace, "-c", "redis", "--", "timeout", "2",
+			"redis-cli", "--user", "_operator", "--pass", password, "--no-auth-warning", "SET", "np-probe", "v")
+		return err == nil && out == "OK"
+	}
+	iptables := func(op string) {
+		for _, rule := range rules {
+			args := append([]string{"exec", node, "iptables", op}, rule...)
+			_, _ = utils.Run(exec.Command("docker", args...))
+		}
+	}
+
+	BeforeAll(func() {
+		Expect(loadImageIntoKind(redisImage)).To(Succeed())
+		Expect(ensureRestrictedNamespace(npNamespace)).To(Succeed())
+		Expect(kubectlApply(npManifest)).To(Succeed())
+		Eventually(func(g Gomega) {
+			out, err := kubectl("get", "secret", npName+"-internal-auth", "-n", npNamespace,
+				"-o", "go-template={{index .data \"operator-password\" | base64decode}}")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).NotTo(BeEmpty())
+			password = out
+		}).Should(Succeed())
+		for i := range 3 {
+			Eventually(func() bool { return podReadyIn(npNamespace, pod(i)) }).Should(BeTrue())
+		}
+		Eventually(func() string {
+			r := get(`{.status.conditions[?(@.type=="Ready")].status}`)
+			return r
+		}).Should(Equal("True"))
+	})
+
+	AfterAll(func() {
+		if len(rules) > 0 {
+			iptables("-D")
+		}
+		_, _ = kubectl("delete", "ns", npNamespace, "--ignore-not-found", "--timeout=2m")
+	})
+
+	It("never lets two primaries take writes: the cut-off one fences itself before a replica is promoted", func() {
+		oldPrimary = get("{.status.currentPrimary}")
+		Expect(cli(Default, oldPrimary, "SET", "np-key", "before")).To(Equal("OK"))
+		for i := range 3 {
+			Eventually(func(g Gomega) { g.Expect(cli(g, pod(i), "GET", "np-key")).To(Equal("before")) }).Should(Succeed())
+		}
+		ip, err := kubectl("get", "pod", oldPrimary, "-n", npNamespace, "-o", "jsonpath={.status.podIP}")
+		Expect(err).NotTo(HaveOccurred())
+		node, err = kubectl("get", "pod", oldPrimary, "-n", npNamespace, "-o", "jsonpath={.spec.nodeName}")
+		Expect(err).NotTo(HaveOccurred())
+		rules = [][]string{
+			{"OUTPUT", "-d", ip, "-p", "tcp", "--dport", "8001", "-j", "DROP"},  // kubelet probes
+			{"FORWARD", "-d", ip, "-p", "tcp", "--dport", "8000", "-j", "DROP"}, // the operator
+			{"FORWARD", "-s", ip, "-p", "tcp", "--dport", "6443", "-j", "DROP"}, // the API server
+			{"FORWARD", "-s", ip, "-p", "tcp", "--dport", "443", "-j", "DROP"},
+		}
+
+		By("cutting " + oldPrimary + " off on node " + node)
+		iptables("-I")
+
+		mostWritable := 0
+		watch := func() {
+			writable := 0
+			for i := range 3 {
+				if takesWrites(pod(i)) {
+					writable++
+				}
+			}
+			mostWritable = max(mostWritable, writable)
+		}
+		Eventually(func() string { watch(); return get("{.status.currentPrimary}") }).ShouldNot(Equal(oldPrimary))
+		newPrimary := get("{.status.currentPrimary}")
+		Expect(mostWritable).To(BeNumerically("<=", 1), "two primaries took writes at once")
+		Expect(takesWrites(oldPrimary)).To(BeFalse(), "the cut-off primary still takes writes")
+		Eventually(func() bool { watch(); return takesWrites(newPrimary) }).Should(BeTrue())
+		Expect(cli(Default, newPrimary, "GET", "np-key")).To(Equal("before"))
+
+		By("healing the partition: the old primary becomes a replica of the new one")
+		iptables("-D")
+		rules = nil
+		Eventually(func(g Gomega) {
+			watch()
+			info := cli(g, oldPrimary, "INFO", "replication")
+			g.Expect(info).To(ContainSubstring("role:slave"))
+			g.Expect(info).To(ContainSubstring("master_link_status:up"))
+		}).Should(Succeed())
+		Expect(mostWritable).To(BeNumerically("<=", 1), "two primaries took writes at once")
+		Expect(cli(Default, oldPrimary, "GET", "np-probe")).To(Equal("v"))
 	})
 })
 

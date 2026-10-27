@@ -297,6 +297,19 @@ var _ = Describe("RedisInstance controller", func() {
 		)
 	})
 
+	It("defaults spec.replication to never refusing writes, and keeps it below the instances", func() {
+		instance := newRedisInstance("replication-default", 2, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		Expect(instance.Spec.Replication).To(Equal(redisv1.ReplicationSpec{MinReplicasToWrite: 0, MinReplicasMaxLag: 10}))
+
+		instance.Spec.Replication.MinReplicasToWrite = 1
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed(), "one of one replica is allowed")
+		instance.Spec.Replication.MinReplicasToWrite = 2
+		err := k8sClient.Update(ctx, instance)
+		Expect(errors.IsInvalid(err)).To(BeTrue(), "two replicas required of one would refuse every write: %v", err)
+	})
+
 	It("defaults spec.failover to a 30s delay with fencing on API loss", func() {
 		instance := newRedisInstance("failover-default", 1, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -353,6 +366,8 @@ var _ = Describe("RedisInstance controller", func() {
 			map[string]redisv1.ParameterValue{"enable-debug-command": "yes", "enable-module-command": "yes", "enable-protected-configs": "yes"}, "options the operator manages"),
 		Entry("rejects a value spanning two lines",
 			map[string]redisv1.ParameterValue{"hz": "20\nuser default on nopass"}, "should match"),
+		Entry("sends min-replicas-* to spec.replication",
+			map[string]redisv1.ParameterValue{"min-replicas-to-write": "1", "min-slaves-max-lag": "5"}, "spec.replication"),
 		Entry("sends the options that need a restart to spec.redis.startup",
 			map[string]redisv1.ParameterValue{"databases": "32", "io-threads": "4"}, "spec.redis.startup"),
 		Entry("rejects names that are not options",

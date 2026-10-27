@@ -454,6 +454,50 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		}
 	})
 
+	It("refuses writes while too few replicas keep up, with spec.replication.minReplicasToWrite", func() {
+		patchReplication := func(replication string) {
+			_, err := kubectl("patch", "redisinstance", redisName, "-n", redisNamespace, "--type=merge",
+				"-p", `{"spec":{"replication":`+replication+`}}`)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		current, err := kubectl("get", "redisinstance", redisName, "-n", redisNamespace, "-o", "jsonpath={.status.currentPrimary}")
+		Expect(err).NotTo(HaveOccurred())
+		var replica string
+		for i := range redisInstances {
+			if podName(i) != current {
+				replica = podName(i)
+				break
+			}
+		}
+		// write runs a SET on the primary and returns what redis-cli printed.
+		write := func() string {
+			out, err := kubectl(redisCLIArgs(current, "SET", "min-replicas-key", "v")...)
+			if err != nil {
+				return err.Error()
+			}
+			return out
+		}
+
+		patchReplication(`{"minReplicasToWrite":2,"minReplicasMaxLag":3}`)
+		Eventually(func(g Gomega) string {
+			return strings.Split(redisCLI(g, current, "CONFIG", "GET", "min-replicas-to-write"), "\n")[1]
+		}).Should(Equal("2"))
+		Eventually(write).Should(Equal("OK"))
+
+		By("restarting one of the two replicas: its link to the primary drops")
+		_, err = kubectl("delete", "pod", replica, "-n", redisNamespace, "--wait=false")
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(write, time.Minute, 500*time.Millisecond).Should(ContainSubstring("NOREPLICAS"))
+
+		By("taking writes again once the replica is back and keeps up")
+		Eventually(write).Should(Equal("OK"))
+		Eventually(podReady).WithArguments(replica).Should(BeTrue())
+		patchReplication(`{"minReplicasToWrite":0}`)
+		Eventually(func(g Gomega) string {
+			return strings.Split(redisCLI(g, current, "CONFIG", "GET", "min-replicas-to-write"), "\n")[1]
+		}).Should(Equal("0"))
+	})
+
 	It("rolls a new image out one Pod at a time, the primary last, without losing writes", func() {
 		const newImage = "redis:7.4"
 		Expect(loadImageIntoKind(newImage)).To(Succeed())

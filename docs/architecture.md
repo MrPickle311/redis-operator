@@ -662,6 +662,29 @@ RDB, so a dataset of tens of GB needs a `delay` of minutes. A shorter
 that would have healed; the self-fencing of the old primary comes after
 `delay/2` either way.
 
+**How many writes a failover can lose.** Replication is asynchronous: the
+primary acknowledges a write before any replica has it, so the writes of its
+last moments may be missing on the replica promoted. Without more, that is
+the replication lag, usually milliseconds; but a primary cut off from its
+replicas while clients still reach it keeps taking writes that no replica
+gets, until it fences itself after `delay/2` (see [Self-fencing](#self-fencing)).
+
+```yaml
+spec:
+  replication:
+    minReplicasToWrite: 1   # default 0: never refuse a write
+    minReplicasMaxLag: 10   # seconds, default 10
+```
+
+With `minReplicasToWrite: N` the primary refuses writes (`NOREPLICAS`)
+unless N replicas are connected and lag at most `minReplicasMaxLag`
+seconds, so a primary cut off from its replicas stops taking writes by
+itself, and a failover loses at most about `minReplicasMaxLag` seconds of
+them. The price: writes also stop while too few replicas run, e.g. during a
+rollout that restarts one, or when replicas fail. It must stay below
+`spec.instances`; with `instances: 3`, `1` keeps writing with one replica
+down. Both apply live with `CONFIG SET`; `parameters` rejects `min-replicas-*`.
+
 Not covered by a failover: an operator that cannot reach a Ready primary (a
 network problem of the operator alone must not move the primary); Redis that
 answers PING but refuses writes, e.g. `MISCONF` on a full disk; the volume of
