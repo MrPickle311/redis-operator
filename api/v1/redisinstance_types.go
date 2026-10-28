@@ -60,6 +60,11 @@ const ConditionPrimaryAvailable = "PrimaryAvailable"
 // When False, its Reason tells how the last failover ended.
 const ConditionFailover = "Failover"
 
+// ConditionTLSReady is True when the certificate Redis serves is valid for
+// the instance. When False, its message tells what is wrong, e.g. names the
+// certificate misses; Redis keeps serving the certificate it had.
+const ConditionTLSReady = "TLSReady"
+
 // ConditionReady is True when every instance is Ready, up to date and on a
 // Ready volume, and no switchover is running. It sums up the instance for
 // tools that read one condition, like the health check of Argo CD.
@@ -113,6 +118,12 @@ type RedisInstanceSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	Affinity AffinitySpec `json:"affinity,omitzero"`
+
+	// TLS encrypts every connection to Redis, of the clients and of the
+	// replication.
+	// +kubebuilder:default={}
+	// +optional
+	TLS TLSSpec `json:"tls,omitzero"`
 }
 
 // ReplicationSpec bounds the writes a failover can lose. Replication is
@@ -136,6 +147,48 @@ type ReplicationSpec struct {
 	// +kubebuilder:default=10
 	// +optional
 	MinReplicasMaxLag int32 `json:"minReplicasMaxLag,omitempty"`
+}
+
+// TLSSpec encrypts the connections to Redis.
+// +kubebuilder:validation:XValidation:rule="!has(self.enabled) || self.enabled || (!has(self.serverSecretRef) && !has(self.clientCASecretRef))",message="serverSecretRef and clientCASecretRef need TLS enabled"
+// +kubebuilder:validation:XValidation:rule="!has(self.clientAuth) || self.clientAuth == 'none' || has(self.clientCASecretRef)",message="clientAuth needs clientCASecretRef: the CA that signs the certificates of the clients"
+type TLSSpec struct {
+	// Enabled makes Redis take only TLS connections, on port 6379. Clients
+	// then trust the CA in ca.crt of the Secret <name>-server-tls.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// ServerSecretRef names a Secret of type kubernetes.io/tls with the
+	// certificate of Redis, e.g. from cert-manager. Without it, the operator
+	// issues one from a CA of its own for this instance, <name>-ca.
+	// +optional
+	ServerSecretRef *corev1.LocalObjectReference `json:"serverSecretRef,omitempty"`
+
+	// ClientCASecretRef selects the CA that signs the certificates of the
+	// clients, for ClientAuth.
+	// +optional
+	ClientCASecretRef *corev1.SecretKeySelector `json:"clientCASecretRef,omitempty"`
+
+	// ClientAuth tells whether clients must show a certificate.
+	// +kubebuilder:validation:Enum=none;optional;required
+	// +kubebuilder:default=none
+	// +optional
+	ClientAuth TLSClientAuth `json:"clientAuth,omitempty"`
+}
+
+// TLSClientAuth tells whether clients must show a certificate.
+type TLSClientAuth string
+
+const (
+	TLSClientAuthNone     TLSClientAuth = "none"
+	TLSClientAuthOptional TLSClientAuth = "optional"
+	TLSClientAuthRequired TLSClientAuth = "required"
+)
+
+// TLSEnabled reports whether Redis takes only TLS connections, the default.
+func (s TLSSpec) TLSEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
 }
 
 // AffinitySpec places the instances on the nodes.

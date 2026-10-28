@@ -78,6 +78,15 @@ func TestRedisConfigOpensReplicationOnlyOnAReplica(t *testing.T) {
 	}
 }
 
+func TestRedisConfigServesTheInstanceManagerOnAUnixSocket(t *testing.T) {
+	conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false)
+	for _, line := range []string{"unixsocket /controller/redis.sock", "unixsocketperm 700"} {
+		if !hasLine(conf, line) {
+			t.Errorf("redis.conf has no line %q:\n%s", line, conf)
+		}
+	}
+}
+
 func TestRedisConfigStartsAReplicaAsOne(t *testing.T) {
 	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); strings.Contains(conf, "replicaof") {
 		t.Errorf("the primary must not start with replicaof:\n%s", conf)

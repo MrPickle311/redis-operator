@@ -71,6 +71,24 @@ func NeedsRenewal(certPEM []byte, now time.Time) (bool, error) {
 	return !now.Before(renewAt), nil
 }
 
+// DNSNames returns the DNS names a certificate is valid for.
+func DNSNames(certPEM []byte) ([]string, error) {
+	cert, err := parseCert(certPEM)
+	if err != nil {
+		return nil, err
+	}
+	return cert.DNSNames, nil
+}
+
+// NotAfter returns when a certificate expires.
+func NotAfter(certPEM []byte) (time.Time, error) {
+	cert, err := parseCert(certPEM)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return cert.NotAfter, nil
+}
+
 func issueSigned(ca KeyPair, template *x509.Certificate, validity time.Duration) (KeyPair, error) {
 	caCert, err := parseCert(ca.CertPEM)
 	if err != nil {

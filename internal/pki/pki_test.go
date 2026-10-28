@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"slices"
 	"testing"
 	"time"
 )
@@ -173,5 +174,27 @@ func TestNeedsRenewalInTheLastThirdOfTheLifetime(t *testing.T) {
 func TestNeedsRenewalRejectsGarbage(t *testing.T) {
 	if _, err := NeedsRenewal([]byte("not a certificate"), time.Now()); err == nil {
 		t.Fatal("NeedsRenewal() accepted invalid PEM")
+	}
+}
+
+func TestDNSNamesAndNotAfter(t *testing.T) {
+	ca, err := NewCA("test CA", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := IssueServerCert(ca, []string{"cache-rw", "*.cache-hl.prod.svc"}, 2*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := DNSNames(cert.CertPEM)
+	if err != nil || !slices.Equal(names, []string{"cache-rw", "*.cache-hl.prod.svc"}) {
+		t.Errorf("DNSNames() = %v, %v", names, err)
+	}
+	notAfter, err := NotAfter(ca.CertPEM)
+	if err != nil || notAfter.Before(time.Now().Add(50*time.Minute)) || notAfter.After(time.Now().Add(time.Hour)) {
+		t.Errorf("NotAfter() = %v, %v; want about an hour from now", notAfter, err)
+	}
+	if _, err := DNSNames([]byte("not a certificate")); err == nil {
+		t.Error("DNSNames() of garbage succeeded")
 	}
 }

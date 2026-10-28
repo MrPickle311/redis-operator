@@ -418,6 +418,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcileRedisTLS(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.ensureInternalAuthSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}

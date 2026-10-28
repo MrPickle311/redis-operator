@@ -347,6 +347,77 @@ spec:
                     annotation to move a replica to a new volume
                   rule: has(self.existingClaims) == has(oldSelf.existingClaims) &&
                     (!has(self.existingClaims) || self.existingClaims == oldSelf.existingClaims)
+              tls:
+                default: {}
+                description: |-
+                  TLS encrypts every connection to Redis, of the clients and of the
+                  replication.
+                properties:
+                  clientAuth:
+                    default: none
+                    description: ClientAuth tells whether clients must show a certificate.
+                    enum:
+                    - none
+                    - optional
+                    - required
+                    type: string
+                  clientCASecretRef:
+                    description: |-
+                      ClientCASecretRef selects the CA that signs the certificates of the
+                      clients, for ClientAuth.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  enabled:
+                    default: true
+                    description: |-
+                      Enabled makes Redis take only TLS connections, on port 6379. Clients
+                      then trust the CA in ca.crt of the Secret <name>-server-tls.
+                    type: boolean
+                  serverSecretRef:
+                    description: |-
+                      ServerSecretRef names a Secret of type kubernetes.io/tls with the
+                      certificate of Redis, e.g. from cert-manager. Without it, the operator
+                      issues one from a CA of its own for this instance, <name>-ca.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+                x-kubernetes-validations:
+                - message: serverSecretRef and clientCASecretRef need TLS enabled
+                  rule: '!has(self.enabled) || self.enabled || (!has(self.serverSecretRef)
+                    && !has(self.clientCASecretRef))'
+                - message: 'clientAuth needs clientCASecretRef: the CA that signs
+                    the certificates of the clients'
+                  rule: '!has(self.clientAuth) || self.clientAuth == ''none'' || has(self.clientCASecretRef)'
             required:
             - image
             - storage

@@ -29,6 +29,9 @@ flowchart LR
     RI --> RB["RoleBinding cache-instance"]:::rbac
     RI --> TLS["Secret cache-im-tls"]:::secret
     RI --> AUTH["Secret cache-internal-auth"]:::secret
+    RI --> RCA["Secret cache-ca<br/>CA of the TLS of Redis"]:::secret
+    RI --> RTLS["Secret cache-server-tls"]:::secret
+    RCA -. signs .-> RTLS
     RI --> HL["Service cache-hl"]:::svc
     RI --> RW["Service cache-rw"]:::svc
     RI --> RO["Service cache-ro"]:::svc
@@ -54,6 +57,8 @@ How the objects use each other:
 | Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` only  | the Instance Manager reads its `RedisInstance` at start  |
 | Secret `cache-im-tls`       | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod, mounted at `/certificates`                    |
 | Secret `cache-internal-auth`| `operator-password`, `replication-password`     | every Pod at `/internal-auth`; operator for `REPLICAOF`  |
+| Secret `cache-ca`           | `ca.crt`, `ca.key`: the CA of the TLS of Redis, 10 years | operator: signs `cache-server-tls`                  |
+| Secret `cache-server-tls`   | `tls.crt`, `tls.key`, `ca.crt`                  | Redis (step 5.4); clients take `ca.crt` from it          |
 | Service `cache-hl`          | headless                                        | stable DNS `cache-N.cache-hl.app.svc` for every Pod      |
 | Service `cache-rw`          | selects `redis.operator.com/role=primary`       | clients that write                                       |
 | Service `cache-ro`          | selects `redis.operator.com/role=replica`       | clients that only read                                   |
@@ -97,7 +102,7 @@ flowchart TB
             STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof /fence /promote /config"]:::proc
         end
 
-        CTRL[("emptyDir /controller<br/>manager binary<br/>redis.conf 0600")]:::vol
+        CTRL[("emptyDir /controller<br/>manager binary<br/>redis.conf 0600<br/>redis.sock 0700")]:::vol
         DATA[("/data<br/>PVC<br/>.operator/epoch")]:::vol
         CERTS[("/certificates<br/>Secret cache-im-tls")]:::secret
         IAUTH[("/internal-auth<br/>Secret cache-internal-auth")]:::secret
@@ -114,6 +119,7 @@ flowchart TB
     IM -- "get the RedisInstance<br/>before redis-server starts,<br/>then every 2 s" --> API
     IM -- writes redis.conf --> CTRL
     IM -- starts, SIGTERM on shutdown --> RS
+    IM -- "every command,<br/>over /controller/redis.sock" --> RS
     IM --- PROBE
     IM --- STATUS
     CERTS -- reloaded on every handshake --> STATUS
@@ -292,6 +298,21 @@ lets `redis.conf` decide:
   `CONFIG SET appendonly no`, then `SAVE`, then removing `appendonlydir`.
 
 With `none`, a `dump.rdb` already on the volume stays and a restart loads it.
+
+### TLS (step 5, being built)
+
+TLS is on by default (`spec.tls.enabled`), and then Redis takes only TLS
+connections (step 5.4). Each instance has a CA of its own, `cache-ca`, valid
+for ten years, apart from the CA of the operator: a client trusts only its
+own database. The operator issues the certificate of Redis, `cache-server-tls`,
+for the client Services (`cache-rw`, `-ro`, `-r`, short and qualified) and
+every Pod (`*.cache-hl.app.svc`, which replicas connect to), and renews it
+after two thirds of its 90 days, with the same CA, so clients keep their
+`ca.crt`. TLSReady warns a year before the CA expires; replacing the CA is
+manual for now.
+
+The Instance Manager reaches `redis-server` over a unix socket in the Pod
+(`/controller/redis.sock`), so its commands and probes need no TLS.
 
 ## Runtime cooperation
 

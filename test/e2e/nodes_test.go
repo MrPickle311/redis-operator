@@ -225,6 +225,20 @@ var _ = Describe("Node loss", Ordered, func() {
 	}
 
 	It("fails over once the node of the primary stops", func() {
+		// The operator must survive the node: on it, it would only come back
+		// once Kubernetes evicts its Pod, minutes later.
+		operatorNode, err := kubectl("get", "pods", "-n", namespace, "-l", managerPodSelector, "-o", "jsonpath={.items[0].spec.nodeName}")
+		Expect(err).NotTo(HaveOccurred())
+		if primary := get("{.status.currentPrimary}"); nodeOf(primary) == operatorNode {
+			replica := nlName + "-0"
+			if replica == primary {
+				replica = nlName + "-1"
+			}
+			By("moving the primary off " + operatorNode + ", the node of the operator")
+			_, err := kubectl("annotate", "redisinstance", nlName, "-n", nlNamespace, "redis.operator.com/promote="+replica, "--overwrite")
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() string { return get("{.status.currentPrimary}") }).Should(Equal(replica))
+		}
 		oldPrimary = get("{.status.currentPrimary}")
 		Expect(cli(Default, oldPrimary, "SET", "nl-key", "kept")).To(Equal("OK"))
 		Eventually(func(g Gomega) {
@@ -235,7 +249,7 @@ var _ = Describe("Node loss", Ordered, func() {
 
 		lost = nodeOf(oldPrimary)
 		By("stopping node " + lost)
-		_, err := utils.Run(exec.Command("docker", "stop", lost))
+		_, err = utils.Run(exec.Command("docker", "stop", lost))
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func() string { return get("{.status.currentPrimary}") }).ShouldNot(Equal(oldPrimary))

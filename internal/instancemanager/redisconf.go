@@ -24,6 +24,11 @@ const (
 // writable, private to the Pod and gone with it.
 const redisConfPath = "/controller/redis.conf"
 
+// redisSocketPath is where the Instance Manager reaches redis-server: a unix
+// socket in the same emptyDir, so it needs no TLS and no certificate for
+// "localhost", and nothing outside the Pod can reach it.
+const redisSocketPath = "/controller/redis.sock"
+
 type internalAuth struct {
 	operatorPassword    string
 	replicationPassword string
@@ -70,13 +75,15 @@ maxmemory-policy %s
 databases %d
 io-threads %d
 appendonly %s
+unixsocket %s
+unixsocketperm 700
 `, defaultACL,
 		OperatorUser, auth.operatorPassword,
 		// A primary lets no replica sync until the operator approved its
 		// dataset with /promote: an empty one would wipe the replicas.
 		ReplicationUser, onOff(replicaOf != ""), auth.replicationPassword,
 		ReplicationUser, auth.replicationPassword,
-		maxmemory, maxmemoryPolicy, opts.Databases, opts.IOThreads, yesNo(aof))
+		maxmemory, maxmemoryPolicy, opts.Databases, opts.IOThreads, yesNo(aof), redisSocketPath)
 	if replicaOf != "" {
 		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
 	}

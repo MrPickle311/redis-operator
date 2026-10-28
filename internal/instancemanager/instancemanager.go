@@ -50,7 +50,8 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	}
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:        "localhost:" + strconv.Itoa(redisPort),
+		Network:     "unix",
+		Addr:        redisSocketPath,
 		Username:    OperatorUser,
 		Password:    auth.operatorPassword,
 		DialTimeout: time.Second,
