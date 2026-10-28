@@ -1150,3 +1150,19 @@ Przypadek 2b w szczegółach: test `Network partition` z kroku 4.7 odcina primar
 2. z `minReplicasToWrite: 1`: primary sam odrzuca zapisy (`NOREPLICAS`) po `minReplicasMaxLag`, więc strata ogranicza się do tych sekund.
 
 W obu: nigdy dwa primary przyjmujące zapisy, a po zdjęciu reguł stary primary staje się repliką nowego (jego niezreplikowane zapisy znikają w pełnym resyncu).
+
+## 20. Dodatkowe funkcje (na później)
+
+### Klucz CA instancji poza namespace instancji
+
+Dopisane 2026-10-29. Dziś (krok 5.3) Secret `<name>-ca` z `ca.crt` **i `ca.key`** leży w namespace instancji, obok `<name>-server-tls`.
+
+**Uzasadnienie.** `ca.crt` i `tls.crt` są publiczne z założenia (klient dostaje `ca.crt`, Redis wysyła `tls.crt` przy każdym handshake'u), więc ich wyciek nic nie daje. Groźny jest **`ca.key`**: kto go ma, wystawia dowolny certyfikat, któremu ufają klienci tej bazy — podrobiony serwer (MITM, jeśli przechwyci ruch klientów) albo, przy `clientAuth`, podrobiony certyfikat repliki. Dziś odczyta go każdy z `get secrets` w namespace instancji. Taka osoba czyta też hasła użytkowników wewnętrznych (`<name>-internal-auth`), więc dostęp do samej bazy niewiele się zmienia, ale klucz CA daje coś więcej niż hasło: podszycie się pod Redisa wobec klientów **spoza** tego namespace (np. aplikacji w innych namespace'ach, które ufają `ca.crt`). Prawo do czytania Secretów w namespace aplikacji jest dużo częściej nadawane (zespoły aplikacyjne, CI) niż w namespace operatora.
+
+**Kierunek:**
+- `ca.key` w Secrecie w namespace operatora (jak `redis-operator-ca`), np. `redis-ca-<ns>-<name>`; w namespace instancji tylko `ca.crt` (w `<name>-server-tls`) i certy.
+- Operator podpisuje certy kluczem z własnego namespace; RBAC operatora na Secrety w swoim namespace już ma.
+- Usuwanie: ownerReference nie działa między namespace'ami, więc sprzątanie przez finalizer na `RedisInstance` (usuwa Secret z kluczem po usunięciu instancji).
+- Migracja istniejących `<name>-ca` niepotrzebna, dopóki nie ma wdrożeń; później: przeniesienie klucza przy pierwszym reconcile i usunięcie `ca.key` z namespace instancji.
+
+**Koszt:** jeden Secret na bazę w namespace operatora, finalizer na `RedisInstance` (nowa ścieżka usuwania), klucz CA nie przeżywa już restore samego namespace instancji (Velero) — po restore operator wystawi nowe CA, a klienci potrzebują nowego `ca.crt`. Opcja, nie zmiana domyślna: `spec.tls.caKeyLocation: instance | operator` albo flaga operatora dla całego klastra.
