@@ -58,7 +58,7 @@ How the objects use each other:
 | Secret `cache-im-tls`       | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod, mounted at `/certificates`                    |
 | Secret `cache-internal-auth`| `operator-password`, `replication-password`     | every Pod at `/internal-auth`; operator for `REPLICAOF`  |
 | Secret `cache-ca`           | `ca.crt`, `ca.key`: the CA of the TLS of Redis, 10 years | operator: signs `cache-server-tls`                  |
-| Secret `cache-server-tls`   | `tls.crt`, `tls.key`, `ca.crt`                  | Redis (step 5.4); clients take `ca.crt` from it          |
+| Secret `cache-server-tls`   | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod at `/tls`; clients take `ca.crt` from it       |
 | Service `cache-hl`          | headless                                        | stable DNS `cache-N.cache-hl.app.svc` for every Pod      |
 | Service `cache-rw`          | selects `redis.operator.com/role=primary`       | clients that write                                       |
 | Service `cache-ro`          | selects `redis.operator.com/role=replica`       | clients that only read                                   |
@@ -97,7 +97,7 @@ flowchart TB
 
         subgraph redis [container redis - user image spec.image]
             IM["Instance Manager<br/>/controller/manager instance run<br/>PID 1"]:::proc
-            RS["redis-server<br/>:6379"]:::proc
+            RS["redis-server<br/>:6379 TLS only"]:::proc
             PROBE[":8001 HTTP<br/>/healthz /readyz"]:::proc
             STATUS[":8000 HTTPS mTLS<br/>GET /status<br/>POST /replicaof /fence /promote /config"]:::proc
         end
@@ -105,6 +105,7 @@ flowchart TB
         CTRL[("emptyDir /controller<br/>manager binary<br/>redis.conf 0600<br/>redis.sock 0700")]:::vol
         DATA[("/data<br/>PVC<br/>.operator/epoch")]:::vol
         CERTS[("/certificates<br/>Secret cache-im-tls")]:::secret
+        RTLS[("/tls<br/>Secret cache-server-tls")]:::secret
         IAUTH[("/internal-auth<br/>Secret cache-internal-auth")]:::secret
         CG[("/sys/fs/cgroup/memory.max<br/>limit from spec.resources")]:::vol
         TOKEN[("/var/run/secrets/kubernetes.io/serviceaccount<br/>projected token of cache-instance")]:::secret
@@ -123,6 +124,8 @@ flowchart TB
     IM --- PROBE
     IM --- STATUS
     CERTS -- reloaded on every handshake --> STATUS
+    RTLS -- "tls-* files of redis.conf" --> RS
+    IM -- "CONFIG SET tls-* when the files change<br/>(checked every 30 s)" --> RS
     PROBE -- PING as _operator --> RS
     STATUS -- "INFO, REPLICAOF, CLIENT PAUSE/UNPAUSE,<br/>CONFIG GET/SET, SAVE as _operator" --> RS
     STATUS -- "removes appendonlydir<br/>when the AOF goes off" --> DATA
@@ -299,10 +302,84 @@ lets `redis.conf` decide:
 
 With `none`, a `dump.rdb` already on the volume stays and a restart loads it.
 
-### TLS (step 5, being built)
+### TLS
 
 TLS is on by default (`spec.tls.enabled`), and then Redis takes only TLS
-connections (step 5.4). Each instance has a CA of its own, `cache-ca`, valid
+connections, on 6379 (`port 0`, `tls-port 6379`); replicas connect to the
+primary over TLS too (`tls-replication yes`). Connect with the CA from the
+Secret:
+
+```sh
+kubectl get secret cache-server-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+redis-cli --tls --cacert ca.crt -h cache-rw.app.svc --user <user> --pass <password>
+```
+
+`spec.tls.enabled` cannot change once the instance exists: in a rolling
+update a replica in the new mode could not sync from the primary still in
+the old one, so the rollout would never end.
+
+**What the Pods mount.** Always `cache-server-tls`, which the operator
+writes, never a Secret of the user directly, so a Pod never gets a
+certificate the operator has not checked:
+
+| File | Content |
+|---|---|
+| `tls.crt`, `tls.key` | the certificate Redis serves |
+| `ca.crt` | its CA: clients and replicas verify Redis with it |
+| `replication.crt`, `replication.key` | what a replica shows the primary (`tls-client-cert-file`), from `cache-ca` |
+| `trusted.crt` | every CA Redis trusts (`tls-ca-cert-file`): of the server, of the instance and, with client certificates, of the clients |
+
+**Your own certificate,** e.g. from cert-manager:
+
+```yaml
+spec:
+  tls:
+    serverSecretRef: {name: cache-tls}   # kubernetes.io/tls with tls.crt, tls.key and ca.crt
+```
+
+The operator checks every version of that Secret before Redis gets it: the
+key belongs to the certificate, the certificate verifies against `ca.crt`,
+and it covers `cache-rw.app.svc`, `cache-ro.app.svc`, `cache-r.app.svc` and
+every Pod (`cache-0.cache-hl.app.svc`…, which a wildcard
+`*.cache-hl.app.svc` covers). If not, the condition `TLSReady` is `False`
+with what is wrong (e.g. the names it misses), `Ready` is `False` with
+reason `TLSNotReady`, and Redis keeps the certificate it serves. The
+operator watches the Secret, so a renewal by cert-manager reaches Redis on
+its own.
+
+**Client certificates:**
+
+```yaml
+spec:
+  tls:
+    clientAuth: required             # none (default) | optional | required
+    clientCASecretRef: {name: clients-ca, key: ca.crt}
+```
+
+Redis then asks every client for a certificate signed by that CA
+(`tls-auth-clients`). Replicas show `replication.crt`, signed by the CA of
+the instance, so replication goes on. A client certificate replaces no
+password: the ACL users still log in. A change of `clientAuth` is a flag of
+the Instance Manager, so it rolls the Pods: the replicas first, which
+already show a certificate when the primary starts to ask for one.
+
+**Renewal without a restart.** Every 30 seconds the Instance Manager
+compares the files in `/tls` with the ones Redis loaded. When the kubelet
+has put a new version there (about a minute after the Secret changed), it
+runs one `CONFIG SET` of every TLS file option with the same paths, which
+makes Redis read them again: new connections get the new certificate, open
+ones go on. Redis 7.2 serves the old certificate until then, even with the
+files replaced.
+
+Known limits:
+
+- `spec.tls.enabled` is set when the instance is created; there is no
+  migration between plaintext and TLS.
+- The certificate of the CA of the instance covers `cluster.local` as the
+  cluster domain.
+- Replacing the CA of the instance is manual for now: `TLSReady` warns a
+  year ahead (reason `CAExpiresSoon`); clients then need a new `ca.crt`.
+- The cluster bus of RedisCluster (`tls-cluster`) comes with step 10. Each instance has a CA of its own, `cache-ca`, valid
 for ten years, apart from the CA of the operator: a client trusts only its
 own database. The operator issues the certificate of Redis, `cache-server-tls`,
 for the client Services (`cache-rw`, `-ro`, `-r`, short and qualified) and
@@ -347,9 +424,9 @@ flowchart LR
     KUBELET -- "probes :8001" --> IM0 & IM1
     OP -- "POST /replicaof :8000<br/>mTLS, client CN=redis-operator" --> IM1
     IM1 -- "REPLICAOF cache-0... <br/>user _operator" --> RS1
-    RS1 -- "PSYNC :6379<br/>user _replication" --> RS0
-    APP -- "cache-rw :6379" --> RS0
-    APP -- "cache-ro :6379" --> RS1
+    RS1 -- "PSYNC :6379 over TLS<br/>user _replication, replication.crt" --> RS0
+    APP -- "cache-rw :6379 TLS, ca.crt" --> RS0
+    APP -- "cache-ro :6379 TLS, ca.crt" --> RS1
 ```
 
 ## Epoch
@@ -811,10 +888,12 @@ flowchart TD
     E -->|no| G["switch over to the lowest replica;<br/>the old primary is now an<br/>outdated replica"]
 ```
 
-- **One Pod at a time.** The operator acts only while every instance is
-  Ready, and a Pod being deleted does not count as Ready (nor in
-  `status.readyInstances`). A replica is Ready only after its first sync, so
-  the next Pod goes only when the new one replicates again.
+- **One Pod at a time.** The operator acts only while every instance has
+  been Ready for 10 seconds, and a Pod being deleted does not count as Ready
+  (nor in `status.readyInstances`). A replica is Ready only after its first
+  sync, so the next Pod goes only when the new one replicates again; the 10
+  seconds, like `minReadySeconds` of a StatefulSet, let a replica that has
+  just synced settle, as it may still miss a probe.
 - **Never on a volume in trouble.** A Pod whose volume is not `Ready` (e.g.
   its PVC is `Terminating` or `Lost`) is never outdated: without a usable
   volume there is no desired Pod to compare with, and replacing it would
@@ -880,6 +959,7 @@ the first in this order is the reason:
 | `status` | `reason` | When | Passes on its own |
 |---|---|---|---|
 | `False` | `StorageNotReady` | the condition `StorageReady` is not `True` | no: see [Volumes](#volumes) |
+| `False` | `TLSNotReady` | the certificate of the user cannot be served, see the condition `TLSReady` | no: fix the certificate |
 | `False` | `ParametersNotApplied` | Redis refused an option, see the condition `ParametersApplied` | no: fix `spec.redis` |
 | `False` | `PrimaryUnavailable` | the primary is not Ready; a failover follows after `failover.delay` | yes |
 | `False` | `Failover` | a replica takes over from the failed primary | yes |
@@ -910,7 +990,7 @@ resource.customizations.health.redis.operator.com_RedisInstance: |
         hs.message = c.message
         if c.status == "True" then
           hs.status = "Healthy"
-        elseif c.reason == "StorageNotReady" or c.reason == "ParametersNotApplied" then
+        elseif c.reason == "StorageNotReady" or c.reason == "TLSNotReady" or c.reason == "ParametersNotApplied" then
           hs.status = "Degraded"
         end
       end

@@ -7,6 +7,20 @@
 See [docs/architecture.md](docs/architecture.md) for diagrams of the managed
 resources and how the operator and the Instance Manager work together.
 
+## Connecting to Redis
+
+Redis takes only TLS connections (`spec.tls`, on by default). Clients
+verify it with the CA in the Secret `<name>-server-tls`, and write through
+the Service `<name>-rw` (read from `<name>-ro` or `<name>-r`):
+
+```sh
+kubectl get secret my-redis-server-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+redis-cli --tls --cacert ca.crt -h my-redis-rw.<namespace>.svc --user <user> --pass <password>
+```
+
+To serve a certificate of your own (e.g. from cert-manager) or to ask
+clients for certificates, see the TLS section of the architecture document.
+
 ## Getting Started
 
 ### Prerequisites

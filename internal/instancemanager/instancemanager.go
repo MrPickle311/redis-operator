@@ -39,6 +39,10 @@ type Options struct {
 	// at start, so they come as flags, and a change replaces the Pod.
 	Databases int
 	IOThreads int
+	// TLS makes Redis take only TLS connections, with the certificate in TLSDir.
+	TLS bool
+	// TLSClientAuth is spec.tls.clientAuth: none, optional or required.
+	TLSClientAuth string
 }
 
 // RunInstance runs redis-server and serves the probes until redis-server exits.
@@ -113,6 +117,9 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 		last:   instance, lastRead: time.Now(),
 	}
 	go self.run(ctx)
+	if opts.TLS {
+		go watchTLS(ctx, rdb)
+	}
 	return Run(ctx, "redis-server", redisConfPath)
 }
 

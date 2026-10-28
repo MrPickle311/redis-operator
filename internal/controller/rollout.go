@@ -30,6 +30,12 @@ func specHash(spec *corev1.PodSpec) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// rolloutSettleTime is how long a Pod must have been Ready before the
+// rolling update counts it, like minReadySeconds of a StatefulSet: a replica
+// that has just finished its first sync, over TLS above all, may still miss
+// a probe or two, and replacing the next Pod then would take two down.
+const rolloutSettleTime = 10 * time.Second
+
 // rolloutRetryDelay is how long the rolling update waits after a failed
 // switchover before it fences the primary again.
 const rolloutRetryDelay = 5 * time.Minute

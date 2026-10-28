@@ -87,6 +87,35 @@ func TestRedisConfigServesTheInstanceManagerOnAUnixSocket(t *testing.T) {
 	}
 }
 
+func TestRedisConfigTakesOnlyTLSWhenAsked(t *testing.T) {
+	tlsLines := []string{
+		"port 0", // no plaintext port
+		"tls-port 6379",
+		"tls-cert-file /tls/tls.crt",
+		"tls-key-file /tls/tls.key",
+		// What a replica shows the primary, which may ask for a certificate.
+		"tls-client-cert-file /tls/replication.crt",
+		"tls-client-key-file /tls/replication.key",
+		"tls-ca-cert-file /tls/trusted.crt",
+		"tls-replication yes",
+		"tls-auth-clients no",
+	}
+	opts := testOptions
+	opts.TLS = true
+	conf := redisConfig(testAuth, opts, 0, "noeviction", "", false)
+	for _, line := range tlsLines {
+		if !hasLine(conf, line) {
+			t.Errorf("redis.conf with TLS has no line %q:\n%s", line, conf)
+		}
+	}
+	if !hasLine(conf, "unixsocket /controller/redis.sock") {
+		t.Errorf("TLS took the unix socket of the Instance Manager away:\n%s", conf)
+	}
+	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); strings.Contains(conf, "tls-") || hasLine(conf, "port 0") {
+		t.Errorf("redis.conf without TLS has TLS settings:\n%s", conf)
+	}
+}
+
 func TestRedisConfigStartsAReplicaAsOne(t *testing.T) {
 	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); strings.Contains(conf, "replicaof") {
 		t.Errorf("the primary must not start with replicaof:\n%s", conf)
@@ -146,5 +175,13 @@ func writeFile(t *testing.T, dir, name, data string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTLSAuthClients(t *testing.T) {
+	for clientAuth, want := range map[string]string{"": "no", "none": "no", "optional": "optional", "required": "yes"} {
+		if got := tlsAuthClients(clientAuth); got != want {
+			t.Errorf("tlsAuthClients(%q) = %q, want %q", clientAuth, got, want)
+		}
 	}
 }

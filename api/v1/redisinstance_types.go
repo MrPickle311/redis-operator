@@ -150,6 +150,7 @@ type ReplicationSpec struct {
 }
 
 // TLSSpec encrypts the connections to Redis.
+// +kubebuilder:validation:XValidation:rule="(has(self.enabled) ? self.enabled : true) == (has(oldSelf.enabled) ? oldSelf.enabled : true)",message="tls.enabled cannot change: a replica in the new mode could not sync from a primary in the old one"
 // +kubebuilder:validation:XValidation:rule="!has(self.enabled) || self.enabled || (!has(self.serverSecretRef) && !has(self.clientCASecretRef))",message="serverSecretRef and clientCASecretRef need TLS enabled"
 // +kubebuilder:validation:XValidation:rule="!has(self.clientAuth) || self.clientAuth == 'none' || has(self.clientCASecretRef)",message="clientAuth needs clientCASecretRef: the CA that signs the certificates of the clients"
 type TLSSpec struct {

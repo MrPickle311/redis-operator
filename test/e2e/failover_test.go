@@ -142,7 +142,7 @@ func foFQDN(ordinal int) string {
 
 func foCLI(g Gomega, pod string, args ...string) string {
 	out, err := kubectl(append([]string{"exec", pod, "-n", foNamespace, "-c", "redis", "--",
-		"redis-cli", "--user", "_operator", "--pass", foPassword, "--no-auth-warning"}, args...)...)
+		"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", foPassword, "--no-auth-warning"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
 }
@@ -151,7 +151,7 @@ func foCLI(g Gomega, pod string, args ...string) string {
 // primary, instead of returning within 3 seconds.
 func foWriteBlocked(pod string) bool {
 	_, err := kubectl("exec", pod, "-n", foNamespace, "-c", "redis", "--",
-		"timeout", "3", "redis-cli", "--user", "_operator", "--pass", foPassword, "--no-auth-warning",
+		"timeout", "3", "redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", foPassword, "--no-auth-warning",
 		"SET", "fo-probe", time.Now().String())
 	return err != nil
 }
@@ -395,7 +395,7 @@ var _ = Describe("Network partition", Ordered, func() {
 	}
 	cli := func(g Gomega, p string, args ...string) string {
 		out, err := kubectl(append([]string{"exec", p, "-n", npNamespace, "-c", "redis", "--",
-			"redis-cli", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
+			"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
 		g.Expect(err).NotTo(HaveOccurred())
 		return out
 	}
@@ -403,7 +403,7 @@ var _ = Describe("Network partition", Ordered, func() {
 	// a replica answers READONLY, a fenced primary makes it wait.
 	takesWrites := func(p string) bool {
 		out, err := kubectl("exec", p, "-n", npNamespace, "-c", "redis", "--", "timeout", "2",
-			"redis-cli", "--user", "_operator", "--pass", password, "--no-auth-warning", "SET", "np-probe", "v")
+			"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", password, "--no-auth-warning", "SET", "np-probe", "v")
 		return err == nil && out == "OK"
 	}
 	iptables := func(op string) {
@@ -497,7 +497,7 @@ func afFQDN(pod string) string { return fmt.Sprintf("%s.%s-hl.%s.svc", pod, afNa
 
 func afCLI(g Gomega, pod string, args ...string) string {
 	out, err := kubectl(append([]string{"exec", pod, "-n", afNamespace, "-c", "redis", "--",
-		"redis-cli", "--user", "_operator", "--pass", afPassword, "--no-auth-warning"}, args...)...)
+		"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", afPassword, "--no-auth-warning"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
 }

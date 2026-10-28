@@ -147,7 +147,7 @@ func ndNodeOf(pod string) string {
 
 func ndCLI(g Gomega, pod string, args ...string) string {
 	out, err := kubectl(append([]string{"exec", pod, "-n", ndNamespace, "-c", "redis", "--",
-		"redis-cli", "--user", "_operator", "--pass", ndPassword, "--no-auth-warning"}, args...)...)
+		"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", ndPassword, "--no-auth-warning"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
 }
@@ -211,7 +211,7 @@ var _ = Describe("Node loss", Ordered, func() {
 
 	cli := func(g Gomega, pod string, args ...string) string {
 		out, err := kubectl(append([]string{"exec", pod, "-n", nlNamespace, "-c", "redis", "--",
-			"redis-cli", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
+			"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
 		g.Expect(err).NotTo(HaveOccurred())
 		return out
 	}
@@ -238,6 +238,9 @@ var _ = Describe("Node loss", Ordered, func() {
 			_, err := kubectl("annotate", "redisinstance", nlName, "-n", nlNamespace, "redis.operator.com/promote="+replica, "--overwrite")
 			Expect(err).NotTo(HaveOccurred())
 			Eventually(func() string { return get("{.status.currentPrimary}") }).Should(Equal(replica))
+			// The old primary is a replica only once it has synced: until
+			// then no replica could take over.
+			Eventually(func() string { return get(`{.status.conditions[?(@.type=="Ready")].status}`) }).Should(Equal("True"))
 		}
 		oldPrimary = get("{.status.currentPrimary}")
 		Expect(cli(Default, oldPrimary, "SET", "nl-key", "kept")).To(Equal("OK"))

@@ -80,6 +80,22 @@ func DNSNames(certPEM []byte) ([]string, error) {
 	return cert.DNSNames, nil
 }
 
+// Verify checks that the certificate chains to one of the CAs in rootsPEM,
+// is valid now, may be used for usage, and, for a non-empty dnsName, is
+// valid for that name.
+func Verify(certPEM, rootsPEM []byte, dnsName string, usage x509.ExtKeyUsage) error {
+	cert, err := parseCert(certPEM)
+	if err != nil {
+		return err
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(rootsPEM) {
+		return errors.New("no CA certificate in the CA bundle")
+	}
+	_, err = cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: dnsName, KeyUsages: []x509.ExtKeyUsage{usage}})
+	return err
+}
+
 // NotAfter returns when a certificate expires.
 func NotAfter(certPEM []byte) (time.Time, error) {
 	cert, err := parseCert(certPEM)

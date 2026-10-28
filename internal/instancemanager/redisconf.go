@@ -24,6 +24,21 @@ const (
 // writable, private to the Pod and gone with it.
 const redisConfPath = "/controller/redis.conf"
 
+// TLSDir is where the operator mounts the TLS Secret of Redis: tls.crt and
+// tls.key, the certificate Redis serves, ca.crt, its CA, and the files below.
+const TLSDir = "/tls"
+
+// Files of the TLS Secret of Redis besides tls.crt, tls.key and ca.crt.
+const (
+	// TLSReplicationCert and TLSReplicationKey are the certificate a replica
+	// shows the primary, which may ask for one (tls-auth-clients).
+	TLSReplicationCert = "replication.crt"
+	TLSReplicationKey  = "replication.key"
+	// TLSTrustedCAs holds every CA Redis trusts: of the server certificate,
+	// which replicas verify the primary with, and of the client certificates.
+	TLSTrustedCAs = "trusted.crt"
+)
+
 // redisSocketPath is where the Instance Manager reaches redis-server: a unix
 // socket in the same emptyDir, so it needs no TLS and no certificate for
 // "localhost", and nothing outside the Pod can reach it.
@@ -84,6 +99,15 @@ unixsocketperm 700
 		ReplicationUser, onOff(replicaOf != ""), auth.replicationPassword,
 		ReplicationUser, auth.replicationPassword,
 		maxmemory, maxmemoryPolicy, opts.Databases, opts.IOThreads, yesNo(aof), redisSocketPath)
+	if opts.TLS {
+		// Only TLS on 6379; the Instance Manager keeps the unix socket.
+		// Replicas connect to the primary over TLS too.
+		conf += fmt.Sprintf("port 0\ntls-port %d\ntls-replication yes\ntls-auth-clients %s\n",
+			redisPort, tlsAuthClients(opts.TLSClientAuth))
+		for _, option := range tlsFileOptions {
+			conf += fmt.Sprintf("%s %s\n", option.name, option.value)
+		}
+	}
 	if replicaOf != "" {
 		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
 	}
@@ -100,6 +124,27 @@ func onOff(b bool) string {
 func yesNo(b bool) string {
 	if b {
 		return "yes"
+	}
+	return "no"
+}
+
+// tlsFileOptions are the options of redis.conf that name the files of the
+// TLS Secret. Redis reads them again on CONFIG SET, see watchTLS.
+var tlsFileOptions = []option{
+	{"tls-cert-file", TLSDir + "/tls.crt"},
+	{"tls-key-file", TLSDir + "/tls.key"},
+	{"tls-client-cert-file", TLSDir + "/" + TLSReplicationCert},
+	{"tls-client-key-file", TLSDir + "/" + TLSReplicationKey},
+	{"tls-ca-cert-file", TLSDir + "/" + TLSTrustedCAs},
+}
+
+// tlsAuthClients maps spec.tls.clientAuth to tls-auth-clients.
+func tlsAuthClients(clientAuth string) string {
+	switch clientAuth {
+	case "required":
+		return "yes"
+	case "optional":
+		return "optional"
 	}
 	return "no"
 }

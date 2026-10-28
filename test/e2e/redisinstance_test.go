@@ -121,19 +121,65 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		// cmdline separates the arguments with NUL bytes.
 		Expect(strings.Split(out, "\x00")).To(HaveExactElements("/controller/manager", "instance", "run",
-			"--instance="+redisName, "--databases=16", "--io-threads=1", ""))
+			"--instance="+redisName, "--databases=16", "--io-threads=1", "--tls", ""))
 
 		Expect(redisCLI(Default, primary, "PING")).To(Equal("PONG"))
 	})
 
 	It("lets only the internal users in, each with its own permissions", func() {
 		// redis-cli may exit with 0 on an error reply, so only the output is checked.
-		out, _ := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "redis-cli", "PING")
+		out, _ := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "redis-cli", "--tls", "--cacert", "/tls/ca.crt", "PING")
 		Expect(out).To(ContainSubstring("NOAUTH"), "the default user must be off")
 
 		out, _ = kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--",
-			"redis-cli", "--user", "_replication", "--pass", replicationPassword, "--no-auth-warning", "GET", "e2e-key")
+			"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_replication", "--pass", replicationPassword, "--no-auth-warning", "GET", "e2e-key")
 		Expect(out).To(ContainSubstring("NOPERM"), "the replication user must not read data")
+	})
+
+	It("takes only TLS connections, with a certificate clients verify with ca.crt of the Secret", func() {
+		out, _ := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "redis-cli", "PING")
+		Expect(out).NotTo(ContainSubstring("PONG"), "Redis answered a plaintext connection")
+
+		Expect(redisCLI(Default, primary, "-h", redisName+"-rw."+redisNamespace+".svc", "PING")).To(Equal("PONG"))
+
+		By("serving the CA that clients get from the Secret")
+		fromSecret := secretValue(Default, redisName+"-server-tls", "ca\\.crt")
+		mounted, err := kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--", "cat", "/tls/ca.crt")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(fromSecret)).To(Equal(mounted))
+
+		By("rejecting a client that trusts another CA")
+		out, _ = kubectl("exec", primary, "-n", redisNamespace, "-c", "redis", "--",
+			"redis-cli", "--tls", "--cacert", "/tls/tls.crt", "PING")
+		Expect(out).To(ContainSubstring("certificate verify failed"))
+	})
+
+	It("loads a renewed certificate without restarting Redis", func() {
+		uids := map[string]string{}
+		for i := range redisInstances {
+			uid, err := kubectl("get", "pod", podName(i), "-n", redisNamespace, "-o", "jsonpath={.metadata.uid}")
+			Expect(err).NotTo(HaveOccurred())
+			uids[podName(i)] = uid
+		}
+		before := secretValue(Default, redisName+"-server-tls", "tls\\.crt")
+
+		By("making the certificate look stale, so the operator issues a new one with the same CA")
+		_, err := kubectl("patch", "secret", redisName+"-server-tls", "-n", redisNamespace, "--type=merge",
+			"-p", `{"data":{"ca.crt":"c3RhbGU="}}`)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) string { return secretValue(g, redisName+"-server-tls", "tls\\.crt") }).ShouldNot(Equal(before))
+
+		By("loading it in every Instance Manager, once the kubelet has updated the files")
+		for i := range redisInstances {
+			Eventually(func() string {
+				out, _ := kubectl("logs", podName(i), "-n", redisNamespace, "-c", "redis")
+				return out
+			}, 4*time.Minute).Should(ContainSubstring("Loaded the new TLS certificate"), "%s kept the old certificate", podName(i))
+		}
+		for name, uid := range uids {
+			Expect(kubectl("get", "pod", name, "-n", redisNamespace, "-o", "jsonpath={.metadata.uid}")).To(Equal(uid), "%s was restarted", name)
+		}
+		Expect(redisCLI(Default, primary, "-h", redisName+"-rw."+redisNamespace+".svc", "PING")).To(Equal("PONG"))
 	})
 
 	It("derives maxmemory from the memory limit of the container", func() {
@@ -511,23 +557,28 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		By("watching that at most one instance is down and the primary is updated last")
 		var order []string
 		mostDown := 0
+		var downAtMost []string
 		reasons := map[string]bool{}
 		Eventually(func(g Gomega) {
 			reasons[readyCondition()] = true
 			down := 0
+			var downNow []string
 			for i := range redisInstances {
 				name := podName(i)
 				image, _ := kubectl("get", "pod", name, "-n", redisNamespace, "-o", "jsonpath={.spec.containers[0].image}")
 				if !podReady(name) {
 					down++
+					downNow = append(downNow, name)
 				} else if image == newImage && !slices.Contains(order, name) {
 					order = append(order, name)
 				}
 			}
-			mostDown = max(mostDown, down)
+			if down > mostDown {
+				mostDown, downAtMost = down, downNow
+			}
 			g.Expect(order).To(HaveLen(redisInstances))
 		}).WithPolling(time.Second).WithTimeout(6 * time.Minute).Should(Succeed())
-		Expect(mostDown).To(BeNumerically("<=", 1), "more than one instance was down at once")
+		Expect(mostDown).To(BeNumerically("<=", 1), "more than one instance was down at once: %v", downAtMost)
 		Expect(order[redisInstances-1]).To(Equal(primary), "the primary was not updated last: %v", order)
 		Expect(reasons).To(HaveKey("False RollingUpdate"), "the Ready condition did not show the rolling update")
 		Eventually(readyCondition).Should(Equal("True Ready"))
@@ -608,7 +659,7 @@ func redisCLI(g Gomega, pod string, args ...string) string {
 // redisCLIArgs returns the kubectl arguments that run redis-cli as the operator user.
 func redisCLIArgs(pod string, args ...string) []string {
 	return append([]string{"exec", pod, "-n", redisNamespace, "-c", "redis", "--",
-		"redis-cli", "--user", "_operator", "--pass", operatorPassword, "--no-auth-warning"}, args...)
+		"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", operatorPassword, "--no-auth-warning"}, args...)
 }
 
 // secretValue returns the decoded value of a key of a Secret in the Redis namespace.

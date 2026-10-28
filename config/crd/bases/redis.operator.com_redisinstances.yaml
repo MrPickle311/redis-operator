@@ -412,6 +412,10 @@ spec:
                     x-kubernetes-map-type: atomic
                 type: object
                 x-kubernetes-validations:
+                - message: 'tls.enabled cannot change: a replica in the new mode could
+                    not sync from a primary in the old one'
+                  rule: '(has(self.enabled) ? self.enabled : true) == (has(oldSelf.enabled)
+                    ? oldSelf.enabled : true)'
                 - message: serverSecretRef and clientCASecretRef need TLS enabled
                   rule: '!has(self.enabled) || self.enabled || (!has(self.serverSecretRef)
                     && !has(self.clientCASecretRef))'

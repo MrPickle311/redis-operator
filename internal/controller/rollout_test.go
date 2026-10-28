@@ -183,6 +183,38 @@ var _ = Describe("RedisInstance rolling update", func() {
 		})
 	})
 
+	Context("when a replica has only just become Ready", Ordered, func() {
+		const name = "roll-settle"
+
+		BeforeAll(func() {
+			Expect(k8sClient.Create(ctx, newRedisInstance(name, 2, redisv1.StorageSpec{
+				VolumeClaimTemplate: volumeClaimTemplate(),
+			}))).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+			markReady(name + "-0")
+			instance := getInstance(name)
+			instance.Status.CurrentPrimary = name + "-0"
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			pod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, objectKey(name+"-1"), pod)).To(Succeed())
+			pod.Status.Phase = corev1.PodRunning
+			pod.Status.Conditions = []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Now(),
+			}}
+			Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+		})
+
+		AfterAll(func() { deleteInstance(name) })
+
+		It("waits until it has been Ready for a while before it replaces anything", func() {
+			setImage(name, "redis:7.4")
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+			Expect(existingPodNames(name, 2)).To(ConsistOf(name+"-0", name+"-1"),
+				"a Pod went while a replica had been Ready for less than %s", rolloutSettleTime)
+		})
+	})
+
 	Context("when the image of a single instance changes", Ordered, func() {
 		const name = "roll-single"
 

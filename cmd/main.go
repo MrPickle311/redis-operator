@@ -72,6 +72,8 @@ func main() {
 			flags.BoolVar(&opts.DefaultUser, "default-user", false, "Enable the passwordless default user")
 			flags.IntVar(&opts.Databases, "databases", 16, "Number of logical databases of Redis")
 			flags.IntVar(&opts.IOThreads, "io-threads", 1, "Number of threads that serve the clients of Redis")
+			flags.BoolVar(&opts.TLS, "tls", false, "Take only TLS connections, with the certificate in "+instancemanager.TLSDir)
+			flags.StringVar(&opts.TLSClientAuth, "tls-client-auth", "none", "Whether clients must show a certificate: none, optional or required")
 			_ = flags.Parse(os.Args[3:])
 			c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
 			if err == nil {

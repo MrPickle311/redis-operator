@@ -399,7 +399,7 @@ func volEvents(reason string) string {
 // volCLI runs redis-cli as the operator user inside the given Pod.
 func volCLI(g Gomega, pod string, args ...string) string {
 	out, err := kubectl(append([]string{"exec", pod, "-n", volNamespace, "-c", "redis", "--",
-		"redis-cli", "--user", "_operator", "--pass", volPassword, "--no-auth-warning"}, args...)...)
+		"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", volPassword, "--no-auth-warning"}, args...)...)
 	g.Expect(err).NotTo(HaveOccurred())
 	return out
 }

@@ -195,6 +195,9 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 		},
 	}
 
+	if instance.Spec.TLS.TLSEnabled() {
+		mountRedisTLS(pod, instance)
+	}
 	pod.Annotations = map[string]string{annotationSpecHash: specHash(&pod.Spec)}
 	return pod
 }
@@ -209,6 +212,14 @@ func instanceCommand(instance *redisv1.RedisInstance) []string {
 	}
 	if instance.Spec.ACL.DefaultUser == redisv1.DefaultUserEnabled {
 		command = append(command, "--default-user")
+	}
+	if instance.Spec.TLS.TLSEnabled() {
+		command = append(command, "--tls")
+		// A flag, so a change rolls the Pods: replicas first, which show their
+		// certificate before the primary starts to ask for one.
+		if auth := instance.Spec.TLS.ClientAuth; auth != "" && auth != redisv1.TLSClientAuthNone {
+			command = append(command, "--tls-client-auth="+string(auth))
+		}
 	}
 	return command
 }
@@ -413,6 +424,10 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	memoryUnlimited := false
 	var outdated []int32
 	ready := map[int32]bool{}
+	// settleWait is how long until every Ready Pod has been Ready for
+	// rolloutSettleTime, which the rollout waits for.
+	var settled int32
+	var settleWait time.Duration
 
 	// Before the Pods: they cannot start until the Secrets they mount exist.
 	if err := r.ensureServerSecret(ctx, &instance); err != nil {
@@ -503,6 +518,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if isPodReady(&existingPod) && existingPod.DeletionTimestamp.IsZero() {
 			readyCount++
 			ready[ordinal] = true
+			if wait := rolloutSettleTime - readyFor(&existingPod); wait > 0 {
+				settleWait = max(settleWait, wait)
+			} else {
+				settled++
+			}
 		}
 		if ok && isOutdated(&existingPod, desiredPod) {
 			outdated = append(outdated, ordinal)
@@ -532,8 +552,11 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Before the switchover: the update of the primary starts one.
-	healthy := readyCount == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
+	healthy := settled == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
 	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, healthy)
+	if len(outdated) > 0 && !healthy && settleWait > 0 {
+		retryRollout = soonest(retryRollout, settleWait)
+	}
 	// Written now, as a waiting switchover returns early below.
 	meta.SetStatusCondition(&instance.Status.Conditions, readyCondition(&instance, readyCount, len(outdated)))
 	if !equality.Semantic.DeepEqual(oldStatus, &instance.Status) {
@@ -642,6 +665,16 @@ func (r *RedisInstanceReconciler) existingPods(ctx context.Context, instance *re
 	return exists, nil
 }
 
+// readyFor returns how long the Pod has been Ready, or 0 when it is not.
+func readyFor(pod *corev1.Pod) time.Duration {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return time.Since(cond.LastTransitionTime.Time)
+		}
+	}
+	return 0
+}
+
 func isPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady {
@@ -669,6 +702,8 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// changes the state of the volume of an instance.
 		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.instancesUsingPVC)).
 		Owns(&corev1.Secret{}).
+		// The certificate and the client CA of the user are not owned.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.instancesUsingSecret)).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
