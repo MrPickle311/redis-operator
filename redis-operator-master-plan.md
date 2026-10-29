@@ -507,9 +507,7 @@ spec:
       - "+@write"
       - "-@admin"
       - "-@dangerous"
-    replicaRules:                 # opcjonalne, sekcja 4
-      - "~orders:*"
-      - "+@read"
+    # replicaRules: odłożone (decyzja kroku 6)
 status:
   phase: Active
   syncedAt: "2026-08-19T10:00:00Z"
@@ -536,13 +534,15 @@ sequenceDiagram
     UC->>K8s: status.phase = Active
 ```
 
+> **Zmiana w kroku 6 (2026-10-29):** zamiast `POST /acl/sync` z diagramu operator zapisuje zagregowany ACL do Secretu `<name>-acl`, który IM czyta przez API co 2 s i ładuje przez `ACL LOAD`; nowa instancja ładuje go przy starcie bez czekania na operator. Szczegóły w sekcji 8 („Krok 6 — decyzje”).
+
 Kluczowe decyzje:
 - Kontroler przelicza **cały pożądany zbiór userów** przy każdej zmianie, a nie pojedynczego usera. Eliminuje to race condition przy równoległych zmianach.
 - Do IM trafiają **hashe haseł** (`#<sha256>`), nigdy plaintext.
 - Finalizer na `RedisUser` gwarantuje `ACL DELUSER` przed usunięciem CR z etcd.
 - Rotacja hasła: watch na `passwordSecretRef` jest traktowany jak zmiana samego `RedisUser`. W czasie rotacji można mieć dwa hasła jednocześnie (`>old >new`), jeśli Secret zawiera klucz `previousPassword`.
 - `RedisCluster`: sync idzie do **wszystkich node'ów wszystkich shardów** (ACL nie propaguje się między node'ami).
-- Nowa instancja (skalowanie, odtworzenie po failoverze) dostaje pełny ACL od IM przy starcie, zanim zacznie przyjmować ruch (readiness dopiero po `/acl/sync`).
+- Nowa instancja (skalowanie, odtworzenie po failoverze) ładuje pełny ACL z `<name>-acl` przy starcie, zanim zacznie przyjmować ruch.
 
 ---
 
@@ -701,13 +701,19 @@ spec:
     externalSecretRef:
       name: sessions-cache-acl    # klucz users.acl, np. "user reporting on #<hash> ~* +@read"
       key: users.acl
-    unmanagedUsers: remove        # remove | keep
 ```
 
 - **Zewnętrzny ACL** służy organizacjom, które trzymają użytkowników w Vault lub innym systemie IAM i generują plik ACL. IM parsuje go, odrzuca linie z nazwami zarezerwowanymi i plaintext hasłami (tylko `#<hash>`; opcja `allowPlaintextPasswords: true` dla wygody dev) i scala z pozostałymi źródłami.
 - **Konflikt nazw** (ten sam `username` w zewnętrznym ACL i w `RedisUser`, albo w dwóch `RedisUser`): żaden z konfliktujących userów nie jest zmieniany, a oba źródła dostają condition `Conflict` z nazwą drugiego. Bezpieczniej jest nie zgadywać, które źródło ma rację.
-- **`unmanagedUsers: remove`** (domyślnie): IM usuwa userów, którzy nie pochodzą z żadnego źródła, czyli np. dodanych ręcznie przez `ACL SETUSER`. To wykrywanie driftu. `keep` pozwala na migrację istniejącej bazy.
+- **Drift:** użytkownicy spoza źródeł (np. dodani ręcznie przez `ACL SETUSER`) znikają przy następnym `ACL LOAD`; nie ma opcji ich zostawiania (decyzja kroku 6).
 - Hasła `RedisUser` zawsze pochodzą z Secretu: zewnętrznego (`passwordSecretRef`) albo wygenerowanego (`generate: true`).
+
+**Krok 6 — decyzje (2026-10-29):**
+- **Dostarczanie ACL: zagregowany Secret czytany przez IM** (zamiast push `POST /acl/sync` z sekcji 5). Operator przelicza cały zbiór użytkowników instancji i zapisuje go (same hashe haseł) do Secretu `<name>-acl`; IM czyta go przez API co 2 s, jak `RedisInstance` (Role instancji dostaje `get` na ten jeden Secret), składa `aclfile` (użytkownicy wewnętrzni + zagregowani) i robi `ACL LOAD`. Dlaczego: zmiana dociera w ~2 s (bez opóźnienia kubeleta przy montowanym Secrecie), start Poda nie zależy od operatora (Redis ładuje `aclfile` od razu, readiness nie czeka na sync), `ACL LOAD` jest atomowe i sam usuwa użytkowników spoza pliku (drift). Koszt: użytkownicy wewnętrzni przechodzą z `redis.conf` do `aclfile` (Redis nie pozwala łączyć obu). Operator wie, że IM zastosował zmianę, z `/status` (skrót załadowanego ACL) — na tym czeka finalizer `RedisUser`.
+- **`replicaRules` odłożone:** inne uprawnienia na replikach wymagają podmiany ACL przy każdej zmianie roli (failover, switchover).
+- **`unmanagedUsers` usunięte:** tylko usuwanie driftu (`ACL LOAD` i tak zastępuje cały zbiór); `keep` służyło migracji istniejących baz, których nie ma.
+
+**Podkroki:** 6.1 IM: `aclfile` z użytkownikami wewnętrznymi, odczyt `<name>-acl` przez API, `ACL LOAD` przy zmianie, skrót w `/status` · 6.2 CRD `RedisUser` (`kubebuilder create api`) i kontroler: `targetRef`, `username`, `passwordSecretRef` albo `generate: true`, `acl.rules` (CEL: bez haseł, `nopass`, `reset`, `on`/`off` w regułach), finalizer, status · 6.3 `spec.acl.externalSecretRef`: parsowanie `users.acl`, odrzucanie zarezerwowanych nazw i haseł w plaintext (`allowPlaintextPasswords` dla dev) · 6.4 agregacja w operatorze, konflikty nazw (`Conflict` na obu źródłach, żaden nie zmieniany), condition `ACLReady` · 6.5 rotacja hasła z `previousPassword` (dwa hashe naraz) · 6.6 docs i e2e.
 
 ---
 
