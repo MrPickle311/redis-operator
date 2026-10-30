@@ -399,10 +399,26 @@ type RedisInstanceStatus struct {
 	// +optional
 	Volumes []VolumeStatus `json:"volumes,omitempty"`
 
+	// ACL tells which users of RedisUsers the instances have.
+	// +optional
+	ACL *ACLStatus `json:"acl,omitempty"`
+
 	// HandledRequests holds, per request annotation, the value the operator
 	// last handled, so a request kept in the annotation is not served again.
 	// +optional
 	HandledRequests map[string]string `json:"handledRequests,omitempty"`
+}
+
+// ACLStatus tells whether the running instances have the users of the
+// Secret <name>-acl.
+type ACLStatus struct {
+	// Digest identifies the content of <name>-acl.
+	Digest string `json:"digest,omitempty"`
+	// Applied is true when every running instance has loaded that content.
+	Applied bool `json:"applied,omitempty"`
+	// Rejected maps a user to the error Redis gave for its rules.
+	// +optional
+	Rejected map[string]string `json:"rejected,omitempty"`
 }
 
 // VolumeState is the observed state of the volume of one instance.

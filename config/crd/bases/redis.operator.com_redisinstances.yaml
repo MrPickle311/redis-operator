@@ -439,6 +439,23 @@ spec:
           status:
             description: status defines the observed state of RedisInstance
             properties:
+              acl:
+                description: ACL tells which users of RedisUsers the instances have.
+                properties:
+                  applied:
+                    description: Applied is true when every running instance has loaded
+                      that content.
+                    type: boolean
+                  digest:
+                    description: Digest identifies the content of <name>-acl.
+                    type: string
+                  rejected:
+                    additionalProperties:
+                      type: string
+                    description: Rejected maps a user to the error Redis gave for
+                      its rules.
+                    type: object
+                type: object
               conditions:
                 description: Conditions of the instance, e.g. MemoryLimited.
                 items:

@@ -21,6 +21,11 @@ var errNotSynced = errors.New("replica has not finished its first sync with the 
 // operator has compared its dataset with the replicas.
 var errAwaitingApproval = errors.New("the restarted primary waits for the operator to approve its dataset")
 
+// errNoUsers keeps a starting Pod out of the Services until Redis has the
+// users of RedisUsers, so an application never meets a Redis that does not
+// know it yet.
+var errNoUsers = errors.New("redis-server does not have the users of RedisUsers yet")
+
 // errNotConfigured keeps a starting Pod out of the Services until Redis has
 // the configuration of spec.redis instead of its defaults.
 var errNotConfigured = errors.New("redis-server does not have the configuration of spec.redis yet")
@@ -55,6 +60,8 @@ type readiness struct {
 	// approved is false while a Pod that started as the primary waits for
 	// the operator to compare its dataset with the replicas; /promote sets it.
 	approved atomic.Bool
+	// acl is what the last sync of the users applied; nil before the first.
+	acl atomic.Pointer[aclResult]
 }
 
 func (r *readiness) check(ctx context.Context) error {
@@ -64,6 +71,9 @@ func (r *readiness) check(ctx context.Context) error {
 	}
 	if !r.configured.Load() {
 		return errNotConfigured
+	}
+	if r.acl.Load() == nil {
+		return errNoUsers
 	}
 	if r.synced.Load() {
 		return nil

@@ -40,6 +40,10 @@ type InstanceStatus struct {
 	// AwaitingApproval tells that this restarted primary lets no replica
 	// sync until the operator approves its dataset with /promote.
 	AwaitingApproval bool `json:"awaitingApproval,omitempty"`
+	// ACLDigest identifies the content of <instance>-acl Redis has, see
+	// ACLDigest; ACLRejected maps a user to the error Redis gave for it.
+	ACLDigest   string            `json:"aclDigest,omitempty"`
+	ACLRejected map[string]string `json:"aclRejected,omitempty"`
 }
 
 // apiHandler serves the API of the Instance Manager. guard runs its commands
@@ -54,6 +58,9 @@ func apiHandler(rdb *redis.Client, guard *epochGuard, ready *readiness) http.Han
 			return
 		}
 		status.AwaitingApproval = status.Role == "master" && !ready.approved.Load()
+		if acl := ready.acl.Load(); acl != nil {
+			status.ACLDigest, status.ACLRejected = acl.Digest, acl.Rejected
+		}
 		writeJSON(w, status)
 	})
 

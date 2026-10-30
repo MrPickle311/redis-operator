@@ -1,0 +1,16 @@
+apiVersion: redis.operator.com/v1
+kind: RedisUser
+metadata:
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: orders-app
+spec:
+  targetRef:
+    name: redisinstance-sample
+  # The operator creates the Secret orders-app-redis-user with the keys
+  # username and password; or point passwordSecretRef at a Secret of yours.
+  authentication:
+    generate: true
+  acl:
+    rules: ["~orders:*", "+@read", "+@write", "-@dangerous"]

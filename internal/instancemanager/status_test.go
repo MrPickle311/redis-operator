@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func TestParseStatus(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseStatus() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseStatus() = %+v, want %+v", got, tt.want)
 			}
 		})

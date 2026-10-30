@@ -209,6 +209,7 @@ func TestConfigureOnStartMakesThePodReady(t *testing.T) {
 	defer func() { _ = rdb.Close() }()
 	ready := &readiness{rdb: rdb}
 	ready.approved.Store(true) // a primary the operator approved already
+	ready.acl.Store(&aclResult{})
 
 	if err := ready.check(ctx); err != errNotConfigured {
 		t.Fatalf("check() = %v before the configuration, want errNotConfigured", err)
@@ -238,6 +239,7 @@ func TestApprovalOfARestartedPrimary(t *testing.T) {
 	}
 	ready := &readiness{rdb: rdb}
 	ready.configured.Store(true)
+	ready.acl.Store(&aclResult{})
 	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}, ready))
 	defer srv.Close()
 	status := func() InstanceStatus {

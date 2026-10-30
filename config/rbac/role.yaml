@@ -74,6 +74,7 @@ rules:
   - redis.operator.com
   resources:
   - redisinstances
+  - redisusers
   verbs:
   - create
   - delete
@@ -86,12 +87,14 @@ rules:
   - redis.operator.com
   resources:
   - redisinstances/finalizers
+  - redisusers/finalizers
   verbs:
   - update
 - apiGroups:
   - redis.operator.com
   resources:
   - redisinstances/status
+  - redisusers/status
   verbs:
   - get
   - patch

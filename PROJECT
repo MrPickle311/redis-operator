@@ -18,4 +18,13 @@ resources:
   kind: RedisInstance
   path: github.com/MrPickle311/redis-operator/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: operator.com
+  group: redis
+  kind: RedisUser
+  path: github.com/MrPickle311/redis-operator/api/v1
+  version: v1
 version: "3"

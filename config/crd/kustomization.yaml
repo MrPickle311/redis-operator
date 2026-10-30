@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/redis.operator.com_redisinstances.yaml
+- bases/redis.operator.com_redisusers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -120,6 +120,13 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	if opts.TLS {
 		go watchTLS(ctx, rdb)
 	}
+	users := &aclSync{
+		c:     c,
+		key:   types.NamespacedName{Namespace: opts.Namespace, Name: ACLSecretName(opts.Instance)},
+		rdb:   rdb,
+		ready: ready,
+	}
+	go users.run(ctx)
 	return Run(ctx, "redis-server", redisConfPath)
 }
 

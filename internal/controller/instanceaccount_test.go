@@ -22,13 +22,18 @@ var _ = Describe("Instance Manager account", func() {
 		Expect(reconcileOnce(objectKey(name))).To(Succeed())
 	})
 
-	It("lets the Instance Managers only read their own RedisInstance", func() {
+	It("lets the Instance Managers only read their own RedisInstance and its users", func() {
 		role := &rbacv1.Role{}
 		Expect(k8sClient.Get(ctx, accountKey, role)).To(Succeed())
 		Expect(role.Rules).To(Equal([]rbacv1.PolicyRule{{
 			APIGroups:     []string{"redis.operator.com"},
 			Resources:     []string{"redisinstances"},
 			ResourceNames: []string{name},
+			Verbs:         []string{"get"},
+		}, {
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			ResourceNames: []string{name + "-acl"},
 			Verbs:         []string{"get"},
 		}}))
 

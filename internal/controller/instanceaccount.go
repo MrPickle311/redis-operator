@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
+	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
 
 // serviceAccountDir is where the kubelet puts the ServiceAccount token, and
@@ -37,6 +38,13 @@ func (r *RedisInstanceReconciler) ensureInstanceAccount(ctx context.Context, ins
 				APIGroups:     []string{redisv1.GroupVersion.Group},
 				Resources:     []string{"redisinstances"},
 				ResourceNames: []string{instance.Name},
+				Verbs:         []string{"get"},
+			}, {
+				// The users of RedisUsers, as hashes; see the aclSync of the
+				// Instance Manager.
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				ResourceNames: []string{instancemanager.ACLSecretName(instance.Name)},
 				Verbs:         []string{"get"},
 			}}
 		}},

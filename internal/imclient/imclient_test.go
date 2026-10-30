@@ -35,7 +35,7 @@ func TestStatusAuthenticatesAsTheOperator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != replica {
+	if !reflect.DeepEqual(got, replica) {
 		t.Errorf("Status() = %+v, want %+v", got, replica)
 	}
 }

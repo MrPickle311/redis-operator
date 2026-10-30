@@ -75,6 +75,7 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=redis.operator.com,resources=redisusers,verbs=get;list;watch
 
 // buildRedisPod returns the Pod of the instance with the given ordinal, with
 // claimName, the PVC bound in status.volumes, as its data volume.
@@ -445,6 +446,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.reconcilePDBs(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcileACLSecret(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	for _, svc := range []*corev1.Service{
 		buildHeadlessService(&instance),
@@ -621,6 +625,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	configPending := r.reconcileConfig(ctx, &instance)
+	configPending = r.reconcileACLApplied(ctx, &instance) || configPending
 
 	r.setMemoryLimitedCondition(&instance, memoryUnlimited)
 	instance.Status.ReadyInstances = readyCount
@@ -704,6 +709,8 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		// The certificate and the client CA of the user are not owned.
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.instancesUsingSecret)).
+		// The users of the instance come from RedisUsers.
+		Watches(&redisv1.RedisUser{}, handler.EnqueueRequestsFromMapFunc(instanceOfUser)).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
