@@ -703,9 +703,9 @@ spec:
       key: users.acl
 ```
 
-- **Zewnętrzny ACL** służy organizacjom, które trzymają użytkowników w Vault lub innym systemie IAM i generują plik ACL. IM parsuje go, odrzuca linie z nazwami zarezerwowanymi i plaintext hasłami (tylko `#<hash>`; opcja `allowPlaintextPasswords: true` dla wygody dev) i scala z pozostałymi źródłami.
+- **Zewnętrzny ACL** służy organizacjom, które trzymają użytkowników w Vault lub innym systemie IAM i generują plik ACL. Parsuje go operator (nie IM) i scala z `RedisUser` w `<name>-acl`. Hasła `>haslo` operator zamienia na `#<sha256>` (`<haslo>` na `!<sha256>`), więc do Redisa trafiają tylko hashe i opcja `allowPlaintextPasswords` nie jest potrzebna. Jedna zła linia (nie `user ...`, nazwa zarezerwowana, `nopass`, użytkownik dwa razy) odrzuca **cały plik**: instancje zostają przy użytkownikach ostatniego dobrego pliku (operator trzyma go w `<name>-acl` pod kluczem `external.acl`), a `ACLReady=False` z powodem `InvalidExternalACL` i Event Warning podają numer linii i przyczynę, bez cytowania linii (może zawierać hasło). Brak Secretu albo klucza działa tak samo: użytkownicy nie są kasowani (decyzje kroku 6.3).
 - **Konflikt nazw** (ten sam `username` w zewnętrznym ACL i w `RedisUser`, albo w dwóch `RedisUser`): żaden z konfliktujących userów nie jest zmieniany, a oba źródła dostają condition `Conflict` z nazwą drugiego. Bezpieczniej jest nie zgadywać, które źródło ma rację.
-- **Drift:** użytkownicy spoza źródeł (np. dodani ręcznie przez `ACL SETUSER`) znikają przy następnym `ACL LOAD`; nie ma opcji ich zostawiania (decyzja kroku 6).
+- **Drift:** użytkownicy spoza źródeł (np. dodani ręcznie przez `ACL SETUSER`) znikają przy następnym pełnym syncu IM (co 30 s); nie ma opcji ich zostawiania (decyzja kroku 6).
 - Hasła `RedisUser` zawsze pochodzą z Secretu: zewnętrznego (`passwordSecretRef`) albo wygenerowanego (`generate: true`).
 
 **Krok 6 — decyzje (2026-10-29):**

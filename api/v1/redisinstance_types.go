@@ -65,6 +65,12 @@ const ConditionFailover = "Failover"
 // certificate misses; Redis keeps serving the certificate it had.
 const ConditionTLSReady = "TLSReady"
 
+// ConditionACLReady is True when every running instance has the users of
+// RedisUsers and of spec.acl.externalSecretRef. When False, its Reason tells
+// whether the external file is refused, Redis refused rules, or the instances
+// did not apply the users yet.
+const ConditionACLReady = "ACLReady"
+
 // ConditionReady is True when every instance is Ready, up to date and on a
 // Ready volume, and no switchover is running. It sums up the instance for
 // tools that read one condition, like the health check of Argo CD.
@@ -323,6 +329,14 @@ type ACLSpec struct {
 	// +kubebuilder:default=disabled
 	// +optional
 	DefaultUser DefaultUserMode `json:"defaultUser,omitempty"`
+
+	// ExternalSecretRef selects a Redis ACL file with more users, e.g. one
+	// Vault generates: a line "user <name> <rules>" per user. Passwords
+	// written as ">password" reach Redis only as hashes; nopass and the
+	// reserved users are refused. One bad line refuses the whole file, and
+	// the instances keep the users of the last good one.
+	// +optional
+	ExternalSecretRef *corev1.SecretKeySelector `json:"externalSecretRef,omitempty"`
 }
 
 // StorageSpec chooses the volumes when the RedisInstance is created. After
@@ -419,6 +433,10 @@ type ACLStatus struct {
 	// Rejected maps a user to the error Redis gave for its rules.
 	// +optional
 	Rejected map[string]string `json:"rejected,omitempty"`
+	// ExternalError tells why spec.acl.externalSecretRef is not used; the
+	// instances keep the users of the last good file.
+	// +optional
+	ExternalError string `json:"externalError,omitempty"`
 }
 
 // VolumeState is the observed state of the volume of one instance.

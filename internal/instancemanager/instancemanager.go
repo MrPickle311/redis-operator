@@ -63,6 +63,7 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	defer func() { _ = rdb.Close() }()
 
 	ready := &readiness{rdb: rdb}
+	go ready.watch(ctx)
 	// One guard for the commands of the operator and the ones the Instance
 	// Manager takes on its own, so they run one at a time.
 	guard := &epochGuard{path: epochPath}

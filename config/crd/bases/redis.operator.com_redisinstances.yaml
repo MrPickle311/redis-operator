@@ -65,6 +65,35 @@ spec:
                     - disabled
                     - enabled
                     type: string
+                  externalSecretRef:
+                    description: |-
+                      ExternalSecretRef selects a Redis ACL file with more users, e.g. one
+                      Vault generates: a line "user <name> <rules>" per user. Passwords
+                      written as ">password" reach Redis only as hashes; nopass and the
+                      reserved users are refused. One bad line refuses the whole file, and
+                      the instances keep the users of the last good one.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
                 type: object
               affinity:
                 default: {}
@@ -448,6 +477,11 @@ spec:
                     type: boolean
                   digest:
                     description: Digest identifies the content of <name>-acl.
+                    type: string
+                  externalError:
+                    description: |-
+                      ExternalError tells why spec.acl.externalSecretRef is not used; the
+                      instances keep the users of the last good file.
                     type: string
                   rejected:
                     additionalProperties:

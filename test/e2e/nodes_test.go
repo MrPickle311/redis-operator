@@ -209,6 +209,23 @@ var _ = Describe("Node loss", Ordered, func() {
 		_, _ = kubectl("delete", "ns", nlNamespace, "--ignore-not-found", "--timeout=2m")
 	})
 
+	AfterEach(func() {
+		if CurrentSpecReport().Failed() {
+			out, _ := kubectl("get", "pods", "-n", nlNamespace, "-o", "wide")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Pods:\n%s\n", out)
+			out, _ = kubectl("get", "events", "-n", nlNamespace, "--field-selector", "reason=Unhealthy")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Probe failures:\n%s\n", out)
+			for i := range 2 {
+				out, _ = kubectl("logs", fmt.Sprintf("%s-%d", nlName, i), "-n", nlNamespace, "-c", "redis", "--tail=20")
+				_, _ = fmt.Fprintf(GinkgoWriter, "Logs of %s-%d:\n%s\n", nlName, i, out)
+			}
+			out, _ = kubectl("get", "redisinstance", nlName, "-n", nlNamespace, "-o", "jsonpath={.status}")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Status:\n%s\n", out)
+			out, _ = kubectl("logs", "-n", namespace, "-l", managerPodSelector, "--tail=80")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n%s\n", out)
+		}
+	})
+
 	cli := func(g Gomega, pod string, args ...string) string {
 		out, err := kubectl(append([]string{"exec", pod, "-n", nlNamespace, "-c", "redis", "--",
 			"redis-cli", "--tls", "--cacert", "/tls/ca.crt", "--user", "_operator", "--pass", password, "--no-auth-warning"}, args...)...)
@@ -239,8 +256,11 @@ var _ = Describe("Node loss", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Eventually(func() string { return get("{.status.currentPrimary}") }).Should(Equal(replica))
 			// The old primary is a replica only once it has synced: until
-			// then no replica could take over.
-			Eventually(func() string { return get(`{.status.conditions[?(@.type=="Ready")].status}`) }).Should(Equal("True"))
+			// then no replica could take over. Not the condition Ready, which
+			// is still True from before the switchover for one reconcile.
+			Eventually(func(g Gomega) {
+				g.Expect(cli(g, primary, "INFO", "replication")).To(ContainSubstring("master_link_status:up"))
+			}).Should(Succeed())
 		}
 		oldPrimary = get("{.status.currentPrimary}")
 		Expect(cli(Default, oldPrimary, "SET", "nl-key", "kept")).To(Equal("OK"))

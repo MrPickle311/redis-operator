@@ -151,22 +151,30 @@ func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.
 	if err != nil {
 		return metav1.Condition{}, err
 	}
+	content, err := r.aclSecretData(ctx, &instance)
+	if err != nil {
+		return metav1.Condition{}, err
+	}
+	if external, _ := parseExternalACL(string(content[externalACLKey])); external[username] != "" {
+		return condition(metav1.ConditionFalse, "Conflict",
+			fmt.Sprintf("spec.acl.externalSecretRef of %s also defines the username %s; neither is applied", instance.Name, username)), nil
+	}
 	if claimants := otherUsersClaimingUsername(user, others); len(claimants) > 0 {
 		return condition(metav1.ConditionFalse, "Conflict",
 			fmt.Sprintf("RedisUser %s also claims the username %s; neither is applied", strings.Join(claimants, ", "), username)), nil
 	}
-	password, err := userPassword(ctx, r.Client, user)
+	passwords, err := userPasswords(ctx, r.Client, user)
 	if err != nil {
 		return metav1.Condition{}, err
 	}
-	if password == "" {
+	if len(passwords) == 0 {
 		return condition(metav1.ConditionFalse, "PasswordMissing", "The Secret with the password does not exist yet, or has no such key"), nil
 	}
 	if reason, rejected := aclRejection(&instance, username); rejected {
 		return condition(metav1.ConditionFalse, "Rejected",
 			"Redis refused the rules, so it keeps the previous ones of the user, if any: "+reason), nil
 	}
-	applied, err := r.appliedWithLine(ctx, &instance, aclLine(username, password, user.Spec.ACL.Rules))
+	applied, err := r.appliedWithLine(ctx, &instance, aclLine(username, passwords, user.Spec.ACL.Rules))
 	if err != nil {
 		return metav1.Condition{}, err
 	}
@@ -226,14 +234,21 @@ func (r *RedisUserReconciler) userGone(ctx context.Context, user *redisv1.RedisU
 	return !stillThere && aclApplied(&instance, content), nil
 }
 
-// aclContent returns the content of <instance>-acl, empty when it does not exist.
+// aclContent returns the users <instance>-acl gives Redis, none when it does
+// not exist.
 func (r *RedisUserReconciler) aclContent(ctx context.Context, instance *redisv1.RedisInstance) ([]byte, error) {
+	data, err := r.aclSecretData(ctx, instance)
+	return data[instancemanager.ACLSecretKey], err
+}
+
+// aclSecretData returns the data of <instance>-acl, none when it does not exist.
+func (r *RedisUserReconciler) aclSecretData(ctx context.Context, instance *redisv1.RedisInstance) (map[string][]byte, error) {
 	var secret corev1.Secret
 	err := r.Get(ctx, types.NamespacedName{Name: instancemanager.ACLSecretName(instance.Name), Namespace: instance.Namespace}, &secret)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
-	return secret.Data[instancemanager.ACLSecretKey], err
+	return secret.Data, err
 }
 
 // aclApplied reports whether every running instance has applied content.

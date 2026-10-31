@@ -38,8 +38,8 @@ func ACLDigest(content []byte) string {
 // did not change, which also undoes users changed by hand with ACL SETUSER.
 const aclResyncEvery = 15
 
-// reservedUsers are never touched by the sync: redis.conf defines them.
-var reservedUsers = []string{"default", OperatorUser, ReplicationUser}
+// ReservedUsers are never touched by the sync: redis.conf defines them.
+var ReservedUsers = []string{"default", OperatorUser, ReplicationUser}
 
 // aclResult is what the last sync applied.
 type aclResult struct {
@@ -92,7 +92,7 @@ func syncACL(ctx context.Context, rdb *redis.Client, users map[string][]string) 
 		return nil, err
 	}
 	for _, name := range current {
-		if _, wanted := users[name]; wanted || slices.Contains(reservedUsers, name) {
+		if _, wanted := users[name]; wanted || slices.Contains(ReservedUsers, name) {
 			continue
 		}
 		if err := rdb.Do(ctx, "ACL", "DELUSER", name).Err(); err != nil {

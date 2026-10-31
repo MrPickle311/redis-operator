@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -95,6 +96,23 @@ func (r *readiness) check(ctx context.Context) error {
 	}
 	r.synced.Store(true)
 	return nil
+}
+
+// watch runs the check every second until ctx ends, so a replica remembers
+// its first sync even when no probe of the kubelet comes while the link is
+// up: a primary that dies right after the sync, e.g. after a switchover, must
+// still leave a Ready replica to fail over to.
+func (r *readiness) watch(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = r.check(ctx) // the error is for the kubelet
+		}
+	}
 }
 
 // initialSyncDone reports whether a replica is connected to its primary and

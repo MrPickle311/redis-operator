@@ -377,8 +377,8 @@ func (r *RedisInstanceReconciler) setTLSNotReady(instance *redisv1.RedisInstance
 }
 
 // instancesUsingSecret maps an event of a Secret of the user to the
-// RedisInstances that take a certificate, a client CA or the password of a
-// RedisUser from it. Those
+// RedisInstances that take a certificate, a client CA, the external ACL or
+// the password of a RedisUser from it. Those
 // Secrets are not owned, so without it a renewal by cert-manager would go
 // unnoticed until the next reconcile.
 func (r *RedisInstanceReconciler) instancesUsingSecret(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -391,7 +391,8 @@ func (r *RedisInstanceReconciler) instancesUsingSecret(ctx context.Context, obj 
 	for _, instance := range instances.Items {
 		spec := instance.Spec.TLS
 		if (spec.ServerSecretRef != nil && spec.ServerSecretRef.Name == obj.GetName()) ||
-			(spec.ClientCASecretRef != nil && spec.ClientCASecretRef.Name == obj.GetName()) {
+			(spec.ClientCASecretRef != nil && spec.ClientCASecretRef.Name == obj.GetName()) ||
+			(instance.Spec.ACL.ExternalSecretRef != nil && instance.Spec.ACL.ExternalSecretRef.Name == obj.GetName()) {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&instance)})
 		}
 	}
