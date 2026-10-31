@@ -64,7 +64,9 @@ type TargetRef struct {
 // Redis gets only a hash of it.
 // +kubebuilder:validation:XValidation:rule="has(self.passwordSecretRef) != (has(self.generate) && self.generate)",message="set exactly one of passwordSecretRef and generate"
 type RedisUserAuthentication struct {
-	// PasswordSecretRef selects the password in a Secret of the user.
+	// PasswordSecretRef selects the password in a Secret of the user. During
+	// a rotation, the key previousPassword of the same Secret keeps the old
+	// password valid as well, until it is removed.
 	// +optional
 	PasswordSecretRef *corev1.SecretKeySelector `json:"passwordSecretRef,omitempty"`
 

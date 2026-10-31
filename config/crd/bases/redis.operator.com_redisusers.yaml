@@ -89,8 +89,10 @@ spec:
                       the keys username and password, for the application to mount.
                     type: boolean
                   passwordSecretRef:
-                    description: PasswordSecretRef selects the password in a Secret
-                      of the user.
+                    description: |-
+                      PasswordSecretRef selects the password in a Secret of the user. During
+                      a rotation, the key previousPassword of the same Secret keeps the old
+                      password valid as well, until it is removed.
                     properties:
                       key:
                         description: The key of the secret to select from.  Must be

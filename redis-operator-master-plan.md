@@ -540,7 +540,7 @@ Kluczowe decyzje:
 - Kontroler przelicza **cały pożądany zbiór userów** przy każdej zmianie, a nie pojedynczego usera. Eliminuje to race condition przy równoległych zmianach.
 - Do IM trafiają **hashe haseł** (`#<sha256>`), nigdy plaintext.
 - Finalizer na `RedisUser` gwarantuje `ACL DELUSER` przed usunięciem CR z etcd.
-- Rotacja hasła: watch na `passwordSecretRef` jest traktowany jak zmiana samego `RedisUser`. W czasie rotacji można mieć dwa hasła jednocześnie (`>old >new`), jeśli Secret zawiera klucz `previousPassword`.
+- Rotacja hasła: watch na `passwordSecretRef` jest traktowany jak zmiana samego `RedisUser`. W czasie rotacji można mieć dwa hasła jednocześnie (`#new #old`), jeśli Secret z `passwordSecretRef` zawiera klucz `previousPassword`; usunięcie klucza unieważnia stare hasło (`SETUSER reset`). Hasło z `generate: true` bez rotacji (na razie).
 - `RedisCluster`: sync idzie do **wszystkich node'ów wszystkich shardów** (ACL nie propaguje się między node'ami).
 - Nowa instancja (skalowanie, odtworzenie po failoverze) ładuje pełny ACL z `<name>-acl` przy starcie, zanim zacznie przyjmować ruch.
 

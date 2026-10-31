@@ -20,7 +20,7 @@ import (
 )
 
 func TestACLLine(t *testing.T) {
-	line := aclLine("app", "secret", []redisv1.ACLRule{"~app:*", "+@read"})
+	line := aclLine("app", []string{"secret"}, []redisv1.ACLRule{"~app:*", "+@read"})
 	want := fmt.Sprintf("user app on #%x ~app:* +@read", sha256.Sum256([]byte("secret")))
 	if line != want {
 		t.Errorf("aclLine() = %q, want %q", line, want)
@@ -89,7 +89,7 @@ var _ = Describe("RedisUser", Ordered, func() {
 		Expect(getUser("app").Finalizers).To(ContainElement(userFinalizer))
 
 		Expect(reconcileOnce(objectKey(instanceName))).To(Succeed())
-		Expect(acl()).To(Equal(aclLine("app", password, []redisv1.ACLRule{"~app:*", "+@read"}) + "\n"))
+		Expect(acl()).To(Equal(aclLine("app", []string{password}, []redisv1.ACLRule{"~app:*", "+@read"}) + "\n"))
 		Expect(acl()).NotTo(ContainSubstring(password))
 
 		reconcileUser("app")
@@ -114,7 +114,22 @@ var _ = Describe("RedisUser", Ordered, func() {
 			Data:       map[string][]byte{"password": []byte("synced")},
 		})).To(Succeed())
 		Expect(reconcileOnce(objectKey(instanceName))).To(Succeed())
-		Expect(acl()).To(ContainSubstring(aclLine("vault-user", "synced", user.Spec.ACL.Rules)))
+		Expect(acl()).To(ContainSubstring(aclLine("vault-user", []string{"synced"}, user.Spec.ACL.Rules)))
+	})
+
+	It("accepts the previous password too during a rotation", func() {
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, objectKey("from-vault"), secret)).To(Succeed())
+		secret.Data = map[string][]byte{"password": []byte("new"), "previousPassword": []byte("synced")}
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		Expect(reconcileOnce(objectKey(instanceName))).To(Succeed())
+		rules := getUser("vault-user").Spec.ACL.Rules
+		Expect(acl()).To(ContainSubstring(aclLine("vault-user", []string{"new", "synced"}, rules)))
+
+		delete(secret.Data, "previousPassword")
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		Expect(reconcileOnce(objectKey(instanceName))).To(Succeed())
+		Expect(acl()).To(ContainSubstring(aclLine("vault-user", []string{"new"}, rules) + "\n"))
 	})
 
 	It("applies neither of two RedisUsers that claim one username", func() {

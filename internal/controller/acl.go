@@ -84,7 +84,7 @@ func userPasswords(ctx context.Context, c client.Reader, user *redisv1.RedisUser
 	}
 	var secret corev1.Secret
 	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: user.Namespace}, &secret)
-	if apierrors.IsNotFound(err) || err != nil || len(secret.Data[key]) == 0 {
+	if err != nil || len(secret.Data[key]) == 0 {
 		return nil, client.IgnoreNotFound(err)
 	}
 	passwords := []string{string(secret.Data[key])}
