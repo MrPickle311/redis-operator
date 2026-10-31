@@ -239,12 +239,13 @@ func main() {
 	}
 
 	if err := (&controller.RedisInstanceReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		OperatorImage:   operatorImage,
-		CA:              ca,
-		InstanceManager: instanceManager,
-		Recorder:        mgr.GetEventRecorder("redis-operator"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorImage:     operatorImage,
+		CA:                ca,
+		InstanceManager:   instanceManager,
+		Recorder:          mgr.GetEventRecorder("redis-operator"),
+		OperatorNamespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisinstance")
 		os.Exit(1)

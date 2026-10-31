@@ -117,7 +117,7 @@ func (c *Client) do(ctx context.Context, method, host, path string, body, out an
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return withNetworkPolicyHint(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -126,4 +126,14 @@ func (c *Client) do(ctx context.Context, method, host, path string, body, out an
 		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(msg))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// withNetworkPolicyHint names the usual cause of a timeout: a NetworkPolicy
+// drops the packets, so the operator gets no answer instead of a refusal.
+func withNetworkPolicyHint(err error) error {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return fmt.Errorf("%w (no answer on port %d: is a NetworkPolicy of the namespace blocking the operator?)", err, instancemanager.StatusPort)
+	}
+	return err
 }

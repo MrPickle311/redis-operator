@@ -42,6 +42,7 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/imclient"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	"github.com/MrPickle311/redis-operator/internal/pki"
+	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 )
@@ -60,6 +61,9 @@ type RedisInstanceReconciler struct {
 	InstanceManager *imclient.Client
 	// Recorder emits the Events of RedisInstances.
 	Recorder events.EventRecorder
+	// OperatorNamespace is where the Pods of the operator run; the
+	// NetworkPolicy of an instance lets them in.
+	OperatorNamespace string
 }
 
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisinstances,verbs=get;list;watch;create;update;patch;delete
@@ -73,6 +77,7 @@ type RedisInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisusers,verbs=get;list;watch
@@ -448,6 +453,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.reconcilePDBs(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcileNetworkPolicy(ctx, &instance); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.reconcileACLSecret(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -717,6 +725,7 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		// A cordoned node of a primary needs a switchover, see reconcileCordon.
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.instancesOnCordonedNode)).
 		Named("redisinstance").

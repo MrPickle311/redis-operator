@@ -466,6 +466,7 @@ func reconcileOnce(key types.NamespacedName) error {
 func reconcileWith(recorder events.EventRecorder, key types.NamespacedName) error {
 	r := &RedisInstanceReconciler{
 		Client: k8sClient, Scheme: k8sClient.Scheme(), OperatorImage: testOperatorImage, CA: testCA, Recorder: recorder,
+		OperatorNamespace: testOperatorNamespace,
 	}
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 	return err

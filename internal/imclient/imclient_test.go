@@ -188,3 +188,22 @@ func mustCA(t *testing.T) pki.KeyPair {
 	}
 	return ca
 }
+
+func TestTimeoutsNameNetworkPolicies(t *testing.T) {
+	ca := mustCA(t)
+	hang := make(chan struct{})
+	client := newTestClient(t, ca, startInstanceManager(t, ca, func(http.ResponseWriter, *http.Request) { <-hang }))
+	// After the server: cleanups run last first, and closing it waits for the handler.
+	t.Cleanup(func() { close(hang) })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if _, err := client.Status(ctx, "localhost"); err == nil || !strings.Contains(err.Error(), "NetworkPolicy") {
+		t.Errorf("Status() error = %v, want the hint about NetworkPolicies", err)
+	}
+	// Another CA is not a network problem.
+	other := newTestClient(t, mustCA(t), startInstanceManager(t, ca, func(http.ResponseWriter, *http.Request) {}))
+	if _, err := other.Status(context.Background(), "localhost"); err == nil || strings.Contains(err.Error(), "NetworkPolicy") {
+		t.Errorf("Status() error = %v, want no hint about NetworkPolicies", err)
+	}
+}
