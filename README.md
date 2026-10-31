@@ -18,6 +18,12 @@ kubectl get secret my-redis-server-tls -o jsonpath='{.data.ca\.crt}' | base64 -d
 redis-cli --tls --cacert ca.crt -h my-redis-rw.<namespace>.svc --user <user> --pass <password>
 ```
 
+Applications log in with a user of their own, from a `RedisUser`
+(`config/samples/redis_v1_redisuser.yaml`). With `authentication.generate`
+the operator writes the password to the Secret `<redisuser>-redis-user`;
+see [Users](docs/architecture.md#users), also for an ACL file of your own
+and password rotation.
+
 To serve a certificate of your own (e.g. from cert-manager) or to ask
 clients for certificates, see the TLS section of the architecture document.
 

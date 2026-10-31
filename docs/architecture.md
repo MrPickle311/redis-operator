@@ -31,6 +31,10 @@ flowchart LR
     RI --> AUTH["Secret cache-internal-auth"]:::secret
     RI --> RCA["Secret cache-ca<br/>CA of the TLS of Redis"]:::secret
     RI --> RTLS["Secret cache-server-tls"]:::secret
+    RI --> ACL["Secret cache-acl<br/>users of Redis"]:::secret
+    RU["RedisUser app"]:::cr
+    RU --> RUS["Secret app-redis-user<br/>generate: true"]:::secret
+    RU -. targetRef .-> RI
     RCA -. signs .-> RTLS
     RI --> HL["Service cache-hl"]:::svc
     RI --> RW["Service cache-rw"]:::svc
@@ -54,11 +58,13 @@ How the objects use each other:
 |-----------------------------|-------------------------------------------------|----------------------------------------------------------|
 | Secret `redis-operator-ca`  | CA cert and key                                 | operator: signs `cache-im-tls` and its own client certs  |
 | ServiceAccount `cache-instance` | token of the Instance Managers           | every Pod (`serviceAccountName`), redis container only   |
-| Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` only  | the Instance Manager reads its `RedisInstance` at start  |
+| Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` and `secrets/cache-acl` only | the Instance Manager reads its `RedisInstance` and users |
 | Secret `cache-im-tls`       | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod, mounted at `/certificates`                    |
 | Secret `cache-internal-auth`| `operator-password`, `replication-password`     | every Pod at `/internal-auth`; operator for `REPLICAOF`  |
 | Secret `cache-ca`           | `ca.crt`, `ca.key`: the CA of the TLS of Redis, 10 years | operator: signs `cache-server-tls`                  |
 | Secret `cache-server-tls`   | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod at `/tls`; clients take `ca.crt` from it       |
+| Secret `cache-acl`          | `users.acl`: users with hashed passwords; `external.acl`: last good file | every Instance Manager, read from the API, see [Users](#users) |
+| Secret `app-redis-user`     | `username`, `password`, owned by the `RedisUser` | the application of a `RedisUser` with `generate: true`  |
 | Service `cache-hl`          | headless                                        | stable DNS `cache-N.cache-hl.app.svc` for every Pod      |
 | Service `cache-rw`          | selects `redis.operator.com/role=primary`       | clients that write                                       |
 | Service `cache-ro`          | selects `redis.operator.com/role=replica`       | clients that only read                                   |
@@ -199,6 +205,96 @@ on this one `RedisInstance` and nothing else.
 |----------------|--------------------------------|----------------------------------------------|
 | `_operator`    | `+@all`                        | Instance Manager                              |
 | `_replication` | `+psync +replconf +ping`       | replicas syncing from the primary            |
+
+## Users
+
+Applications get users from two sources: a `RedisUser` each, or an ACL
+file in a Secret of your own (`spec.acl.externalSecretRef`, e.g. users
+migrated from another Redis). `default`, `_operator` and `_replication` are
+reserved; the username of a `RedisUser` must not start with `_`.
+
+```yaml
+apiVersion: redis.operator.com/v1
+kind: RedisUser
+metadata: {name: app, namespace: app}
+spec:
+  targetRef: {name: cache}
+  authentication:
+    generate: true          # or passwordSecretRef: {name: from-vault, key: password}
+  acl:
+    rules: ["~app:*", "+@read", "+@write", "-@dangerous"]
+```
+
+```mermaid
+flowchart LR
+    classDef op fill:#e8d5ff,stroke:#7b3fbf,color:#000
+    classDef secret fill:#fdebd0,stroke:#ca6f1e,color:#000
+    classDef pod fill:#d5f5e3,stroke:#1e8449,color:#000
+
+    RU["RedisUsers of cache"]:::op
+    PW["password Secrets"]:::secret
+    EXT["Secret of spec.acl.externalSecretRef"]:::secret
+    OP["Operator"]:::op
+    ACL["Secret cache-acl<br/>users.acl, hashes only"]:::secret
+    IM["Instance Manager<br/>every Pod"]:::pod
+    RS["redis-server"]:::pod
+
+    RU & PW & EXT -- watch --> OP
+    OP -- "whole set of users" --> ACL
+    IM -- "get every 2 s" --> ACL
+    IM -- "ACL SETUSER user reset ...<br/>ACL DELUSER" --> RS
+    IM -- "/status: digest, refused users" --> OP
+```
+
+- The operator computes the whole set of users on every change and writes
+  it to `cache-acl`. Redis and that Secret get only SHA-256 hashes: `>pw` and
+  `<pw` of the file become `#hash` and `!hash`.
+- The Instance Manager applies a changed user with `ACL SETUSER <user> reset
+  ...`, deletes users that are gone, and every 30 s syncs all of them, so
+  users changed by hand return to the Secret. Internal users are never
+  touched. A starting Pod is not Ready before its first sync.
+- Redis refuses bad rules of one user (e.g. an unknown command) as a whole
+  and keeps the previous rules of that user; the others are applied. The
+  `RedisUser` shows `Ready=False/Rejected` and a `Warning` Event
+  `RulesRejected`.
+- One bad line refuses the whole file: no `user <name>` line, a reserved
+  name, a user defined twice or `nopass`. The instances keep the users of the
+  last good file (`external.acl` of `cache-acl`), the condition `ACLReady`
+  says the line and the reason, never its text, and a `Warning` Event
+  `InvalidExternalACL` follows. A missing Secret or key keeps them too.
+- A username claimed by two `RedisUser`s, or by a `RedisUser` and the file,
+  is applied from neither: guessing could hand one application the data of
+  another. The `RedisUser`s show `Ready=False/Conflict`.
+- Deleting a `RedisUser` removes its user from Redis (finalizer
+  `redis.operator.com/user`).
+
+`Ready` of a `RedisUser`:
+
+| `status` | `reason` | When |
+|---|---|---|
+| `False` | `TargetNotFound` | the `RedisInstance` of `targetRef` does not exist |
+| `False` | `Conflict` | another `RedisUser` or the file has the same username |
+| `False` | `PasswordMissing` | the Secret of `passwordSecretRef` or its key does not exist yet |
+| `False` | `Rejected` | Redis refused the rules; it keeps the previous ones |
+| `False` | `Pending` | some running instance has not applied the user yet |
+| `True` | `Applied` | every running instance has the user |
+
+The condition `ACLReady` of the `RedisInstance` sums up all users
+(`InvalidExternalACL`, `Rejected`, `Pending`, `Applied`). It is not part of
+`Ready`: a wrong user of one application must not mark the database down.
+
+### Password rotation
+
+Changing `password` in the Secret of `passwordSecretRef` swaps the password
+at once: clients with the old one get `WRONGPASS` within seconds. To rotate
+without that moment, keep the old one in the key `previousPassword` of the
+same Secret while the applications move over:
+
+1. `password: <new>`, `previousPassword: <old>`: Redis accepts both.
+2. Move the applications to the new password.
+3. Remove `previousPassword`: only the new one works.
+
+A generated password (`generate: true`) does not rotate.
 
 ## Memory
 
