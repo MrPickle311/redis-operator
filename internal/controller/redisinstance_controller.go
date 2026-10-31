@@ -353,6 +353,8 @@ func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) *corev1.Persi
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: instance.Namespace,
+			// Lets a snapshot schedule select the volumes of the instance.
+			Labels: instanceSelector(instance),
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},

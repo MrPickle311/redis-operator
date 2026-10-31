@@ -709,6 +709,106 @@ Known limits:
 - An external PVC of an instance in the middle cannot be replaced without a
   `volumeClaimTemplate`.
 
+## Backup and restore
+
+The operator takes no backups: the storage does. A `VolumeSnapshot` goes to
+the CSI driver, and its `VolumeSnapshotClass` picks the mechanism of that
+driver, e.g. a local snapshot or, on Longhorn, a backup to S3
+(`type: bak`). Schedules and retention come from tools beside the operator:
+[snapscheduler](https://backube.github.io/snapscheduler/) for any CSI
+driver, a Longhorn `RecurringJob`, a Velero `Schedule`. A restore is a new
+`RedisInstance` on a PVC made from a snapshot.
+
+```mermaid
+flowchart LR
+    classDef op fill:#e8d5ff,stroke:#7b3fbf,color:#000
+    classDef pvc fill:#fcf3cf,stroke:#b7950b,color:#000
+    classDef ext fill:#eaeded,stroke:#7f8c8d,color:#000,stroke-dasharray:4 3
+
+    SCHED["snapscheduler / Longhorn / Velero"]:::ext
+    D0[("PVC cache-0-data<br/>primary")]:::pvc
+    VS["VolumeSnapshot<br/>CSI driver"]:::ext
+    NEW[("PVC cache-restored<br/>dataSource: snapshot")]:::pvc
+    RI["RedisInstance cache-restored<br/>existingClaims: ordinal 0"]:::op
+    R1[("PVC cache-restored-1-data<br/>empty, full sync")]:::pvc
+
+    SCHED -- schedule --> VS
+    D0 -. snapshot .-> VS
+    VS -- restore --> NEW
+    NEW --> RI
+    RI --> R1
+```
+
+**What a snapshot holds.** A snapshot of one volume is atomic, so to Redis
+it looks like a crash at that moment:
+
+| `persistence` | A snapshot holds |
+|---|---|
+| `aof` (default) | every write but the last ~1 s (`appendfsync everysec`); Redis loads the AOF as after a crash |
+| `rdb` | the dataset of the last RDB save, minutes old |
+| `none` | no data |
+
+**Which volume.** Take the PVC of the primary (`status.currentPrimary`), or
+of a Ready replica: a replica that is in a full sync has only part of the
+dataset. The generated PVCs carry the label
+`redis.operator.com/instance=<name>`, so a schedule can take all of them:
+
+```yaml
+apiVersion: snapscheduler.backube/v1
+kind: SnapshotSchedule
+metadata: {name: cache-nightly, namespace: app}
+spec:
+  schedule: "0 3 * * *"
+  retention: {maxCount: 7}
+  claimSelector:
+    matchLabels: {redis.operator.com/instance: cache}
+  snapshotTemplate:
+    snapshotClassName: csi-snapclass
+```
+
+**Restore.** Make a PVC from the snapshot and give it to ordinal 0 of a new
+`RedisInstance`:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: cache-restored, namespace: app}
+spec:
+  dataSource: {apiGroup: snapshot.storage.k8s.io, kind: VolumeSnapshot, name: cache-nightly-cache-0-data-202610310300}
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 5Gi}}   # at least the restoreSize of the snapshot
+---
+apiVersion: redis.operator.com/v1
+kind: RedisInstance
+metadata: {name: cache-restored, namespace: app}
+spec:
+  instances: 3
+  storage:
+    volumeClaimTemplate: {size: 5Gi}
+    existingClaims:
+      - {instanceOrdinal: 0, claimName: cache-restored}
+```
+
+Ordinal 0 starts as the primary on the restored data; with only an RDB on
+the volume and `persistence: aof`, the Instance Manager turns the AOF on
+after the start (see [Configuration](#configuration-and-persistence-step-35)).
+The operator approves it, since the new replicas are empty (see
+[Safe start](#a-restarted-primary-waits-for-approval)), and they do a full
+sync from it. The epoch on the volume belongs to the old instance, so the
+Instance Manager ignores it (see [Epoch](#epoch)).
+
+Limits:
+
+- The restored PVC stays external: the operator never deletes it and
+  `recreate` never moves it. Delete it yourself after the `RedisInstance`.
+- Only the data comes back. The new instance has new internal passwords
+  and certificates, and needs its own `RedisUser`s; an ACL file of
+  `spec.acl.externalSecretRef` can be the same Secret.
+- Volumes are snapshotted one by one, so snapshots of several instances,
+  or later of the shards of a `RedisCluster`, may differ by seconds,
+  unless the driver supports `VolumeGroupSnapshot`.
+- A snapshot from a newer Redis does not load in an older image.
+
 ## Switchover
 
 A switchover moves the primary to a replica while both are healthy, with no

@@ -122,6 +122,7 @@ var _ = Describe("RedisInstance controller", func() {
 			Expect(k8sClient.Get(ctx, objectKey(name+"-0-data"), pvc)).To(Succeed())
 			Expect(metav1.GetControllerOf(pvc)).NotTo(BeNil())
 			Expect(metav1.GetControllerOf(pvc).Name).To(Equal(name))
+			Expect(pvc.Labels).To(HaveKeyWithValue(labelInstance, name), "a snapshot schedule selects by it")
 		})
 
 		DescribeTable("creates a client Service per access mode",

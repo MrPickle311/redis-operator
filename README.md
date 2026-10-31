@@ -27,6 +27,12 @@ and password rotation.
 To serve a certificate of your own (e.g. from cert-manager) or to ask
 clients for certificates, see the TLS section of the architecture document.
 
+## Backup and restore
+
+Backups are snapshots of the PVCs, taken by the CSI driver on a schedule of
+your tools (e.g. snapscheduler, Longhorn); a restore is a new `RedisInstance`
+on a PVC made from a snapshot. See [Backup and restore](docs/architecture.md#backup-and-restore).
+
 ## Getting Started
 
 ### Prerequisites
