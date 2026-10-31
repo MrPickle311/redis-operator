@@ -12,13 +12,15 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // redisPort is where redis-server listens, in every Pod.
 const redisPort = 6379
 
-// epochPath keeps the highest epoch the Instance Manager has accepted. It is
-// on the PVC, so it survives restarts of the Pod.
+// epochPath keeps the highest epoch the Instance Manager has accepted, with
+// the UID of its RedisInstance. It is on the PVC, so it survives restarts of
+// the Pod.
 const epochPath = "/data/.operator/epoch"
 
 // ReplicaOfRequest is the body of POST /replicaof.
@@ -45,11 +47,24 @@ type CommandResponse struct {
 // operator leader whose request arrives late.
 var errStaleEpoch = errors.New("stale epoch")
 
+// errInstanceUnknown rejects a command that comes before the Instance
+// Manager has read its RedisInstance, so it cannot tell whose epoch it is.
+var errInstanceUnknown = errors.New("the Instance Manager has not read its RedisInstance yet")
+
 // epochGuard runs the commands of the operator one at a time and only for the
 // highest epoch it has seen.
 type epochGuard struct {
 	mu   sync.Mutex
 	path string
+	// uid is the UID of the RedisInstance, set once it is read.
+	uid types.UID
+}
+
+// setInstance tells the guard the UID of its RedisInstance.
+func (g *epochGuard) setInstance(uid types.UID) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.uid = uid
 }
 
 // run runs command unless a higher epoch was accepted before. The lock covers
@@ -58,7 +73,10 @@ func (g *epochGuard) run(epoch int64, command func() error) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	accepted, err := readEpoch(g.path)
+	if g.uid == "" {
+		return errInstanceUnknown
+	}
+	accepted, err := readEpoch(g.path, g.uid)
 	if err != nil {
 		return err
 	}
@@ -66,15 +84,18 @@ func (g *epochGuard) run(epoch int64, command func() error) error {
 		return fmt.Errorf("%w: got %d, already accepted %d", errStaleEpoch, epoch, accepted)
 	}
 	if epoch > accepted {
-		if err := writeEpoch(g.path, epoch); err != nil {
+		if err := writeEpoch(g.path, epoch, g.uid); err != nil {
 			return err
 		}
 	}
 	return command()
 }
 
-// readEpoch returns the epoch stored at path, or 0 when there is none yet.
-func readEpoch(path string) (int64, error) {
+// readEpoch returns the epoch stored at path for the RedisInstance uid, or 0
+// when there is none yet. The epoch of another RedisInstance counts as none:
+// it comes with its data, e.g. a PVC restored from a snapshot, and must not
+// make the new instance, which counts from 1, look stale.
+func readEpoch(path string, uid types.UID) (int64, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -82,12 +103,17 @@ func readEpoch(path string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	epoch, owner, _ := strings.Cut(strings.TrimSpace(string(data)), " ")
+	accepted, err := strconv.ParseInt(epoch, 10, 64)
+	if err != nil || types.UID(owner) != uid {
+		return 0, err
+	}
+	return accepted, nil
 }
 
 // writeEpoch replaces the epoch at path atomically: a crash leaves either the
 // old or the new file, never a torn one.
-func writeEpoch(path string, epoch int64) error {
+func writeEpoch(path string, epoch int64, uid types.UID) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -96,7 +122,7 @@ func writeEpoch(path string, epoch int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString(strconv.FormatInt(epoch, 10))
+	_, err = f.WriteString(strconv.FormatInt(epoch, 10) + " " + string(uid))
 	if err == nil {
 		err = f.Sync() // on disk before the rename makes it visible
 	}

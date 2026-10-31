@@ -534,7 +534,10 @@ carries it:
 
 - The Instance Manager stores the highest epoch it has accepted on the PVC
   (`/data/.operator/epoch`, written atomically with fsync and rename), so it
-  survives restarts of the Pod.
+  survives restarts of the Pod. It stores the UID of the `RedisInstance` too:
+  the epoch of another instance, e.g. on a PVC restored from a snapshot,
+  counts as none, so the new instance, which counts from 1, is not stale.
+  Until it has read its `RedisInstance`, the Instance Manager answers `503`.
 - A command with a lower epoch gets `409 Conflict` and is not run. This stops
   a late request of a former operator leader from undoing a failover.
 - Commands run one at a time, so one of an older epoch never runs after a

@@ -90,6 +90,7 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 	if err != nil {
 		return err
 	}
+	guard.setInstance(instance.UID)
 	var replicaOf string
 	if primary := instance.Status.CurrentPrimary; primary != opts.PodName {
 		replicaOf = PodFQDN(primary, opts.Instance, opts.Namespace)

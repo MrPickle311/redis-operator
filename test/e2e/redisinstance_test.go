@@ -264,7 +264,7 @@ var _ = Describe("RedisInstance", Ordered, func() {
 		for i := 1; i < redisInstances; i++ {
 			out, err := kubectl("exec", podName(i), "-n", redisNamespace, "-c", "redis", "--", "cat", "/data/.operator/epoch")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(out).To(Equal("1"), "replica %s did not store the epoch", podName(i))
+			Expect(out).To(HavePrefix("1 "), "replica %s did not store the epoch with the UID of the instance", podName(i))
 		}
 	})
 

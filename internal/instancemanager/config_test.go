@@ -86,7 +86,7 @@ func TestLiveOptions(t *testing.T) {
 }
 
 func TestConfigAPIRejectsBadRequests(t *testing.T) {
-	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}, &readiness{}))
+	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: filepath.Join(t.TempDir(), "epoch"), uid: testUID}, &readiness{}))
 	defer srv.Close()
 
 	for _, tt := range []struct {
@@ -240,7 +240,7 @@ func TestApprovalOfARestartedPrimary(t *testing.T) {
 	ready := &readiness{rdb: rdb}
 	ready.configured.Store(true)
 	ready.acl.Store(&aclResult{})
-	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch")}, ready))
+	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: filepath.Join(t.TempDir(), "epoch"), uid: testUID}, ready))
 	defer srv.Close()
 	status := func() InstanceStatus {
 		t.Helper()

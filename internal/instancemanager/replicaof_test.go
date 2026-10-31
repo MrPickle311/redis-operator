@@ -13,7 +13,7 @@ import (
 
 func TestEpochGuardRejectsAnOlderEpoch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".operator", "epoch")
-	guard := &epochGuard{path: path}
+	guard := &epochGuard{path: path, uid: testUID}
 	ran := 0
 	command := func() error { ran++; return nil }
 
@@ -30,8 +30,32 @@ func TestEpochGuardRejectsAnOlderEpoch(t *testing.T) {
 	}
 
 	// A restarted Instance Manager reads the epoch back from the PVC.
-	if err := (&epochGuard{path: path}).run(2, command); !errors.Is(err, errStaleEpoch) {
+	if err := (&epochGuard{path: path, uid: testUID}).run(2, command); !errors.Is(err, errStaleEpoch) {
 		t.Errorf("run(2) after a restart: error = %v, want errStaleEpoch", err)
+	}
+}
+
+// testUID is the UID of the RedisInstance of the tests.
+const testUID = "db"
+
+func TestEpochGuardIgnoresTheEpochOfAnotherInstance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "epoch")
+	if err := writeEpoch(path, 5, "restored-from"); err != nil {
+		t.Fatal(err)
+	}
+	guard := &epochGuard{path: path, uid: testUID}
+	if err := guard.run(1, func() error { return nil }); err != nil {
+		t.Fatalf("run(1) on the data of another instance: error = %v, want it to run", err)
+	}
+	if err := guard.run(0, func() error { return nil }); !errors.Is(err, errStaleEpoch) {
+		t.Errorf("run(0) after epoch 1: error = %v, want errStaleEpoch: the epoch is now of this instance", err)
+	}
+}
+
+func TestEpochGuardWaitsForTheInstance(t *testing.T) {
+	err := (&epochGuard{path: filepath.Join(t.TempDir(), "epoch")}).run(1, func() error { return nil })
+	if !errors.Is(err, errInstanceUnknown) {
+		t.Errorf("run() before setInstance: error = %v, want errInstanceUnknown", err)
 	}
 }
 
@@ -39,18 +63,18 @@ func TestEpochGuardDoesNotStoreTheEpochWhenTheFileIsCorrupt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "epoch")
 	writeFile(t, filepath.Dir(path), "epoch", "garbage")
 
-	if err := (&epochGuard{path: path}).run(1, func() error { return nil }); err == nil {
+	if err := (&epochGuard{path: path, uid: testUID}).run(1, func() error { return nil }); err == nil {
 		t.Fatal("run() accepted a command although the stored epoch cannot be read")
 	}
 }
 
 func TestReplicaOfAPIRejectsBadRequests(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "epoch")
-	if err := writeEpoch(path, 5); err != nil {
+	if err := writeEpoch(path, 5, testUID); err != nil {
 		t.Fatal(err)
 	}
 	rdb := deadRedis(t) // the rejected requests never reach Redis
-	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: path}, &readiness{}))
+	srv := httptest.NewServer(apiHandler(rdb, &epochGuard{path: path, uid: testUID}, &readiness{}))
 	defer srv.Close()
 
 	tests := []struct {
@@ -80,10 +104,10 @@ func TestReplicaOfAPIRejectsBadRequests(t *testing.T) {
 
 func TestFenceAndPromoteAPIsRejectBadRequests(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "epoch")
-	if err := writeEpoch(path, 5); err != nil {
+	if err := writeEpoch(path, 5, testUID); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: path}, &readiness{}))
+	srv := httptest.NewServer(apiHandler(deadRedis(t), &epochGuard{path: path, uid: testUID}, &readiness{}))
 	defer srv.Close()
 
 	for _, endpoint := range []string{"/fence", "/promote"} {
