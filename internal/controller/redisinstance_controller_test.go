@@ -23,11 +23,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
@@ -400,6 +402,17 @@ var _ = Describe("RedisInstance controller", func() {
 			redisv1.StorageSpec{ExistingClaims: existingClaims(0, 1)},
 			true),
 	)
+
+	It("takes spec.networkPolicy.allowFrom with clients, but not an empty one", func() {
+		instance := newRedisInstance("np-cel", 1, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()})
+		instance.Spec.NetworkPolicy.AllowFrom = []networkingv1.NetworkPolicyPeer{
+			{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "backend"}}}}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(k8sClient.Delete, ctx, instance)
+
+		err := k8sClient.Patch(ctx, instance, client.RawPatch(types.MergePatchType, []byte(`{"spec":{"networkPolicy":{"allowFrom":[]}}}`)))
+		Expect(errors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+	})
 })
 
 // dataClaimName returns the PVC mounted as the "data" volume of the Pod.

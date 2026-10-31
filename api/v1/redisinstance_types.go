@@ -18,6 +18,7 @@ package v1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -130,6 +131,26 @@ type RedisInstanceSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	TLS TLSSpec `json:"tls,omitzero"`
+
+	// NetworkPolicy lets the operator isolate the instances on the network.
+	// +kubebuilder:default={}
+	// +optional
+	NetworkPolicy NetworkPolicySpec `json:"networkPolicy,omitzero"`
+}
+
+// NetworkPolicySpec chooses who isolates the instances: the operator, with a
+// NetworkPolicy built from AllowFrom, or, without AllowFrom, the user with
+// NetworkPolicies of their own.
+type NetworkPolicySpec struct {
+	// AllowFrom are the clients that may connect to Redis. With it, the
+	// operator creates a NetworkPolicy that lets in only them, the
+	// replication between the instances, the operator and the probes; a
+	// NetworkPolicy of the user that selects the instances would still let
+	// more in, so the operator warns about it. Without it, the operator
+	// creates none.
+	// +kubebuilder:validation:MinItems=1
+	// +optional
+	AllowFrom []networkingv1.NetworkPolicyPeer `json:"allowFrom,omitempty"`
 }
 
 // ReplicationSpec bounds the writes a failover can lose. Replication is

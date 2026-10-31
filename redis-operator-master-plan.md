@@ -178,7 +178,7 @@ API IM pozwala promować, degradować i zmieniać ACL, więc bez uwierzytelnieni
 - Port `:8001` (probes) wystawia tylko `/healthz` i `/readyz`, bez żadnych mutacji.
   - `/healthz` (liveness) sprawdza tylko IM, nie Redisa: ładowanie dużego datasetu nie może restartować Poda.
   - `/readyz` (readiness): `PING` (odrzuca `LOADING`), a na replice dodatkowo zakończony pierwszy pełny sync (`master_link_status:up` i `master_sync_in_progress:0`). Spełniony warunek IM zapamiętuje do swojego restartu: przy awarii primary repliki zostają w `-ro` i serwują lekko nieaktualne dane, zamiast wypaść wszystkie naraz. Primary nie jest zapamiętywany, więc zdegradowany primary musi najpierw zsynchronizować się jako replika.
-- Operator zawsze tworzy wbudowaną NetworkPolicy pozwalającą na ruch do `:8000` tylko z Podów operatora. Jest ona niezależna od `spec.networkPolicy.mode`, bo to element bezpieczeństwa operatora, a nie aplikacji.
+- ~~Operator zawsze tworzy wbudowaną NetworkPolicy pozwalającą na ruch do `:8000` tylko z Podów operatora.~~ Zmienione w kroku 8 (sekcja 9): polityka tylko przy `spec.networkPolicy.allowFrom`, bo izolacja jest per Pod.
 
 ### 3.2 Użytkownicy wewnętrzni
 
@@ -710,22 +710,28 @@ spec:
 
 ---
 
-## 9. NetworkPolicy — none / reference / managed
+## 9. NetworkPolicy — polityka operatora albo użytkownika
 
 ```yaml
 spec:
   networkPolicy:
-    mode: managed   # none | reference | managed
-    managed:
-      allowFrom:
-        - namespaceSelector: {matchLabels: {team: backend}}
+    allowFrom:                    # brak → operator nie tworzy polityki
+      - namespaceSelector: {matchLabels: {team: backend}}
 ```
 
-- `managed` — operator generuje NetworkPolicy: ruch do `6379` z `allowFrom`, replikacja między instancjami, cluster bus.
-- `reference` — użytkownik tworzy własną NetworkPolicy. Operator gwarantuje stabilne, udokumentowane etykiety: `app.kubernetes.io/name: redis`, `redis.operator.com/instance`, `redis.operator.com/role: primary|replica` (bez `app.kubernetes.io/instance`, krok 3.4e).
-- `none` — brak izolacji aplikacyjnej (świadomy wybór).
+**Krok 8 — decyzje (2026-10-31):**
+- **Izolacja jest per Pod, nie per port:** pierwsza polityka `Ingress`, która wybiera Pod, blokuje cały ruch do niego poza tym, na co pozwala suma wszystkich polityk. Dlatego nie ma polityki „zawsze tylko `:8000`” (zablokowałaby `6379` i probe) ani trybu `reference` z ochroną `:8000` przez operator (otwarty przez operator `6379` dla wszystkich nie dałby się zawęzić polityką użytkownika).
+- **Albo polityka operatora, albo użytkownika:** `allowFrom` ustawione → operator tworzy jedną politykę `<name>` (owner `RedisInstance`): `6379` z `allowFrom` i z Podów instancji (replikacja), `8000` tylko z Podów operatora (namespace operatora z Downward API/SA, etykiety `control-plane: controller-manager`, `app.kubernetes.io/name: redis-operator`), `8001` z każdego miejsca (probe kubeleta z węzła; tylko health). Brak `allowFrom` → operator nie tworzy polityki, a istniejącą swoją usuwa; użytkownik pisze własne na stabilnych etykietach (`app.kubernetes.io/name: redis`, `redis.operator.com/instance`, `redis.operator.com/role`). `:8000` i tak chroni mTLS.
+- **Obie naraz:** polityka operatora jest tą właściwą, ale cudzej nie da się zignorować: obowiązuje od chwili, gdy istnieje (egzekwuje ją CNI), i może tylko poszerzyć dostęp. Operator jej nie usuwa ani nie zmienia (walka z GitOps). Przy `allowFrom` i cudzej polityce, której `podSelector` pasuje do Podów instancji: Warning Event `ForeignNetworkPolicy` raz na politykę i condition `NetworkPolicyReady=False/ForeignPolicy` z nazwami; watch na NetworkPolicy w namespace.
+- **Domyślnie brak polityki:** domyślna polityka po cichu odcięłaby aplikacje z innych namespace'ów (timeout, trudny do zdiagnozowania). CNPG też domyślnie nie tworzy polityk.
+- **Bez egress:** IM potrzebuje DNS, API servera (adres zależny od klastra, często poza siecią Podów) i primary; zła reguła egress = IM bez API → fencing, brak failoveru. Kto chce, dopisuje egress we własnej polityce (wtedy bez `allowFrom`).
+- **Zasięg wykrywania:** tylko `NetworkPolicy` w namespace instancji. Polityka innego namespace'u wybiera tylko swoje Pody: może odciąć swoich klientów (egress), ale nie otworzy ani nie zablokuje ingressu Redisa. Polityk klastrowych (`AdminNetworkPolicy`/`BaselineAdminNetworkPolicy`, Calico `GlobalNetworkPolicy`, `CiliumClusterwideNetworkPolicy`) operator nie widzi i nie wykrywa: tworzy je admin klastra, każde CNI ma własne API; zdanie w docs.
+- **Bez referencji do polityk użytkownika:** referencja niczego nie włącza (polityka działa przez selektor), a walidacja jej treści wymagałaby własnej implementacji logiki CNI (selektory namespace'ów i Podów, porty, `ipBlock`). Zamiast tego szablon w docs (trzy obowiązkowe reguły: `6379` między Podami, `8000` z operatora, `8001` dla probe, plus reguła klientów; ten sam kształt co polityka operatora) i tabela „brak reguły → skutek”.
+- **Podpowiedź w błędach:** polityka gubi pakiety, więc zablokowany `8000` to timeout, nie `connection refused`. `internal/imclient` (jedno miejsce dla wszystkich wywołań IM) dopisuje do błędu z `net.Error.Timeout()`: „no answer on port 8000: is a NetworkPolicy of the namespace blocking the operator?”. Tylko przy timeoucie; refused i błędy TLS bez podpowiedzi.
+- **Cluster bus `16379`** w kroku 10.
+- **Kind:** kindnet (Kind 0.33) egzekwuje NetworkPolicy (sprawdzone: `deny` → timeout), e2e bez Calico.
 
-Niezależnie od trybu operator zawsze tworzy politykę dla portu IM `:8000` (tylko Pody operatora), zob. sekcja 3.1.
+**Podkroki:** 8.1 API `allowFrom []NetworkPolicyPeer` (CEL `minItems: 1`) · 8.2 kontroler: polityka, `Owns`, RBAC, usuwanie po zdjęciu `allowFrom`; envtest kształtu reguł; podpowiedź o NetworkPolicy w błędach timeoutu `imclient` (unit test) · 8.3 wykrywanie cudzych polityk w namespace instancji: Event `ForeignNetworkPolicy`, condition `NetworkPolicyReady`, watch · 8.4 e2e: dozwolony namespace `PONG`, inny timeout, replikacja i switchover, Ready (operator → IM), probe, `:8000` niedostępny dla klienta, cudza polityka → Event i condition · 8.5 docs „Network policies” (dwie drogi, szablon, tabela skutków, egress po stronie klienta, polityki klastrowe), plan.
 
 ---
 
@@ -916,7 +922,7 @@ redis-operator/
 - Fence nie rozłącza klientów: zapisy czekają, a po demote dostają `READONLY`.
 - Upgrade operatora restartuje wszystkie Pody Redisa w klastrze, bez kontroli tempa (3.4f) i bez upgrade IM w miejscu (krok 11). Restore bez statusu (Velero, git) powtarza raz żądanie `promote`/`recreate` zostawione w adnotacji. Health check Argo CD tylko jako przykład w docs (nie testowany w Argo). Rolling update stoi bez Eventu, gdy któraś instancja nie jest Ready.
 - Ograniczenia woluminów z sekcji 6 („Ograniczenia”): status nie przeżywa restore z gita/Velero, obce dane przy tworzeniu przechodzą, brak `attached-to`, środkowy zewnętrzny ordinal bez template nie do odtworzenia.
-- Brak NetworkPolicy dla `:8000` (krok 8; mTLS już blokuje obcych). Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
+- NetworkPolicy tylko ingress, tylko przy `allowFrom` (krok 8); polityki klastrowe poza zasięgiem operatora. Rotacja CA tylko ręczna (usunięcie Secretu + restart operatora).
 - TLS: `spec.tls.enabled` ustalane przy tworzeniu (bez migracji plaintext ↔ TLS); domena klastra `cluster.local` w certach z CA instancji; rotacja CA instancji ręczna (ostrzeżenie `CAExpiresSoon` rok wcześniej); `tls-cluster` w kroku 10.
 - ACL: bez `replicaRules`, bez rotacji hasła z `generate: true`, `targetRef` tylko `RedisInstance`. Backup po stronie storage (krok 7).
 
@@ -934,7 +940,7 @@ graph TD
     S5["5. TLS: zewnętrzne certy + wewnętrzna PKI + reload"]
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]
     S7["7. Restore z PVC ze snapshotu CSI<br/>(backup i harmonogram po stronie storage)"]
-    S8["8. NetworkPolicy: managed/reference"]
+    S8["8. NetworkPolicy: allowFrom (operator) albo własne"]
     S9["9. Webhook: TargetRef (opcjonalny)"]
     S10["10. RedisCluster + serwisy klastra"]
     S11["11. Upgrade operatora bez przerw<br/>3.4f tempo rolloutu, okno serwisowe<br/>upgrade IM w miejscu (exec, sekcja 3.10)"]
