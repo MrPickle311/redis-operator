@@ -27,4 +27,7 @@ resources:
   kind: RedisUser
   path: github.com/MrPickle311/redis-operator/api/v1
   version: v1
+  webhooks:
+    validation: true
+    webhookVersion: v1
 version: "3"

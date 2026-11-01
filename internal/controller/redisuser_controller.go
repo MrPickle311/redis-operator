@@ -147,21 +147,12 @@ func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.
 	if err != nil {
 		return metav1.Condition{}, err
 	}
-	others, err := usersOf(ctx, r.Client, &instance)
+	conflict, err := UsernameConflict(ctx, r.Client, user, &instance)
 	if err != nil {
 		return metav1.Condition{}, err
 	}
-	content, err := r.aclSecretData(ctx, &instance)
-	if err != nil {
-		return metav1.Condition{}, err
-	}
-	if external, _ := parseExternalACL(string(content[externalACLKey])); external[username] != "" {
-		return condition(metav1.ConditionFalse, "Conflict",
-			fmt.Sprintf("spec.acl.externalSecretRef of %s also defines the username %s; neither is applied", instance.Name, username)), nil
-	}
-	if claimants := otherUsersClaimingUsername(user, others); len(claimants) > 0 {
-		return condition(metav1.ConditionFalse, "Conflict",
-			fmt.Sprintf("RedisUser %s also claims the username %s; neither is applied", strings.Join(claimants, ", "), username)), nil
+	if conflict != "" {
+		return condition(metav1.ConditionFalse, "Conflict", conflict+"; neither is applied"), nil
 	}
 	passwords, err := userPasswords(ctx, r.Client, user)
 	if err != nil {
@@ -182,6 +173,28 @@ func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.
 		return condition(metav1.ConditionFalse, "Pending", "Waiting for the instances of "+instance.Name+" to apply the user"), nil
 	}
 	return condition(metav1.ConditionTrue, "Applied", "Every running instance of "+instance.Name+" has the user"), nil
+}
+
+// UsernameConflict says which other source of users of the instance has the
+// username of user too, or returns "" when none has. The validating webhook
+// asks the same before the RedisUser is stored.
+func UsernameConflict(ctx context.Context, c client.Reader, user *redisv1.RedisUser, instance *redisv1.RedisInstance) (string, error) {
+	username := redisUserName(user)
+	content, err := aclSecretData(ctx, c, instance)
+	if err != nil {
+		return "", err
+	}
+	if external, _ := parseExternalACL(string(content[externalACLKey])); external[username] != "" {
+		return fmt.Sprintf("spec.acl.externalSecretRef of %s also defines the username %s", instance.Name, username), nil
+	}
+	others, err := usersOf(ctx, c, instance)
+	if err != nil {
+		return "", err
+	}
+	if claimants := otherUsersClaimingUsername(user, others); len(claimants) > 0 {
+		return fmt.Sprintf("RedisUser %s also claims the username %s", strings.Join(claimants, ", "), username), nil
+	}
+	return "", nil
 }
 
 // otherUsersClaimingUsername returns the names of the RedisUsers, other than
@@ -237,14 +250,14 @@ func (r *RedisUserReconciler) userGone(ctx context.Context, user *redisv1.RedisU
 // aclContent returns the users <instance>-acl gives Redis, none when it does
 // not exist.
 func (r *RedisUserReconciler) aclContent(ctx context.Context, instance *redisv1.RedisInstance) ([]byte, error) {
-	data, err := r.aclSecretData(ctx, instance)
+	data, err := aclSecretData(ctx, r.Client, instance)
 	return data[instancemanager.ACLSecretKey], err
 }
 
 // aclSecretData returns the data of <instance>-acl, none when it does not exist.
-func (r *RedisUserReconciler) aclSecretData(ctx context.Context, instance *redisv1.RedisInstance) (map[string][]byte, error) {
+func aclSecretData(ctx context.Context, c client.Reader, instance *redisv1.RedisInstance) (map[string][]byte, error) {
 	var secret corev1.Secret
-	err := r.Get(ctx, types.NamespacedName{Name: instancemanager.ACLSecretName(instance.Name), Namespace: instance.Namespace}, &secret)
+	err := c.Get(ctx, types.NamespacedName{Name: instancemanager.ACLSecretName(instance.Name), Namespace: instance.Namespace}, &secret)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}

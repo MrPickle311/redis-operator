@@ -41,6 +41,7 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/controller"
 	"github.com/MrPickle311/redis-operator/internal/imclient"
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
+	webhookv1 "github.com/MrPickle311/redis-operator/internal/webhook/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -257,6 +258,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisuser")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1.SetupRedisUserWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "RedisUser")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

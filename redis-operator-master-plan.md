@@ -797,6 +797,17 @@ Tylko dla walidacji **między obiektami**, której CEL nie potrafi (CEL widzi je
 
 Webhook jest **wyłącznie warstwą UX** (szybki, czytelny błąd przy `kubectl apply`). Kontrolery i tak sprawdzają te same warunki i ustawiają conditions, bo walidacja webhooka to sprawdzenie w jednym momencie (obiekt docelowy może zniknąć chwilę później). Dlatego webhook ma `failurePolicy: Ignore` i jest opcjonalny w instalacji. Ta sama funkcja `resolveTarget` jest używana w webhooku i w kontrolerach.
 
+**Krok 9 — decyzje (2026-11-01):**
+- **Po co, skoro kontroler sprawdza to samo:** odmowa przy `apply` nie dopuszcza do zapisu obiektu, który psułby istniejącego, działającego użytkownika (przy konflikcie nazw kontroler nie stosuje żadnego ze źródeł). Reszta to UX. Wyścig dwóch równoczesnych `apply` przechodzi przez webhook; łapie go kontroler (`Conflict`), jak dziś.
+- **Zakres: tylko `RedisUser`.** `RedisInstance` nie ma walidacji między obiektami, która nie zepsułaby GitOps (brak PVC z `existingClaims` czy Secretu TLS → kontroler i conditions).
+- **Brak celu `targetRef` → warning, nie odmowa:** Argo/Flux/kustomize nie gwarantują kolejności tworzenia; odmowa psułaby `apply` katalogu. Konwencja K8s (Pod z brakującym Secretem też przechodzi).
+- **Konflikt nazwy → odmowa:** inny `RedisUser` tego samego celu z tą samą nazwą (`redisUserName`) albo nazwa w `externalSecretRef` celu (`parseExternalACL`). Te same funkcje co kontroler. Sprawdzane przy create oraz przy update tylko, gdy zmienia się nazwa albo cel: konflikt powstały później (np. zmiana Secretu z Vaulta) nie blokuje poprawek reguł.
+- **`failurePolicy: Ignore`, `timeoutSeconds: 5`:** operator nie działa → `apply` przechodzi, kontroler sprawdzi później.
+- **Certyfikat generuje operator (wzorzec CNPG, bez cert-managera):** przy starcie get-or-create Secretu `redis-operator-webhook-cert` w namespace operatora (CA + cert serwera dla Service webhooka, `internal/pki`), pliki do `CertDir` (przeładowuje `certwatcher` controller-runtime), patch `caBundle` w `ValidatingWebhookConfiguration`; co godzinę `NeedsRenewal` → nowy cert i patch. Repliki dzielą Secret (przegrany wyścig przy create → ponowny odczyt). RBAC: `get;patch` na `validatingwebhookconfigurations` z `resourceNames`.
+- **Domyślnie włączony** w `config/default` (`[WEBHOOK]` tak, `[CERTMANAGER]` nie; `emptyDir` zamiast Secretu cert-managera). `Ignore` czyni to bezpiecznym; wyłączenie w docs.
+
+**Podkroki:** 9.1 `kubebuilder create webhook --kind RedisUser --programmatic-validation`, walidator (warning brak celu, odmowa konfliktów, update tylko przy zmianie nazwy/celu); unit na fake kliencie, envtest z serwerem webhooka · 9.2 certyfikat z operatora: Secret, `CertDir`, `caBundle`, odnawianie, RBAC, kustomize · 9.3 e2e: duplikat odrzucony z czytelnym komunikatem, brak celu → warning i obiekt powstaje, po restarcie operatora ten sam cert i webhook działa · 9.4 docs „Validation” (co sprawdza, warning vs odmowa, wyłączenie), README, plan.
+
 ---
 
 ## 13. Otwarte decyzje
@@ -864,8 +875,7 @@ redis-operator/
 │   │   └── shutdown/
 │   ├── imclient/                     # InstanceManagerClient (mTLS HTTP)
 │   ├── pki/                          # wewnętrzne CA: IM mTLS + domyślny TLS Redisa
-│   └── webhook/
-│       └── targetref_resolver.go
+│   └── webhook/v1/                   # walidator RedisUser (scaffold kubebuildera) + cert z operatora
 ├── config/crd/, config/rbac/, config/samples/
 └── test/e2e/
 ```
@@ -942,7 +952,7 @@ graph TD
     S6["6. ACL: RedisUser + zewnętrzny users.acl"]
     S7["7. Restore z PVC ze snapshotu CSI<br/>(backup i harmonogram po stronie storage)"]
     S8["8. NetworkPolicy: allowFrom (operator) albo własne"]
-    S9["9. Webhook: TargetRef (opcjonalny)"]
+    S9["9. Webhook RedisUser: konflikty nazw (odmowa),<br/>brak celu (warning), cert z operatora"]
     S10["10. RedisCluster + serwisy klastra"]
     S11["11. Upgrade operatora bez przerw<br/>3.4f tempo rolloutu, okno serwisowe<br/>upgrade IM w miejscu (exec, sekcja 3.10)"]
     S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> S11
