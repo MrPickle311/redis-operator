@@ -23,6 +23,9 @@ Applications log in with a user of their own, from a `RedisUser`
 the operator writes the password to the Secret `<redisuser>-redis-user`;
 see [Users](docs/architecture.md#users), also for an ACL file of your own
 and password rotation.
+A validating webhook refuses a `RedisUser` whose username is taken, at
+`kubectl apply`; it needs no cert-manager
+([Validation webhook](docs/architecture.md#validation-webhook)).
 
 To serve a certificate of your own (e.g. from cert-manager) or to ask
 clients for certificates, see the TLS section of the architecture document.

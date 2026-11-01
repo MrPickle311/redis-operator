@@ -57,7 +57,7 @@ How the objects use each other:
 
 | Object                      | Content                                         | Used by                                                  |
 |-----------------------------|-------------------------------------------------|----------------------------------------------------------|
-| Secret `redis-operator-ca`  | CA cert and key                                 | operator: signs `cache-im-tls` and its own client certs  |
+| Secret `redis-operator-ca`  | CA cert and key                                 | operator: signs `cache-im-tls`, its own client certs and the certs of its [webhook](#validation-webhook) |
 | ServiceAccount `cache-instance` | token of the Instance Managers           | every Pod (`serviceAccountName`), redis container only   |
 | Role / RoleBinding `cache-instance` | `get` on `redisinstances/cache` and `secrets/cache-acl` only | the Instance Manager reads its `RedisInstance` and users |
 | Secret `cache-im-tls`       | `tls.crt`, `tls.key`, `ca.crt`                  | every Pod, mounted at `/certificates`                    |
@@ -266,7 +266,9 @@ flowchart LR
   `InvalidExternalACL` follows. A missing Secret or key keeps them too.
 - A username claimed by two `RedisUser`s, or by a `RedisUser` and the file,
   is applied from neither: guessing could hand one application the data of
-  another. The `RedisUser`s show `Ready=False/Conflict`.
+  another. The `RedisUser`s show `Ready=False/Conflict`. The
+  [validating webhook](#validation-webhook) turns away such a `RedisUser`
+  before it is stored, so it cannot lock out the user that came first.
 - Deleting a `RedisUser` removes its user from Redis (finalizer
   `redis.operator.com/user`).
 
@@ -297,6 +299,41 @@ same Secret while the applications move over:
 3. Remove `previousPassword`: only the new one works.
 
 A generated password (`generate: true`) does not rotate.
+
+### Validation webhook
+
+CEL rules of the CRD see one object. What needs other objects, the operator
+checks in a validating webhook for `RedisUser`, before the API server
+stores it:
+
+| Check | Answer |
+|---|---|
+| the `RedisInstance` of `targetRef` does not exist | admitted with a warning: GitOps tools create objects in no fixed order |
+| another `RedisUser` of the instance, or `spec.acl.externalSecretRef` of it, has the username | refused |
+
+```console
+$ kubectl apply -f second.yaml
+The RedisUser "second" is invalid: spec.username: Forbidden: RedisUser first also claims the username app; neither would be applied
+```
+
+- An update is checked only when the username or `targetRef` changes, so a
+  conflict that came later, e.g. with a changed ACL file, blocks no other fix.
+- The webhook is only a faster answer. Two `apply`s at the same moment may
+  both pass; the controller checks the same and shows `Conflict`. With
+  `failurePolicy: Ignore`, a stopped operator blocks nothing: every
+  `RedisUser` is admitted and only the controller checks it.
+  `kubectl apply --dry-run=server` asks the webhook and stores nothing.
+- No cert-manager: the webhook server presents a certificate from the CA
+  `redis-operator-ca`, issued in memory for every handshake, and at its
+  start the operator writes that CA to the `caBundle` of
+  `redis-operator-validating-webhook-configuration`. The Pod of the operator
+  is Ready only once the webhook server serves.
+- Argo CD shows the injected `caBundle` as a difference; ignore it with
+  `ignoreDifferences` on `/webhooks/0/clientConfig/caBundle` of that
+  configuration.
+- To install without it, comment out both `[WEBHOOK]` sections of
+  `config/default/kustomization.yaml` and set `ENABLE_WEBHOOKS=false` on the
+  manager.
 
 ## Network policies
 
