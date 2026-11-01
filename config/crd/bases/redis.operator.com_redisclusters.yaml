@@ -1,0 +1,677 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: redisclusters.redis.operator.com
+spec:
+  group: redis.operator.com
+  names:
+    kind: RedisCluster
+    listKind: RedisClusterList
+    plural: redisclusters
+    singular: rediscluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.shards
+      name: Shards
+      type: integer
+    - jsonPath: .status.clusterState
+      name: State
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Reason
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: RedisCluster is the Schema for the redisclusters API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of RedisCluster
+            properties:
+              acl:
+                default: {}
+                description: ACL configures the users of Redis, the same on every
+                  shard.
+                properties:
+                  defaultUser:
+                    default: disabled
+                    description: |-
+                      DefaultUser enables the default user of Redis, which needs no password
+                      and may run every command. Meant for development only.
+                    enum:
+                    - disabled
+                    - enabled
+                    type: string
+                  externalSecretRef:
+                    description: |-
+                      ExternalSecretRef selects a Redis ACL file with more users, e.g. one
+                      Vault generates: a line "user <name> <rules>" per user. Passwords
+                      written as ">password" reach Redis only as hashes; nopass and the
+                      reserved users are refused. One bad line refuses the whole file, and
+                      the instances keep the users of the last good one.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              affinity:
+                default: {}
+                description: Affinity keeps the nodes of a shard on different nodes
+                  of Kubernetes.
+                properties:
+                  podAntiAffinityType:
+                    default: required
+                    description: |-
+                      PodAntiAffinityType keeps the instances on different nodes, so a node
+                      that fails takes at most one of them. required leaves an instance
+                      Pending without a free node; preferred places it anyway, e.g. on a
+                      small cluster for development.
+                    enum:
+                    - required
+                    - preferred
+                    type: string
+                type: object
+              image:
+                type: string
+              instancesPerShard:
+                default: 2
+                description: |-
+                  InstancesPerShard is the master of a shard and its replicas. With 1 a
+                  shard has no replica to take over.
+                format: int32
+                minimum: 1
+                type: integer
+              networkPolicy:
+                default: {}
+                description: NetworkPolicy lets the operator isolate the nodes on
+                  the network.
+                properties:
+                  allowFrom:
+                    description: |-
+                      AllowFrom are the clients that may connect to Redis. With it, the
+                      operator creates a NetworkPolicy that lets in only them, the
+                      replication between the instances, the operator and the probes; a
+                      NetworkPolicy of the user that selects the instances would still let
+                      more in, so the operator warns about it. Without it, the operator
+                      creates none.
+                    items:
+                      description: |-
+                        NetworkPolicyPeer describes a peer to allow traffic to/from. Only certain combinations of
+                        fields are allowed
+                      properties:
+                        ipBlock:
+                          description: |-
+                            ipBlock defines policy on a particular IPBlock. If this field is set then
+                            neither of the other fields can be.
+                          properties:
+                            cidr:
+                              description: |-
+                                cidr is a string representing the IPBlock
+                                Valid examples are "192.168.1.0/24" or "2001:db8::/64"
+                              type: string
+                            except:
+                              description: |-
+                                except is a slice of CIDRs that should not be included within an IPBlock
+                                Valid examples are "192.168.1.0/24" or "2001:db8::/64"
+                                Except values will be rejected if they are outside the cidr range
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - cidr
+                          type: object
+                        namespaceSelector:
+                          description: |-
+                            namespaceSelector selects namespaces using cluster-scoped labels. This field follows
+                            standard label selector semantics; if present but empty, it selects all namespaces.
+
+                            If podSelector is also set, then the NetworkPolicyPeer as a whole selects
+                            the pods matching podSelector in the namespaces selected by namespaceSelector.
+                            Otherwise it selects all pods in the namespaces selected by namespaceSelector.
+                          properties:
+                            matchExpressions:
+                              description: matchExpressions is a list of label selector
+                                requirements. The requirements are ANDed.
+                              items:
+                                description: |-
+                                  A label selector requirement is a selector that contains values, a key, and an operator that
+                                  relates the key and values.
+                                properties:
+                                  key:
+                                    description: key is the label key that the selector
+                                      applies to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      operator represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists and DoesNotExist.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      values is an array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. This array is replaced during a strategic
+                                      merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchLabels:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                operator is "In", and the values array contains only "value". The requirements are ANDed.
+                              type: object
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        podSelector:
+                          description: |-
+                            podSelector is a label selector which selects pods. This field follows standard label
+                            selector semantics; if present but empty, it selects all pods.
+
+                            If namespaceSelector is also set, then the NetworkPolicyPeer as a whole selects
+                            the pods matching podSelector in the Namespaces selected by NamespaceSelector.
+                            Otherwise it selects the pods matching podSelector in the policy's own namespace.
+                          properties:
+                            matchExpressions:
+                              description: matchExpressions is a list of label selector
+                                requirements. The requirements are ANDed.
+                              items:
+                                description: |-
+                                  A label selector requirement is a selector that contains values, a key, and an operator that
+                                  relates the key and values.
+                                properties:
+                                  key:
+                                    description: key is the label key that the selector
+                                      applies to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      operator represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists and DoesNotExist.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      values is an array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. This array is replaced during a strategic
+                                      merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchLabels:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                operator is "In", and the values array contains only "value". The requirements are ANDed.
+                              type: object
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                    minItems: 1
+                    type: array
+                type: object
+              redis:
+                default: {}
+                description: Redis configures redis-server on every node.
+                properties:
+                  maxmemoryPolicy:
+                    default: noeviction
+                    description: |-
+                      MaxmemoryPolicy is what Redis does when it reaches maxmemory. The
+                      default noeviction rejects writes instead of silently deleting keys.
+                    enum:
+                    - noeviction
+                    - allkeys-lru
+                    - allkeys-lfu
+                    - allkeys-random
+                    - volatile-lru
+                    - volatile-lfu
+                    - volatile-random
+                    - volatile-ttl
+                    type: string
+                  maxmemoryRatio:
+                    default: 75
+                    description: |-
+                      MaxmemoryRatio is the percent of the memory limit that becomes
+                      maxmemory. The rest is left for fork copy-on-write, replication and
+                      client buffers, and fragmentation.
+                    format: int32
+                    maximum: 95
+                    minimum: 10
+                    type: integer
+                  parameters:
+                    additionalProperties:
+                      description: |-
+                        ParameterValue is the value of an option of redis.conf. It is one line, so
+                        it can never add another option.
+                      maxLength: 1024
+                      pattern: ^[^\r\n]*$
+                      type: string
+                    description: |-
+                      Parameters are further options of redis.conf, set on every instance
+                      with CONFIG SET, without a restart, e.g. {"hz": "20"}.
+                    maxProperties: 64
+                    type: object
+                    x-kubernetes-validations:
+                    - message: parameter names are lowercase options of redis.conf
+                      rule: self.all(k, k.matches('^[a-z][a-z0-9-]{0,63}$'))
+                    - message: 'parameters must not set options the operator manages:
+                        ports, files, replication, users, memory, persistence, TLS,
+                        cluster and commands that run code; databases and io-threads
+                        go to spec.redis.startup, min-replicas-* to spec.replication'
+                      rule: '!self.exists(k, k.matches(''^(bind|port|unixsocket.*|protected-mode|dir|dbfilename|append(only|dirname|filename)|save|(replica|slave)of|master(user|auth)|replica-(announce-.*|read-only)|slave-read-only|user|aclfile|requirepass|maxmemory|maxmemory-policy|min-(replicas|slaves)-.*|databases|io-threads.*|include|rename-command|loadmodule|daemonize|supervised|pidfile|logfile|enable-.*-(command|configs)|tls-.*|cluster-.*)$''))'
+                  persistence:
+                    default: aof
+                    description: Persistence is how the dataset survives a restart
+                      of Redis.
+                    enum:
+                    - aof
+                    - rdb
+                    - none
+                    type: string
+                  startup:
+                    default: {}
+                    description: |-
+                      Startup holds the options redis-server reads only when it starts.
+                      Changing any of them replaces every Pod, one at a time: a rolling
+                      update, with a switchover for the primary.
+                    properties:
+                      databases:
+                        default: 16
+                        description: Databases is the number of logical databases,
+                          selected with SELECT.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      ioThreads:
+                        default: 1
+                        description: |-
+                          IOThreads is the number of threads that serve clients; 1 is the main
+                          thread alone.
+                        format: int32
+                        maximum: 128
+                        minimum: 1
+                        type: integer
+                    type: object
+                type: object
+              resources:
+                description: Resources of the redis container of every node.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              shards:
+                default: 3
+                description: |-
+                  Shards is the number of masters the 16384 slots are spread over. A
+                  replica takes over from a failed master only with the votes of most
+                  masters, so a cluster below 3 could never fail over.
+                format: int32
+                minimum: 3
+                type: integer
+                x-kubernetes-validations:
+                - message: 'shards is immutable: changing it needs moving slots between
+                    shards'
+                  rule: self == oldSelf
+              storage:
+                description: |-
+                  StorageSpec chooses the volumes when the RedisInstance is created. After
+                  that the operator alone manages them through status.volumes, so the volume
+                  of a running instance can never be switched by an edit of the spec.
+                properties:
+                  existingClaims:
+                    description: |-
+                      ExistingClaims binds instances to PVCs created outside of the operator.
+                      The operator never deletes these PVCs. An ordinal at or above instances
+                      reserves the PVC for scaling up.
+                    items:
+                      description: ExistingClaim binds one instance to an existing
+                        PVC.
+                      properties:
+                        claimName:
+                          minLength: 1
+                          type: string
+                        instanceOrdinal:
+                          format: int32
+                          minimum: 0
+                          type: integer
+                      required:
+                      - claimName
+                      - instanceOrdinal
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - instanceOrdinal
+                    x-kubernetes-list-type: map
+                  recreateOnNodeLoss:
+                    description: |-
+                      RecreateOnNodeLoss moves a replica whose generated volume is local to a
+                      node that is gone, or tainted node.kubernetes.io/out-of-service, to a
+                      new generated volume, where it syncs from the primary. Without it such a
+                      replica waits for its node. External volumes and the primary are never
+                      moved: a failover takes over from a primary on a lost node first.
+                    type: boolean
+                  volumeClaimTemplate:
+                    description: |-
+                      VolumeClaimTemplate is used to generate a PVC for every instance
+                      not listed in ExistingClaims. Generated PVCs are owned by the operator.
+                    properties:
+                      size:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      storageClassName:
+                        type: string
+                        x-kubernetes-validations:
+                        - message: storageClassName is immutable
+                          rule: self == oldSelf
+                    required:
+                    - size
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: storage.existingClaims is immutable; use the redis.operator.com/recreate
+                    annotation to move a replica to a new volume
+                  rule: has(self.existingClaims) == has(oldSelf.existingClaims) &&
+                    (!has(self.existingClaims) || self.existingClaims == oldSelf.existingClaims)
+              tls:
+                default: {}
+                description: |-
+                  TLS encrypts the connections of the clients, of the replication and of
+                  the cluster bus. One CA, <name>-ca, signs the certificates of every
+                  shard; a ServerSecretRef must be valid for every node.
+                properties:
+                  clientAuth:
+                    default: none
+                    description: ClientAuth tells whether clients must show a certificate.
+                    enum:
+                    - none
+                    - optional
+                    - required
+                    type: string
+                  clientCASecretRef:
+                    description: |-
+                      ClientCASecretRef selects the CA that signs the certificates of the
+                      clients, for ClientAuth.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  enabled:
+                    default: true
+                    description: |-
+                      Enabled makes Redis take only TLS connections, on port 6379. Clients
+                      then trust the CA in ca.crt of the Secret <name>-server-tls.
+                    type: boolean
+                  serverSecretRef:
+                    description: |-
+                      ServerSecretRef names a Secret of type kubernetes.io/tls with the
+                      certificate of Redis, e.g. from cert-manager. Without it, the operator
+                      issues one from a CA of its own for this instance, <name>-ca.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+                x-kubernetes-validations:
+                - message: 'tls.enabled cannot change: a replica in the new mode could
+                    not sync from a primary in the old one'
+                  rule: '(has(self.enabled) ? self.enabled : true) == (has(oldSelf.enabled)
+                    ? oldSelf.enabled : true)'
+                - message: serverSecretRef and clientCASecretRef need TLS enabled
+                  rule: '!has(self.enabled) || self.enabled || (!has(self.serverSecretRef)
+                    && !has(self.clientCASecretRef))'
+                - message: 'clientAuth needs clientCASecretRef: the CA that signs
+                    the certificates of the clients'
+                  rule: '!has(self.clientAuth) || self.clientAuth == ''none'' || has(self.clientCASecretRef)'
+            required:
+            - image
+            - storage
+            type: object
+            x-kubernetes-validations:
+            - message: a RedisCluster needs storage.volumeClaimTemplate and takes
+                no storage.existingClaims
+              rule: has(self.storage.volumeClaimTemplate) && !has(self.storage.existingClaims)
+          status:
+            description: status defines the observed state of RedisCluster
+            properties:
+              clusterState:
+                description: |-
+                  ClusterState is cluster_state of CLUSTER INFO: ok, or fail when some
+                  slot has no master.
+                type: string
+              conditions:
+                description: 'Conditions of the cluster: Ready and SlotsCovered.'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              shards:
+                description: Shards tells which node is the master of every shard.
+                items:
+                  description: ShardStatus is one shard of a RedisCluster.
+                  properties:
+                    name:
+                      description: Name of the RedisInstance of the shard.
+                      type: string
+                    primary:
+                      description: Primary is the Pod of the master.
+                      type: string
+                    slots:
+                      description: Slots the master serves, e.g. "0-5460".
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

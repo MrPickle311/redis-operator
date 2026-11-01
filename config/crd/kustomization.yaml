@@ -4,6 +4,7 @@
 resources:
 - bases/redis.operator.com_redisinstances.yaml
 - bases/redis.operator.com_redisusers.yaml
+- bases/redis.operator.com_redisclusters.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

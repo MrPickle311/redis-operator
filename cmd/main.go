@@ -75,6 +75,7 @@ func main() {
 			flags.IntVar(&opts.Databases, "databases", 16, "Number of logical databases of Redis")
 			flags.IntVar(&opts.IOThreads, "io-threads", 1, "Number of threads that serve the clients of Redis")
 			flags.BoolVar(&opts.TLS, "tls", false, "Take only TLS connections, with the certificate in "+instancemanager.TLSDir)
+			flags.BoolVar(&opts.Cluster, "cluster", false, "Run Redis as a node of a Redis Cluster")
 			flags.StringVar(&opts.TLSClientAuth, "tls-client-auth", "none", "Whether clients must show a certificate: none, optional or required")
 			_ = flags.Parse(os.Args[3:])
 			c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
@@ -259,6 +260,13 @@ func main() {
 			setupLog.Error(err, "Failed to inject the CA bundle into the webhook configuration",
 				"name", webhookv1.ConfigurationName)
 		}
+	}
+	if err := (&controller.RedisClusterReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "rediscluster")
+		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
 

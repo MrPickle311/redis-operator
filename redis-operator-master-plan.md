@@ -460,15 +460,15 @@ Uwaga dla użytkowników: `-r` zawiera primary, więc zapis przez `-r` może si�
 
 Przy `instances: 1` Service `-ro` nie ma endpointów. Tworzymy go mimo to, żeby nazwy były przewidywalne.
 
-### RedisCluster (etap późniejszy)
+### RedisCluster (krok 10)
 
 | Service | Typ | Użycie |
 |---|---|---|
-| `<name>` | ClusterIP, wszystkie node'y | Seed dla klientów cluster-aware (topologię odkrywają przez `CLUSTER SHARDS`) |
-| `<name>-hl` | Headless | Stabilny DNS per node, cluster bus (port 16379) |
+| `<name>` | ClusterIP, jeden na klaster, wszystkie node'y wszystkich shardów | Seed: jedyny adres w konfiguracji klienta cluster-aware. Pierwszy kontakt i odświeżenie topologii (`CLUSTER SHARDS`); dane idą potem bezpośrednio do node'ów |
+| `<name>-<n>-hl` | Headless, per shard (z dziecka `RedisInstance`) | Stabilny DNS per node (ogłaszany w `CLUSTER SHARDS`/`MOVED`), cluster bus (port 16379) |
 
 - `cluster-announce-hostname <fqdn>` + `cluster-preferred-endpoint-type hostname` sprawiają, że klienci dostają w przekierowaniach `MOVED`/`ASK` nazwy DNS zamiast IP.
-- Odczyty z replik: klient wysyła `READONLY` na połączeniu do repliki (standard Redis Cluster). Operator nie może tego wymusić na poziomie Service, bo routing robi klient, a nie Service.
+- Odczyty z replik: klient wysyła `READONLY` na połączeniu do repliki (standard Redis Cluster; Lettuce `ReadFrom.REPLICA_PREFERRED`, go-redis `ReadOnly`/`RouteRandomly`, redis-py `read_from_replicas`). Operator nie może tego wymusić na poziomie Service, bo routing robi klient, a nie Service. Dlatego shard nie ma `-rw`/`-ro`/`-r`: klient cluster-aware wybiera node'y sam, a zwykły klient na `-ro` shardu dostałby `MOVED` dla kluczy innych shardów.
 - Dostęp spoza klastra K8s jest trudny (każdy node musi być osiągalny osobno). Odkładamy to: opcja `LoadBalancer` per node dopiero, gdy będzie potrzebna.
 
 ---
@@ -764,10 +764,22 @@ Reużywa całego silnika `RedisInstance`: IM, fencing, storage, TLS, ACL. Nowe e
 
 Do doprecyzowania przy kroku 10:
 - **Rozmieszczenie Podów.** Anti-affinity per shard (etykieta `redis.operator.com/shard`), nie per instancja: primary i jego repliki muszą stać na różnych węzłach (lub strefach). Pody różnych shardów mogą dzielić węzeł. Bez tego awaria jednego węzła zabiera cały shard i `cluster_state:fail`.
-- **Zmniejszanie liczby shardów.** Kolejność: (1) wyprowadzić wszystkie sloty z usuwanego shardu (migracja jak przy skalowaniu w górę), (2) `CLUSTER FORGET <id>` na **każdym** pozostałym node'zie w oknie 60 s (inaczej gossip przywraca wpis), (3) dopiero potem usunąć Pody i PVC. Każdy etap zapisany w statusie, żeby wznowić po restarcie. Skalowanie w dół z niepustym shardem blokowane walidacją/statusem, nie przez kasowanie danych.
+- **Zmniejszanie liczby shardów (krok 10b).** Kolejność: (1) wyprowadzić wszystkie sloty z usuwanego shardu (migracja jak przy skalowaniu w górę), (2) `CLUSTER FORGET <id>` na **każdym** pozostałym node'zie w oknie 60 s (inaczej gossip przywraca wpis), (3) dopiero potem usunąć Pody i PVC. Każdy etap zapisany w statusie, żeby wznowić po restarcie. Skalowanie w dół z niepustym shardem blokowane walidacją/statusem, nie przez kasowanie danych.
 - **Bezpieczny start w trybie klastra.** `nodes.conf` (`cluster-config-file`) leży na PVC obok danych, więc restart zachowuje node ID i przydział slotów. Node z pustym PVC (nowy lub utracony wolumen) dostaje nowe ID: operator robi `CLUSTER FORGET` starego ID i dołącza nowy jako replikę (`CLUSTER MEET` + `CLUSTER REPLICATE`), nigdy jako primary z pustymi slotami. Analogia do ochrony przed pustym primary z sekcji 3.3.
 - **Kształt statusu.** `status.clusterState` (`ok`/`fail` z `CLUSTER INFO`), `status.shards[]`: `{name, primary, replicas[], slots: "0-5460", nodeID}`, plus `status.slotMigration` (źródło, cel, zakres, postęp) dla wznawialnej migracji. Warunki: `Ready`, `SlotsCovered` (wszystkie 16384 przypisane), `Migrating`.
 - **Wpływ na `RedisInstance` już teraz.** IM nie może zakładać jednego primary na całą instancję: rola i stan replikacji pochodzą z Redisa (`INFO replication`, w klastrze `CLUSTER SHARDS`), a cel replikacji przychodzi z zewnątrz (dziś `status.currentPrimary`, w klastrze primary danego shardu).
+
+**Krok 10 — decyzje (2026-11-01):**
+- **Shard = dziecko `RedisInstance`** (`<name>-<n>`, owner `RedisCluster`) w trybie klastra, jak `KafkaNodePool` w Strimzi. Za darmo: Pody, PVC (`existingClaims`, `recreate`), TLS, ACL, PDB, rolling update, węzły i drain; anti-affinity per instancja = anti-affinity per shard. W trybie klastra `RedisInstance` wyłącza logikę primary (failover, fencing, `REPLICAOF`, epoch, `/promote`): rola pochodzi z Redisa, switchover przez `CLUSTER FAILOVER`. Rodzic nadpisuje spec dziecka, ręczna edycja dziecka nic nie daje. Odrzucone: osobny kontroler z własnymi Podami (powtarza pół kontrolera `RedisInstance`).
+- **Failover natywny** (gossip + głosowanie masterów), operator tylko obserwuje. Odrzucone: failover operatora (`cluster-replica-no-failover yes` + `CLUSTER FAILOVER TAKEOVER`): `TAKEOVER` pomija głosowanie, przy partycji split-brain.
+- **Stałe `shards`** (CEL: niezmienne), zmienne `instancesPerShard`. Zmiana liczby shardów (migracja slotów w górę i w dół, wznawialna) to krok 10b.
+- **TLS: jedno CA na klaster** (`<name>-ca`), z niego certyfikaty wszystkich shardów (klient łączy się z każdym node'em). `tls-cluster yes`, `tls-replication yes`. Własny `serverSecretRef` musi pokrywać wszystkie node'y (wildcard).
+- **Minima (CEL): `shards ≥ 3`**, bo awans repliki wymaga głosów większości wszystkich masterów ze slotami (przy 2 po awarii jednego zostaje 1/2, brak większości; repliki nie głosują). Tak samo `redis-cli --cluster create`. Mniejszy klaster do dev → `RedisInstance`. `instancesPerShard ≥ 1`, domyślnie 2; przy 1 brak failoveru (docs).
+- **Usługi:** dziecko w trybie klastra tworzy tylko `-hl`; rodzic tworzy seed `<name>` na wszystkie node'y. Odczyty z replik konfiguruje klient (`READONLY`), przykład w docs (sekcja 4).
+
+**Podkroki:** 10.1 API `kubebuilder create api --kind RedisCluster`: `shards`, `instancesPerShard`, wspólne pola instancji (`image`, `storage`, `resources`, `redis`, `tls`, `acl`, `networkPolicy`, `affinity`), CEL (niezmienne `shards`, minima), status (`clusterState`, `shards[]`, conditions); storage tylko `volumeClaimTemplate` (`existingClaims` per shard przy restore, sekcja 20) · 10.2 IM w trybie klastra: `redis.conf` (`cluster-enabled`, `/data/nodes.conf`, announce-hostname, `tls-cluster`, 16379), `/status` z `nodeID`, rolą, slotami i `cluster_state`, endpointy `/cluster/meet|addslots|replicate|failover|forget` (mTLS) · 10.3 kontroler `RedisCluster`: dzieci, seed Service, wspólne CA, bootstrap (`MEET` po DNS, sloty równo, `REPLICATE`), status, `Ready`/`SlotsCovered` · 10.4 `RedisInstance` w trybie klastra: bez logiki primary, rola z IM, etykieta `role`, switchover i rolling update przez `CLUSTER FAILOVER` (najpierw repliki), pusty PVC → `FORGET` i powrót jako replika · 10.5 `TargetRef.Kind` `RedisCluster` (dopiero tu: wcześniej kontroler `RedisUser` szukałby `RedisInstance` o tej nazwie), `RedisUser` z celem `RedisCluster` w ACL każdego sharda, webhook i kontroler znają nowy cel, NetworkPolicy przepuszcza 16379 między node'ami · 10.6 zmiana `instancesPerShard` · 10.7 e2e: tworzenie i `redis-cli -c` przez seed (`MOVED` z DNS), usunięcie Poda primary → natywny failover, etykiety i status zgodne, rolling update bez `CLUSTERDOWN`, użytkownicy na wszystkich shardach, NetworkPolicy, pusty PVC repliki → replika · 10.8 docs i plan.
+
+**Poza krokiem 10:** dostęp spoza K8s, restore całego klastra i testy partycji klastra są w sekcji 20.
 
 ---
 
@@ -954,9 +966,10 @@ graph TD
     S7["7. Restore z PVC ze snapshotu CSI<br/>(backup i harmonogram po stronie storage)"]
     S8["8. NetworkPolicy: allowFrom (operator) albo własne"]
     S9["9. Webhook RedisUser: konflikty nazw (odmowa),<br/>brak celu (warning), cert z operatora"]
-    S10["10. RedisCluster + serwisy klastra"]
+    S10["10. RedisCluster: shard = RedisInstance,<br/>natywny failover, stałe shards ≥ 3,<br/>CA per klaster, seed + -hl"]
+    S10b["10b. Zmiana liczby shardów<br/>(wznawialna migracja slotów)"]
     S11["11. Upgrade operatora bez przerw<br/>3.4f tempo rolloutu, okno serwisowe<br/>upgrade IM w miejscu (exec, sekcja 3.10)"]
-    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> S11
+    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> S10b --> S11
 ```
 
 ### Zakres kroku 4 (failover) — lista kontrolna (zamknięty)
@@ -1106,3 +1119,15 @@ Dopisane 2026-10-29. Dziś (krok 5.3) Secret `<name>-ca` z `ca.crt` **i `ca.key`
 - Migracja istniejących `<name>-ca` niepotrzebna, dopóki nie ma wdrożeń; później: przeniesienie klucza przy pierwszym reconcile i usunięcie `ca.key` z namespace instancji.
 
 **Koszt:** jeden Secret na bazę w namespace operatora, finalizer na `RedisInstance` (nowa ścieżka usuwania), klucz CA nie przeżywa już restore samego namespace instancji (Velero) — po restore operator wystawi nowe CA, a klienci potrzebują nowego `ca.crt`. Opcja, nie zmiana domyślna: `spec.tls.caKeyLocation: instance | operator` albo flaga operatora dla całego klastra.
+
+### RedisCluster: dostęp spoza K8s przez jeden adres
+
+Dopisane 2026-11-01 (poza krokiem 10). Opcjonalne `spec.proxy`: Deployment Envoy `redis_proxy` + Service `<name>-proxy` typu LoadBalancer, proxy routuje po slocie. Szczegóły, ograniczenia i odrzucone alternatywy: sekcja 13 pkt 4.
+
+### RedisCluster: restore całego klastra
+
+Dopisane 2026-11-01 (poza krokiem 10). Odpowiednik kroku 7 dla klastra: każdy shard z PVC ze snapshotu CSI (`existingClaims` dziecka `RedisInstance`). `nodes.conf` leży na PVC, więc node'y wracają z tym samym ID i slotami; do sprawdzenia: nowe IP/DNS w gossipie, zgodność snapshotów (sekcja 13 pkt 1), restore do klastra o innej nazwie (inne nazwy w `nodes.conf`).
+
+### RedisCluster: testy partycji sieci
+
+Dopisane 2026-11-01 (poza krokiem 10). Przypadki 1d–1f z sekcji 19: natywny failover po stronie większości masterów, master mniejszości przestaje przyjmować zapisy po `cluster-node-timeout`, operator nie konkuruje z kworum.

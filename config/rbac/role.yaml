@@ -94,6 +94,7 @@ rules:
 - apiGroups:
   - redis.operator.com
   resources:
+  - redisclusters
   - redisinstances
   - redisusers
   verbs:
@@ -107,6 +108,7 @@ rules:
 - apiGroups:
   - redis.operator.com
   resources:
+  - redisclusters/finalizers
   - redisinstances/finalizers
   - redisusers/finalizers
   verbs:
@@ -114,6 +116,7 @@ rules:
 - apiGroups:
   - redis.operator.com
   resources:
+  - redisclusters/status
   - redisinstances/status
   - redisusers/status
   verbs:

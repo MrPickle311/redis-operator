@@ -1,0 +1,17 @@
+apiVersion: redis.operator.com/v1
+kind: RedisCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: my-cluster
+spec:
+  shards: 3
+  instancesPerShard: 2
+  image: redis:7.4
+  storage:
+    volumeClaimTemplate:
+      size: 1Gi
+  resources:
+    requests: {memory: 256Mi, cpu: 100m}
+    limits: {memory: 256Mi}

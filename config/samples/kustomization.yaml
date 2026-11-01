@@ -2,4 +2,5 @@
 resources:
 - redis_v1_redisinstance.yaml
 - redis_v1_redisuser.yaml
+- redis_v1_rediscluster.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
