@@ -123,9 +123,9 @@ func (r *RedisInstanceReconciler) instancesWithNetworkPolicy(ctx context.Context
 }
 
 // networkPolicySpec lets in the clients of allowFrom and the other instances
-// on the port of Redis, the operator on the API of the Instance Manager, and
+// on the port of Redis, the operator on the API of the Instance Manager,
 // anyone on its probes, which come from the kubelet on the node and change
-// nothing.
+// nothing, and in a shard the nodes of the cluster on the cluster bus.
 func networkPolicySpec(instance *redisv1.RedisInstance, operatorNamespace string) networkingv1.NetworkPolicySpec {
 	// TCP like the default of the API server: CreateOrUpdate must see no change.
 	port := func(number int) []networkingv1.NetworkPolicyPort {
@@ -133,7 +133,7 @@ func networkPolicySpec(instance *redisv1.RedisInstance, operatorNamespace string
 		return []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &p}}
 	}
 	instances := metav1.LabelSelector{MatchLabels: instanceSelector(instance)}
-	return networkingv1.NetworkPolicySpec{
+	spec := networkingv1.NetworkPolicySpec{
 		PodSelector: instances,
 		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 		Ingress: []networkingv1.NetworkPolicyIngressRule{
@@ -146,4 +146,13 @@ func networkPolicySpec(instance *redisv1.RedisInstance, operatorNamespace string
 			{Ports: port(instancemanager.ProbePort)},
 		},
 	}
+	// The nodes of a Redis Cluster talk on the cluster bus, every one with
+	// every other one, across the shards.
+	if cluster := clusterOf(instance); cluster != "" {
+		nodes := metav1.LabelSelector{MatchLabels: map[string]string{labelCluster: cluster}}
+		spec.Ingress = append(spec.Ingress, networkingv1.NetworkPolicyIngressRule{
+			Ports: port(clusterBusPort), From: []networkingv1.NetworkPolicyPeer{{PodSelector: &nodes}},
+		})
+	}
+	return spec
 }

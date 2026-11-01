@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -73,6 +74,25 @@ var _ = Describe("RedisUser Webhook", func() {
 		v := validator(newInstance("cache"), newUser("first", "cache", "app"))
 		_, err := v.ValidateCreate(ctx, newUser("second", "cache", "app"))
 		Expect(err).To(MatchError(ContainSubstring("RedisUser first also claims the username app; neither would be applied")))
+	})
+
+	It("checks a user of a RedisCluster against the users of every shard", func() {
+		clusterUser := func(name string) *redisv1.RedisUser {
+			user := newUser(name, "store", "app")
+			user.Spec.TargetRef.Kind = "RedisCluster"
+			return user
+		}
+		warnings, err := validator().ValidateCreate(ctx, clusterUser("first"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(warnings).To(ConsistOf(ContainSubstring("RedisCluster store does not exist yet")))
+
+		cluster := &redisv1.RedisCluster{ObjectMeta: metav1.ObjectMeta{Name: "store", Namespace: "default", UID: "store-uid"}}
+		shard := newInstance("store-1")
+		shard.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: redisv1.GroupVersion.String(), Kind: "RedisCluster", Name: "store", UID: cluster.UID, Controller: ptr.To(true),
+		}}
+		_, err = validator(cluster, newInstance("store-0"), shard, clusterUser("first")).ValidateCreate(ctx, clusterUser("second"))
+		Expect(err).To(MatchError(ContainSubstring("RedisUser first also claims the username app")))
 	})
 
 	It("turns away a username of the external ACL of the instance", func() {

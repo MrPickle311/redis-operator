@@ -21,7 +21,6 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,14 +68,13 @@ func (v *RedisUserValidator) ValidateDelete(_ context.Context, _ *redisv1.RedisU
 }
 
 func (v *RedisUserValidator) validate(ctx context.Context, user *redisv1.RedisUser) (admission.Warnings, error) {
-	var instance redisv1.RedisInstance
-	err := v.client.Get(ctx, types.NamespacedName{Namespace: user.Namespace, Name: user.Spec.TargetRef.Name}, &instance)
+	instances, err := controller.TargetInstances(ctx, v.client, user)
 	if apierrors.IsNotFound(err) {
-		return admission.Warnings{fmt.Sprintf("RedisInstance %s does not exist yet; the user waits for it", user.Spec.TargetRef.Name)}, nil
+		return admission.Warnings{fmt.Sprintf("%s %s does not exist yet; the user waits for it", user.Spec.TargetRef.Kind, user.Spec.TargetRef.Name)}, nil
 	}
 	conflict := ""
-	if err == nil {
-		conflict, err = controller.UsernameConflict(ctx, v.client, user, &instance)
+	for i := 0; err == nil && conflict == "" && i < len(instances); i++ {
+		conflict, err = controller.UsernameConflict(ctx, v.client, user, &instances[i])
 	}
 	if err != nil {
 		// Only a faster answer: the controller checks again.

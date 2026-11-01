@@ -49,10 +49,38 @@ func generatedPasswordSecretName(user *redisv1.RedisUser) string {
 	return user.Name + "-redis-user"
 }
 
-// targets reports whether the RedisUser belongs to the instance.
+// targets reports whether the RedisUser belongs to the instance: it names the
+// instance, or the RedisCluster the instance is a shard of.
 func targets(user *redisv1.RedisUser, instance *redisv1.RedisInstance) bool {
-	return user.Namespace == instance.Namespace && user.Spec.TargetRef.Name == instance.Name &&
-		(user.Spec.TargetRef.Kind == "" || user.Spec.TargetRef.Kind == "RedisInstance")
+	if user.Namespace != instance.Namespace {
+		return false
+	}
+	if user.Spec.TargetRef.Kind == kindRedisCluster {
+		return user.Spec.TargetRef.Name == clusterOf(instance)
+	}
+	return user.Spec.TargetRef.Name == instance.Name
+}
+
+// TargetInstances returns the RedisInstances the user belongs to: its
+// RedisInstance, or every shard of its RedisCluster, none before the cluster
+// created them. The error is NotFound when the target does not exist.
+func TargetInstances(ctx context.Context, c client.Reader, user *redisv1.RedisUser) ([]redisv1.RedisInstance, error) {
+	key := types.NamespacedName{Namespace: user.Namespace, Name: user.Spec.TargetRef.Name}
+	if user.Spec.TargetRef.Kind != kindRedisCluster {
+		var instance redisv1.RedisInstance
+		if err := c.Get(ctx, key, &instance); err != nil {
+			return nil, err
+		}
+		return []redisv1.RedisInstance{instance}, nil
+	}
+	if err := c.Get(ctx, key, &redisv1.RedisCluster{}); err != nil {
+		return nil, err
+	}
+	var list redisv1.RedisInstanceList
+	if err := c.List(ctx, &list, client.InNamespace(user.Namespace)); err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(list.Items, func(instance redisv1.RedisInstance) bool { return !targets(user, &instance) }), nil
 }
 
 // usersOf returns the RedisUsers of the instance that are not being deleted.
@@ -332,13 +360,24 @@ func (r *RedisInstanceReconciler) setACLCondition(instance *redisv1.RedisInstanc
 	meta.SetStatusCondition(&instance.Status.Conditions, condition)
 }
 
-// instanceOfUser maps an event of a RedisUser to its RedisInstance.
-func instanceOfUser(_ context.Context, obj client.Object) []reconcile.Request {
+// instancesOfUser maps an event of a RedisUser to its RedisInstances.
+func (r *RedisInstanceReconciler) instancesOfUser(ctx context.Context, obj client.Object) []reconcile.Request {
 	user, ok := obj.(*redisv1.RedisUser)
 	if !ok {
 		return nil
 	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: user.Namespace, Name: user.Spec.TargetRef.Name}}}
+	var instances redisv1.RedisInstanceList
+	if err := r.List(ctx, &instances, client.InNamespace(user.Namespace)); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list RedisInstances for a RedisUser event", "user", user.Name)
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, instance := range instances.Items {
+		if targets(user, &instance) {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&instance)})
+		}
+	}
+	return requests
 }
 
 // usesPasswordSecret reports whether the password of the user is in the Secret.

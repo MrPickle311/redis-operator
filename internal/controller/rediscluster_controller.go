@@ -140,9 +140,6 @@ func (r *RedisClusterReconciler) ensureCA(ctx context.Context, cluster *redisv1.
 // ensureShard makes the RedisInstance of the shard follow the spec of the
 // cluster. The fields of a RedisInstance a RedisCluster has no counterpart
 // for keep their defaults.
-//
-// ponytail: spec.networkPolicy is not passed on yet; the policy of a shard
-// would cut the cluster bus.
 func (r *RedisClusterReconciler) ensureShard(ctx context.Context, cluster *redisv1.RedisCluster, shard int32) (*redisv1.RedisInstance, error) {
 	child := &redisv1.RedisInstance{
 		ObjectMeta: metav1.ObjectMeta{
@@ -164,6 +161,7 @@ func (r *RedisClusterReconciler) ensureShard(ctx context.Context, cluster *redis
 		spec.Redis = cluster.Spec.Redis
 		spec.Affinity = cluster.Spec.Affinity
 		spec.TLS = cluster.Spec.TLS
+		spec.NetworkPolicy = cluster.Spec.NetworkPolicy
 		return ctrl.SetControllerReference(cluster, child, r.Scheme)
 	})
 	if result != controllerutil.OperationResultNone {

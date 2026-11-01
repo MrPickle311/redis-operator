@@ -63,6 +63,7 @@ type RedisUserReconciler struct {
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisusers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisusers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisusers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=redis.operator.com,resources=redisclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *RedisUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -131,28 +132,33 @@ func (r *RedisUserReconciler) ensureGeneratedPassword(ctx context.Context, user 
 	return err
 }
 
-// readyCondition tells whether every running instance has the user as
-// specified, or why not.
+// readyCondition tells whether every running instance of the target, of
+// every shard for a RedisCluster, has the user as specified, or why not.
 func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.RedisUser) (metav1.Condition, error) {
 	condition := func(status metav1.ConditionStatus, reason, message string) metav1.Condition {
 		return metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: user.Generation}
 	}
 	username := redisUserName(user)
+	target := user.Spec.TargetRef.Name
 
-	var instance redisv1.RedisInstance
-	err := r.Get(ctx, types.NamespacedName{Name: user.Spec.TargetRef.Name, Namespace: user.Namespace}, &instance)
+	instances, err := TargetInstances(ctx, r.Client, user)
 	if apierrors.IsNotFound(err) {
-		return condition(metav1.ConditionFalse, "TargetNotFound", "RedisInstance "+user.Spec.TargetRef.Name+" does not exist"), nil
+		return condition(metav1.ConditionFalse, "TargetNotFound", user.Spec.TargetRef.Kind+" "+target+" does not exist"), nil
 	}
 	if err != nil {
 		return metav1.Condition{}, err
 	}
-	conflict, err := UsernameConflict(ctx, r.Client, user, &instance)
-	if err != nil {
-		return metav1.Condition{}, err
+	if len(instances) == 0 {
+		return condition(metav1.ConditionFalse, "Pending", "Waiting for the shards of "+target), nil
 	}
-	if conflict != "" {
-		return condition(metav1.ConditionFalse, "Conflict", conflict+"; neither is applied"), nil
+	for _, instance := range instances {
+		conflict, err := UsernameConflict(ctx, r.Client, user, &instance)
+		if err != nil {
+			return metav1.Condition{}, err
+		}
+		if conflict != "" {
+			return condition(metav1.ConditionFalse, "Conflict", conflict+"; neither is applied"), nil
+		}
 	}
 	passwords, err := userPasswords(ctx, r.Client, user)
 	if err != nil {
@@ -161,18 +167,21 @@ func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.
 	if len(passwords) == 0 {
 		return condition(metav1.ConditionFalse, "PasswordMissing", "The Secret with the password does not exist yet, or has no such key"), nil
 	}
-	if reason, rejected := aclRejection(&instance, username); rejected {
-		return condition(metav1.ConditionFalse, "Rejected",
-			"Redis refused the rules, so it keeps the previous ones of the user, if any: "+reason), nil
+	line := aclLine(username, passwords, user.Spec.ACL.Rules)
+	for _, instance := range instances {
+		if reason, rejected := aclRejection(&instance, username); rejected {
+			return condition(metav1.ConditionFalse, "Rejected",
+				"Redis refused the rules, so it keeps the previous ones of the user, if any: "+reason), nil
+		}
+		applied, err := r.appliedWithLine(ctx, &instance, line)
+		if err != nil {
+			return metav1.Condition{}, err
+		}
+		if !applied {
+			return condition(metav1.ConditionFalse, "Pending", "Waiting for the instances of "+instance.Name+" to apply the user"), nil
+		}
 	}
-	applied, err := r.appliedWithLine(ctx, &instance, aclLine(username, passwords, user.Spec.ACL.Rules))
-	if err != nil {
-		return metav1.Condition{}, err
-	}
-	if !applied {
-		return condition(metav1.ConditionFalse, "Pending", "Waiting for the instances of "+instance.Name+" to apply the user"), nil
-	}
-	return condition(metav1.ConditionTrue, "Applied", "Every running instance of "+instance.Name+" has the user"), nil
+	return condition(metav1.ConditionTrue, "Applied", "Every running instance of "+target+" has the user"), nil
 }
 
 // UsernameConflict says which other source of users of the instance has the
@@ -228,23 +237,26 @@ func (r *RedisUserReconciler) appliedWithLine(ctx context.Context, instance *red
 	return bytes.Contains(content, []byte(line+"\n")) && aclApplied(instance, content), nil
 }
 
-// userGone reports whether no running instance has the user any more, or the
-// instance itself is gone.
+// userGone reports whether no running instance of the target has the user
+// any more, or the target itself is gone.
 func (r *RedisUserReconciler) userGone(ctx context.Context, user *redisv1.RedisUser) (bool, error) {
-	var instance redisv1.RedisInstance
-	err := r.Get(ctx, types.NamespacedName{Name: user.Spec.TargetRef.Name, Namespace: user.Namespace}, &instance)
+	instances, err := TargetInstances(ctx, r.Client, user)
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	content, err := r.aclContent(ctx, &instance)
-	if err != nil {
-		return false, err
+	for _, instance := range instances {
+		content, err := r.aclContent(ctx, &instance)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Contains(content, []byte("user "+redisUserName(user)+" ")) || !aclApplied(&instance, content) {
+			return false, nil
+		}
 	}
-	stillThere := bytes.Contains(content, []byte("user "+redisUserName(user)+" "))
-	return !stillThere && aclApplied(&instance, content), nil
+	return true, nil
 }
 
 // aclContent returns the users <instance>-acl gives Redis, none when it does

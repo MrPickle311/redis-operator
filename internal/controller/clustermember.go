@@ -21,6 +21,9 @@ import (
 // Service of the cluster selects them by it.
 const labelCluster = "redis.operator.com/cluster"
 
+// kindRedisCluster is the kind of a RedisCluster in references to it.
+const kindRedisCluster = "RedisCluster"
+
 // clusterBusPort is where the nodes of a Redis Cluster talk to each other.
 const clusterBusPort = 16379
 
@@ -29,7 +32,7 @@ const clusterBusPort = 16379
 // elects the masters, so the logic of the primary of the operator is off.
 func clusterOf(instance *redisv1.RedisInstance) string {
 	owner := metav1.GetControllerOf(instance)
-	if owner == nil || owner.Kind != "RedisCluster" || owner.APIVersion != redisv1.GroupVersion.String() {
+	if owner == nil || owner.Kind != kindRedisCluster || owner.APIVersion != redisv1.GroupVersion.String() {
 		return ""
 	}
 	return owner.Name

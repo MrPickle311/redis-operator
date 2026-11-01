@@ -420,7 +420,7 @@ func (r *RedisInstanceReconciler) instancesUsingSecret(ctx context.Context, obj 
 	}
 	for _, user := range users.Items {
 		if usesPasswordSecret(&user, obj.GetName()) {
-			requests = append(requests, instanceOfUser(ctx, &user)...)
+			requests = append(requests, r.instancesOfUser(ctx, &user)...)
 		}
 	}
 	return requests

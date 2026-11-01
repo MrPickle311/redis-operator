@@ -47,8 +47,9 @@ type RedisUserSpec struct {
 
 // TargetRef names an object in the same namespace.
 type TargetRef struct {
-	// Kind is the kind of the database; RedisCluster comes with step 10.
-	// +kubebuilder:validation:Enum=RedisInstance
+	// Kind is the kind of the database. A user of a RedisCluster is a user
+	// of every shard.
+	// +kubebuilder:validation:Enum=RedisInstance;RedisCluster
 	// +kubebuilder:default=RedisInstance
 	// +optional
 	Kind string `json:"kind,omitempty"`

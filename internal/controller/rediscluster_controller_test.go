@@ -26,10 +26,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
@@ -187,6 +190,84 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 		var ca corev1.Secret
 		Expect(k8sClient.Get(ctx, objectKey("rc-ca"), &ca)).To(Succeed())
 		Expect(tlsSecret.Data[caCertKey]).To(Equal(ca.Data[caCertKey]))
+	})
+
+	Context("with a RedisUser of the cluster", Ordered, func() {
+		shards := []string{"rc-0", "rc-1", "rc-2"}
+		reconcileUser := func() {
+			r := &RedisUserReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: &events.FakeRecorder{}}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: objectKey("rc-app")})
+			Expect(err).NotTo(HaveOccurred())
+		}
+		userReason := func() string {
+			var user redisv1.RedisUser
+			Expect(k8sClient.Get(ctx, objectKey("rc-app"), &user)).To(Succeed())
+			return meta.FindStatusCondition(user.Status.Conditions, "Ready").Reason
+		}
+		acl := func(shard string) string {
+			var secret corev1.Secret
+			Expect(k8sClient.Get(ctx, objectKey(instancemanager.ACLSecretName(shard)), &secret)).To(Succeed())
+			return string(secret.Data[instancemanager.ACLSecretKey])
+		}
+		// reconcileShards reconciles every shard and records what their
+		// Instance Managers would report: every node applied <shard>-acl.
+		reconcileShards := func() {
+			for _, shard := range shards {
+				Expect(reconcileOnce(objectKey(shard))).To(Succeed())
+				instance := getInstance(shard)
+				instance.Status.ACL = &redisv1.ACLStatus{Digest: instancemanager.ACLDigest([]byte(acl(shard))), Applied: true}
+				Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			}
+		}
+
+		It("gives the user to every shard", func() {
+			Expect(k8sClient.Create(ctx, &redisv1.RedisUser{
+				ObjectMeta: metav1.ObjectMeta{Name: "rc-app", Namespace: testNamespace},
+				Spec: redisv1.RedisUserSpec{
+					TargetRef:      redisv1.TargetRef{Kind: "RedisCluster", Name: name},
+					Username:       "app",
+					Authentication: redisv1.RedisUserAuthentication{Generate: true},
+					ACL:            redisv1.RedisUserACL{Rules: []redisv1.ACLRule{"~app:*", "+@read"}},
+				},
+			})).To(Succeed())
+			reconcileUser()
+			Expect(userReason()).To(Equal("Pending"))
+
+			reconcileShards()
+			for _, shard := range shards {
+				Expect(acl(shard)).To(ContainSubstring("user app "), "shard %s", shard)
+			}
+			reconcileUser()
+			Expect(userReason()).To(Equal("Applied"))
+		})
+
+		It("keeps a deleted user until no shard has it any more", func() {
+			var user redisv1.RedisUser
+			Expect(k8sClient.Get(ctx, objectKey("rc-app"), &user)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, &user)).To(Succeed())
+			reconcileUser()
+			Expect(k8sClient.Get(ctx, objectKey("rc-app"), &user)).To(Succeed(), "released before the shards dropped the user")
+
+			reconcileShards()
+			reconcileUser()
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, objectKey("rc-app"), &user))).To(BeTrue())
+		})
+	})
+
+	It("lets the nodes of the cluster in on the cluster bus of a shard", func() {
+		cluster := getCluster(name)
+		cluster.Spec.NetworkPolicy.AllowFrom = []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}
+		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+		Expect(reconcileCluster(name)).To(Succeed())
+		Expect(reconcileOnce(objectKey("rc-1"))).To(Succeed())
+
+		var policy networkingv1.NetworkPolicy
+		Expect(k8sClient.Get(ctx, objectKey("rc-1"), &policy)).To(Succeed())
+		bus, tcp := intstr.FromInt(clusterBusPort), corev1.ProtocolTCP
+		Expect(policy.Spec.Ingress).To(ContainElement(networkingv1.NetworkPolicyIngressRule{
+			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &bus}},
+			From:  []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{labelCluster: name}}}},
+		}))
 	})
 
 	It("never adopts a RedisInstance of its own", func() {

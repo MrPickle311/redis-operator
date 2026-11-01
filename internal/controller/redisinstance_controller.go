@@ -746,7 +746,7 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// The certificate and the client CA of the user are not owned.
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.instancesUsingSecret)).
 		// The users of the instance come from RedisUsers.
-		Watches(&redisv1.RedisUser{}, handler.EnqueueRequestsFromMapFunc(instanceOfUser)).
+		Watches(&redisv1.RedisUser{}, handler.EnqueueRequestsFromMapFunc(r.instancesOfUser)).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).

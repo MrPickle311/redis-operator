@@ -125,10 +125,12 @@ spec:
                 properties:
                   kind:
                     default: RedisInstance
-                    description: Kind is the kind of the database; RedisCluster comes
-                      with step 10.
+                    description: |-
+                      Kind is the kind of the database. A user of a RedisCluster is a user
+                      of every shard.
                     enum:
                     - RedisInstance
+                    - RedisCluster
                     type: string
                   name:
                     description: Name is the name of the database.
