@@ -49,8 +49,9 @@ type ClusterStatus struct {
 	Slots []string `json:"slots,omitempty"`
 	// State is cluster_state of CLUSTER INFO: ok or fail.
 	State string `json:"state"`
-	// KnownNodes counts the nodes this one knows, itself included.
-	KnownNodes int `json:"knownNodes"`
+	// Nodes are the IDs of the nodes this one knows, itself included. A node
+	// still in the handshake of CLUSTER MEET has a temporary ID and is left out.
+	Nodes []string `json:"nodes"`
 }
 
 // ClusterRequest is the body of the POST /cluster/* commands; each one reads
@@ -124,7 +125,12 @@ func readClusterStatus(ctx context.Context, rdb *redis.Client) (*ClusterStatus, 
 	if err != nil {
 		return nil, err
 	}
-	status := &ClusterStatus{NodeID: self.id, MasterID: self.master, Slots: self.slots, KnownNodes: len(nodes)}
+	status := &ClusterStatus{NodeID: self.id, MasterID: self.master, Slots: self.slots}
+	for _, node := range nodes {
+		if !slices.Contains(node.flags, "handshake") {
+			status.Nodes = append(status.Nodes, node.id)
+		}
+	}
 	for line := range strings.Lines(info) {
 		if state, ok := strings.CutPrefix(strings.TrimSpace(line), "cluster_state:"); ok {
 			status.State = state

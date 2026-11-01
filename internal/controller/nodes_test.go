@@ -77,6 +77,19 @@ var _ = Describe("RedisInstance placement", func() {
 			Expect(replicas.Spec.MaxUnavailable).To(BeNil(), "maxUnavailable needs a scale subresource, which a RedisInstance has not")
 		})
 
+		It("makes the budgets recount when the primary moves", func() {
+			instance := getInstance(name)
+			instance.Status.CurrentPrimary = name + "-1"
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			Expect(reconcileOnce(objectKey(name))).To(Succeed())
+
+			for _, role := range []string{"primary", "replica"} {
+				pdb, err := getPDB(name + "-" + role)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(pdb.Annotations).To(HaveKey(annotationRecount), "a Pod left the role %s", role)
+			}
+		})
+
 		It("removes the budgets with the last replica, so a drain is not blocked for good", func() {
 			scale(name, 1)
 			for _, pdb := range []string{name + "-primary", name + "-replica"} {

@@ -91,7 +91,7 @@ func TestClusterCommandsOnRedis(t *testing.T) {
 	}
 
 	run("clusterMeet", clusterMeet, a, ClusterRequest{Host: hostB}, true)
-	eventually("the nodes know each other", func() bool { return status(b).KnownNodes == 2 })
+	eventually("the nodes know each other", func() bool { return len(status(b).Nodes) == 2 })
 	run("clusterMeet", clusterMeet, a, ClusterRequest{Host: hostB}, false)
 
 	idA, idB := status(a).NodeID, status(b).NodeID

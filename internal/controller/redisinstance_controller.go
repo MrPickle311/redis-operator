@@ -378,8 +378,9 @@ func buildRedisPVC(instance *redisv1.RedisInstance, ordinal int32) *corev1.Persi
 
 // ensureRoleLabel sets the role label on an existing Pod. The -rw and -ro
 // Services select Pods by this label, so it decides where client traffic goes.
-func (r *RedisInstanceReconciler) ensureRoleLabel(ctx context.Context, pod *corev1.Pod, role string) error {
-	if pod.Labels[labelRole] == role {
+func (r *RedisInstanceReconciler) ensureRoleLabel(ctx context.Context, instance *redisv1.RedisInstance, pod *corev1.Pod, role string) error {
+	oldRole := pod.Labels[labelRole]
+	if oldRole == role {
 		return nil
 	}
 
@@ -390,7 +391,15 @@ func (r *RedisInstanceReconciler) ensureRoleLabel(ctx context.Context, pod *core
 	pod.Labels[labelRole] = role
 
 	logf.FromContext(ctx).Info("Updated Pod role label", "name", pod.Name, "role", role)
-	return r.Patch(ctx, pod, patch)
+	if err := r.Patch(ctx, pod, patch); err != nil || oldRole == "" {
+		return err
+	}
+	// The disruption controller recounts only the budget the Pod now matches:
+	// the budget of the old role would go on counting it, and let a drain
+	// evict the primary. Any change of the budget makes it recount.
+	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: pdbName(instance, oldRole), Namespace: instance.Namespace}}
+	recount := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, annotationRecount, pod.ResourceVersion)
+	return client.IgnoreNotFound(r.Patch(ctx, pdb, client.RawPatch(types.MergePatchType, recount)))
 }
 
 // deleteOwnedPVC deletes the generated PVC of the given ordinal, but only
@@ -479,6 +488,12 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	// Before anything reads the primary: Redis Cluster elects it in a shard.
+	if clusterOf(&instance) != "" {
+		if err := r.observeShardPrimary(ctx, &instance); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	forgetRemovedRequests(&instance)
 	if err := r.reconcileRecreate(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
@@ -532,7 +547,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 
-		if err := r.ensureRoleLabel(ctx, &existingPod, podRole(&instance, ordinal)); err != nil {
+		if err := r.ensureRoleLabel(ctx, &instance, &existingPod, podRole(&instance, ordinal)); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -555,8 +570,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.cleanupExcessPods(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
 	}
+	healthy := settled == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
 	if clusterOf(&instance) != "" {
-		return r.reconcileShard(ctx, &instance, oldStatus, readyCount, len(outdated), memoryUnlimited)
+		return r.reconcileShard(ctx, &instance, oldStatus, readyCount, ready, outdated, healthy, memoryUnlimited)
 	}
 
 	// Before the rollout and the switchover: both need a primary that works.
@@ -577,7 +593,6 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Before the switchover: the update of the primary starts one.
-	healthy := settled == instance.Spec.Instances && len(claims) == int(instance.Spec.Instances)
 	retryRollout, err := r.reconcileRollout(ctx, &instance, outdated, healthy)
 	if len(outdated) > 0 && !healthy && settleWait > 0 {
 		retryRollout = soonest(retryRollout, settleWait)

@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"reflect"
+	"slices"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -200,8 +201,13 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 	})
 })
 
-func clusterNodeStatus(id string, known int, master string, slots ...string) *instancemanager.ClusterStatus {
-	return &instancemanager.ClusterStatus{NodeID: id, KnownNodes: known, MasterID: master, Slots: slots, State: "fail"}
+// clusterNodeStatus returns the status of node id that knows the nodes known,
+// or only itself for nil.
+func clusterNodeStatus(id string, known []string, master string, slots ...string) *instancemanager.ClusterStatus {
+	if known == nil {
+		known = []string{id}
+	}
+	return &instancemanager.ClusterStatus{NodeID: id, Nodes: known, MasterID: master, Slots: slots, State: "fail"}
 }
 
 func TestPlanCluster(t *testing.T) {
@@ -214,6 +220,8 @@ func TestPlanCluster(t *testing.T) {
 		}
 		return nodes
 	}
+	all := []string{"a0", "a1", "b0", "b1"}
+	withOld := append(slices.Clone(all), "old")
 	tests := []struct {
 		name     string
 		nodes    []clusterNode
@@ -222,11 +230,11 @@ func TestPlanCluster(t *testing.T) {
 	}{
 		{
 			name:  "waits for every node",
-			nodes: nodes(clusterNodeStatus("a0", 1, ""), nil, clusterNodeStatus("b0", 1, ""), clusterNodeStatus("b1", 1, "")),
+			nodes: nodes(clusterNodeStatus("a0", nil, ""), nil, clusterNodeStatus("b0", nil, ""), clusterNodeStatus("b1", nil, "")),
 		},
 		{
 			name:  "the first node meets the others",
-			nodes: nodes(clusterNodeStatus("a0", 1, ""), clusterNodeStatus("a1", 1, ""), clusterNodeStatus("b0", 4, ""), clusterNodeStatus("b1", 1, "")),
+			nodes: nodes(clusterNodeStatus("a0", nil, ""), clusterNodeStatus("a1", nil, ""), clusterNodeStatus("b0", all, ""), clusterNodeStatus("b1", nil, "")),
 			want: []clusterAction{
 				{"a-0.svc", "meet", instancemanager.ClusterRequest{Host: "a-1.svc"}},
 				{"a-0.svc", "meet", instancemanager.ClusterRequest{Host: "b-0.svc"}},
@@ -235,7 +243,7 @@ func TestPlanCluster(t *testing.T) {
 		},
 		{
 			name:  "the first node of every shard takes its slots",
-			nodes: nodes(clusterNodeStatus("a0", 4, ""), clusterNodeStatus("a1", 4, ""), clusterNodeStatus("b0", 4, ""), clusterNodeStatus("b1", 4, "")),
+			nodes: nodes(clusterNodeStatus("a0", all, ""), clusterNodeStatus("a1", all, ""), clusterNodeStatus("b0", all, ""), clusterNodeStatus("b1", all, "")),
 			want: []clusterAction{
 				{"a-0.svc", "addslots", instancemanager.ClusterRequest{Slots: "0-8191"}},
 				{"b-0.svc", "addslots", instancemanager.ClusterRequest{Slots: "8192-16383"}},
@@ -243,21 +251,41 @@ func TestPlanCluster(t *testing.T) {
 		},
 		{
 			name: "the other nodes replicate the master of their shard, wherever it is",
-			nodes: nodes(clusterNodeStatus("a0", 4, ""), clusterNodeStatus("a1", 4, "", "0-8191"),
-				clusterNodeStatus("b0", 4, "", "8192-16383"), clusterNodeStatus("b1", 4, "b0")),
+			nodes: nodes(clusterNodeStatus("a0", all, ""), clusterNodeStatus("a1", all, "", "0-8191"),
+				clusterNodeStatus("b0", all, "", "8192-16383"), clusterNodeStatus("b1", all, "b0")),
 			want: []clusterAction{
 				{"a-0.svc", "replicate", instancemanager.ClusterRequest{NodeID: "a1"}},
 			},
 		},
 		{
 			name:     "gives no slots again to a shard that had them",
-			nodes:    nodes(clusterNodeStatus("a0", 4, ""), clusterNodeStatus("a1", 4, ""), clusterNodeStatus("b0", 4, "", "8192-16383"), clusterNodeStatus("b1", 4, "b0")),
+			nodes:    nodes(clusterNodeStatus("a0", all, ""), clusterNodeStatus("a1", all, ""), clusterNodeStatus("b0", all, "", "8192-16383"), clusterNodeStatus("b1", all, "b0")),
 			assigned: map[int32]bool{0: true, 1: true},
+		},
+		{
+			name: "every node forgets an ID no node has, e.g. of a lost volume",
+			nodes: nodes(clusterNodeStatus("a0", withOld, "", "0-8191"), clusterNodeStatus("a1", all, "a0"),
+				clusterNodeStatus("b0", withOld, "", "8192-16383"), clusterNodeStatus("b1", all, "b0")),
+			want: []clusterAction{
+				{"a-0.svc", "forget", instancemanager.ClusterRequest{NodeID: "old"}},
+				{"b-0.svc", "forget", instancemanager.ClusterRequest{NodeID: "old"}},
+			},
+		},
+		{
+			name: "keeps an old master, which holds the slots until its replica takes over",
+			nodes: nodes(clusterNodeStatus("a0", withOld, ""), clusterNodeStatus("a1", withOld, "old"),
+				clusterNodeStatus("b0", withOld, "", "8192-16383"), clusterNodeStatus("b1", withOld, "b0")),
+			assigned: map[int32]bool{0: true, 1: true},
+		},
+		{
+			name: "keeps the ID of a node whose Pod is down",
+			nodes: nodes(clusterNodeStatus("a0", withOld, "", "0-8191"), clusterNodeStatus("a1", withOld, "a0"),
+				clusterNodeStatus("b0", withOld, "", "8192-16383")),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := planCluster(tt.nodes, 2, tt.assigned); !reflect.DeepEqual(got, tt.want) {
+			if got := planCluster(tt.nodes, 2, 2, tt.assigned); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("planCluster() =\n%+v\nwant\n%+v", got, tt.want)
 			}
 		})

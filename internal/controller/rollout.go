@@ -84,6 +84,9 @@ func (r *RedisInstanceReconciler) reconcileRollout(ctx context.Context, instance
 		target = 1
 	}
 	targetName := instancePodName(instance, target)
+	if clusterOf(instance) != "" {
+		return 0, r.startClusterFailover(ctx, instance, targetName)
+	}
 	if reason := r.switchoverRejection(ctx, instance, targetName); reason != "" {
 		return 0, nil // e.g. no primary recorded yet; the next reconcile tries again
 	}

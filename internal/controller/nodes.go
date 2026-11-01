@@ -41,6 +41,10 @@ func podAffinity(instance *redisv1.RedisInstance) *corev1.Affinity {
 
 // --- PodDisruptionBudgets ---
 
+// annotationRecount changes on the budget of a role whenever a Pod leaves the
+// role, see ensureRoleLabel.
+const annotationRecount = "redis.operator.com/recount"
+
 // pdbName returns the name of the PodDisruptionBudget of the Pods in role.
 func pdbName(instance *redisv1.RedisInstance, role string) string {
 	return fmt.Sprintf("%s-%s", instance.Name, role)

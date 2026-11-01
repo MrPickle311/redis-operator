@@ -90,7 +90,7 @@ func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	nodes := r.clusterNodes(ctx, &cluster)
-	actions := planCluster(nodes, cluster.Spec.Shards, assignedShards(&cluster))
+	actions := planCluster(nodes, cluster.Spec.Shards, cluster.Spec.InstancesPerShard, assignedShards(&cluster))
 	for _, action := range actions {
 		changed, err := r.InstanceManager.Cluster(ctx, action.host, action.command, action.req)
 		if err != nil {

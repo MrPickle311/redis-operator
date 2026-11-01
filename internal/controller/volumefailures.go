@@ -108,6 +108,9 @@ func (r *RedisInstanceReconciler) reconcileVolumeFailures(ctx context.Context, i
 		}
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "PrimaryVolumeFailing", "Switchover",
 			"Switching over to %s: PVC %s of the primary %s is %s", target, claim, name, volumeOf(instance, ordinal).State)
+		if clusterOf(instance) != "" {
+			return r.startClusterFailover(ctx, instance, target)
+		}
 		return r.startSwitchover(ctx, instance, target)
 	case deleteReplicaPod:
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "ReplicaVolumeFailing", "DeletePod",
