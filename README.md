@@ -27,6 +27,9 @@ and password rotation.
 To serve a certificate of your own (e.g. from cert-manager) or to ask
 clients for certificates, see the TLS section of the architecture document.
 
+To let only some clients reach Redis, set `spec.networkPolicy.allowFrom`;
+see [Network policies](docs/architecture.md#network-policies).
+
 ## Backup and restore
 
 Backups are snapshots of the PVCs, taken by the CSI driver on a schedule of

@@ -100,11 +100,7 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%d", instance.Name, ordinal),
 			Namespace: instance.Namespace,
-			Labels: map[string]string{
-				labelName:     appName,
-				labelInstance: instance.Name,
-				labelRole:     podRole(instance, ordinal),
-			},
+			Labels:    rolePodLabels(instance, podRole(instance, ordinal)),
 		},
 		Spec: corev1.PodSpec{
 			Affinity:                     podAffinity(instance),
@@ -726,6 +722,8 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		// A policy of the user may select the instances, see foreignPolicies.
+		Watches(&networkingv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.instancesWithNetworkPolicy)).
 		// A cordoned node of a primary needs a switchover, see reconcileCordon.
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.instancesOnCordonedNode)).
 		Named("redisinstance").

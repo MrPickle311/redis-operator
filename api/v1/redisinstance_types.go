@@ -72,6 +72,11 @@ const ConditionTLSReady = "TLSReady"
 // did not apply the users yet.
 const ConditionACLReady = "ACLReady"
 
+// ConditionNetworkPolicyReady is set with spec.networkPolicy.allowFrom. It
+// is False when NetworkPolicies of the user select the instances too: they
+// still apply, so more than allowFrom may reach Redis.
+const ConditionNetworkPolicyReady = "NetworkPolicyReady"
+
 // ConditionReady is True when every instance is Ready, up to date and on a
 // Ready volume, and no switchover is running. It sums up the instance for
 // tools that read one condition, like the health check of Argo CD.

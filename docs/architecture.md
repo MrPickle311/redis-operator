@@ -42,6 +42,7 @@ flowchart LR
     RI --> R["Service cache-r"]:::svc
     RI --> PDBP["PDB cache-primary"]:::rbac
     RI --> PDBR["PDB cache-replica"]:::rbac
+    RI --> NP["NetworkPolicy cache<br/>with networkPolicy.allowFrom"]:::rbac
     RI --> P0["Pod cache-0<br/>primary"]:::pod
     RI --> D0["PVC cache-0-data"]:::pvc
     RI --> P1["Pod cache-1<br/>replica"]:::pod
@@ -72,11 +73,12 @@ How the objects use each other:
 | PVC `cache-N-data`          | Redis data                                      | Pod `cache-N`, mounted at `/data`                        |
 | PDB `cache-primary`         | `minAvailable: 1`, the Pod with `role=primary`  | a drain: the primary leaves only after a switchover     |
 | PDB `cache-replica`         | `minAvailable: <replicas - 1>`, the Pods with `role=replica` | a drain: one replica at a time              |
+| NetworkPolicy `cache`       | lets in `allowFrom`, the instances, the operator and the probes | only with `spec.networkPolicy.allowFrom`, see [Network policies](#network-policies) |
 
 Every Pod carries the labels `app.kubernetes.io/name=redis`,
 `redis.operator.com/instance=cache` and `redis.operator.com/role`
 (`primary`/`replica`); the Services select by the last two. They are stable,
-so NetworkPolicies may use them. The operator does not set
+so NetworkPolicies may use them (see [Network policies](#network-policies)). The operator does not set
 `app.kubernetes.io/instance`, which Argo CD uses for its own tracking.
 
 A PVC from `spec.storage.existingClaims` takes the place of the generated
@@ -295,6 +297,81 @@ same Secret while the applications move over:
 3. Remove `previousPassword`: only the new one works.
 
 A generated password (`generate: true`) does not rotate.
+
+## Network policies
+
+A NetworkPolicy isolates a Pod for every port at once: the first one that
+selects a Pod for `Ingress` drops all traffic to it but what the policies
+that select it allow, added up. So either the operator isolates the
+instances, with one policy that lets in all they need, or you do, with your
+own:
+
+```yaml
+spec:
+  networkPolicy:
+    allowFrom:                      # unset (default): the operator creates no policy
+      - namespaceSelector: {matchLabels: {team: backend}}
+```
+
+With `allowFrom`, the operator creates the NetworkPolicy `cache`, owned by
+the instance, and deletes it when `allowFrom` is removed. It is the policy
+below, with your clients in the last rule. Without `allowFrom`, write it
+yourself: the first three rules are what the instance needs.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: cache, namespace: app}
+spec:
+  podSelector: {matchLabels: {redis.operator.com/instance: cache}}
+  policyTypes: [Ingress]
+  ingress:
+    # Required: the replication between the instances.
+    - ports: [{port: 6379}]
+      from: [{podSelector: {matchLabels: {redis.operator.com/instance: cache}}}]
+    # Required: the operator calls the Instance Manager.
+    - ports: [{port: 8000}]
+      from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: redis-operator-system}}
+          podSelector: {matchLabels: {control-plane: controller-manager, app.kubernetes.io/name: redis-operator}}
+    # Required: the probes of the kubelet. They only report health.
+    - ports: [{port: 8001}]
+    # Yours: the clients of Redis.
+    - ports: [{port: 6379}]
+      from: [{namespaceSelector: {matchLabels: {team: backend}}}]
+```
+
+| Missing rule | What breaks |
+|---|---|
+| `6379` between the instances | replicas lose the replication; a failover has no candidate |
+| `8000` from the operator | switchover, failover, `spec.redis` and users: errors end with "is a NetworkPolicy of the namespace blocking the operator?" |
+| `8001` | every Pod is not Ready (`Readiness probe failed: ... i/o timeout`); needed where the CNI filters traffic from the node |
+
+A policy drops packets instead of refusing them, so a blocked port shows as
+a timeout. The operator adds the hint above to every timeout of the
+Instance Manager API; it may also be a Pod that restarts or a node that is
+gone.
+
+**One owner.** With `allowFrom`, the operator cannot switch off a policy of
+yours that selects the instances: the CNI applies every policy, and one can
+only let more in. The operator does not delete or change it, which a GitOps
+tool would undo, but sets `NetworkPolicyReady=False/ForeignPolicy` with its
+name, and emits a `Warning` Event `ForeignNetworkPolicy`, until you remove
+it. Only policies in the namespace of the instance count: a policy selects
+Pods of its own namespace only, so one elsewhere cannot let anyone in to
+Redis. It can keep its own Pods from reaching Redis with egress rules: a
+client needs both its egress and the ingress of Redis.
+
+Limits:
+
+- Only ingress. The Instance Manager needs DNS, the API server, whose
+  address depends on the cluster, and the primary; a wrong egress rule
+  costs it the API, so it fences itself. Add egress in a policy of your own,
+  without `allowFrom`.
+- Cluster-wide policies (`AdminNetworkPolicy`, `BaselineAdminNetworkPolicy`,
+  Calico `GlobalNetworkPolicy`, `CiliumClusterwideNetworkPolicy`) apply on
+  top of `allowFrom`; the operator does not see them.
+- The cluster bus of a `RedisCluster` (`16379`) comes with it.
 
 ## Memory
 
