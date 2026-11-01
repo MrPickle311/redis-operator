@@ -26,8 +26,9 @@ func PodFQDN(pod, instance, namespace string) string {
 }
 
 // waitForInstance returns the RedisInstance once its status.currentPrimary is
-// set, which the operator does once the first Pod has an IP.
-func waitForInstance(ctx context.Context, c client.Reader, key types.NamespacedName) (*redisv1.RedisInstance, error) {
+// set, which the operator does once the first Pod has an IP. In cluster mode
+// Redis Cluster elects the masters, so the first read is enough.
+func waitForInstance(ctx context.Context, c client.Reader, key types.NamespacedName, cluster bool) (*redisv1.RedisInstance, error) {
 	var instance redisv1.RedisInstance
 	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, key, &instance); err != nil {
@@ -35,7 +36,7 @@ func waitForInstance(ctx context.Context, c client.Reader, key types.NamespacedN
 			fmt.Fprintln(os.Stderr, "Could not read RedisInstance:", err)
 			return false, nil
 		}
-		return instance.Status.CurrentPrimary != "", nil
+		return cluster || instance.Status.CurrentPrimary != "", nil
 	})
 	return &instance, err
 }

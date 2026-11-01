@@ -43,6 +43,10 @@ type Options struct {
 	TLS bool
 	// TLSClientAuth is spec.tls.clientAuth: none, optional or required.
 	TLSClientAuth string
+	// Cluster makes Redis a node of a Redis Cluster, which elects the masters
+	// by itself: no safe start, approval or self-fencing, which are for the
+	// primary the operator chooses.
+	Cluster bool
 }
 
 // RunInstance runs redis-server and serves the probes until redis-server exits.
@@ -86,17 +90,17 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 
 	// Safe start: a replica starts as a replica, so it never takes writes or
 	// serves its stale dataset as a primary before the operator steps in.
-	instance, err := waitForInstance(ctx, c, types.NamespacedName{Namespace: opts.Namespace, Name: opts.Instance})
+	instance, err := waitForInstance(ctx, c, types.NamespacedName{Namespace: opts.Namespace, Name: opts.Instance}, opts.Cluster)
 	if err != nil {
 		return err
 	}
 	guard.setInstance(instance.UID)
 	var replicaOf string
-	if primary := instance.Status.CurrentPrimary; primary != opts.PodName {
+	if primary := instance.Status.CurrentPrimary; !opts.Cluster && primary != opts.PodName {
 		replicaOf = PodFQDN(primary, opts.Instance, opts.Namespace)
 	}
 	// A replica needs no approval; a primary waits for one, see redisConfig.
-	ready.approved.Store(replicaOf != "")
+	ready.approved.Store(replicaOf != "" || opts.Cluster)
 
 	limit, err := memoryLimit(cgroupMemoryMax)
 	if err != nil {
@@ -118,7 +122,9 @@ func RunInstance(ctx context.Context, c client.Reader, opts Options) error {
 		guard:  guard,
 		last:   instance, lastRead: time.Now(),
 	}
-	go self.run(ctx)
+	if !opts.Cluster {
+		go self.run(ctx)
+	}
 	if opts.TLS {
 		go watchTLS(ctx, rdb)
 	}

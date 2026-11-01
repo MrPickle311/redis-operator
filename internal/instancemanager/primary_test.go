@@ -23,7 +23,7 @@ func TestWaitForInstanceReadsTheStatus(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(instance).Build()
 
-	got, err := waitForInstance(context.Background(), c, instanceKey)
+	got, err := waitForInstance(context.Background(), c, instanceKey, false)
 	if err != nil || got.Status.CurrentPrimary != "cache-1" {
 		t.Errorf("waitForInstance() = %q, %v, want the instance with primary cache-1", got.Status.CurrentPrimary, err)
 	}
@@ -41,11 +41,22 @@ func TestWaitForInstanceWaitsUntilThePrimaryIsKnown(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
 
-			_, err := waitForInstance(ctx, c.WithScheme(testScheme(t)).Build(), instanceKey)
+			_, err := waitForInstance(ctx, c.WithScheme(testScheme(t)).Build(), instanceKey, false)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("waitForInstance() error = %v, want it to wait until the context ends", err)
 			}
 		})
+	}
+}
+
+func TestWaitForInstanceInClusterModeNeedsNoPrimary(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&redisv1.RedisInstance{
+		ObjectMeta: metav1.ObjectMeta{Namespace: instanceKey.Namespace, Name: instanceKey.Name, UID: "uid"},
+	}).Build()
+
+	got, err := waitForInstance(context.Background(), c, instanceKey, true)
+	if err != nil || got.UID != "uid" {
+		t.Errorf("waitForInstance() = %v, %v, want the instance without waiting for a primary", got, err)
 	}
 }
 

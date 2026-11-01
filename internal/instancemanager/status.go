@@ -44,6 +44,8 @@ type InstanceStatus struct {
 	// ACLDigest; ACLRejected maps a user to the error Redis gave for it.
 	ACLDigest   string            `json:"aclDigest,omitempty"`
 	ACLRejected map[string]string `json:"aclRejected,omitempty"`
+	// Cluster is set in cluster mode.
+	Cluster *ClusterStatus `json:"cluster,omitempty"`
 }
 
 // apiHandler serves the API of the Instance Manager. guard runs its commands
@@ -112,6 +114,7 @@ func apiHandler(rdb *redis.Client, guard *epochGuard, ready *readiness) http.Han
 		}
 		writeJSON(w, resp)
 	})
+	clusterHandlers(mux, rdb)
 	return mux
 }
 
@@ -150,7 +153,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func readStatus(ctx context.Context, rdb *redis.Client) (InstanceStatus, error) {
-	info, err := rdb.InfoMap(ctx, "replication", "keyspace").Result()
+	info, err := rdb.InfoMap(ctx, "replication", "keyspace", "cluster").Result()
 	if err != nil {
 		return InstanceStatus{}, err
 	}
@@ -159,7 +162,10 @@ func readStatus(ctx context.Context, rdb *redis.Client) (InstanceStatus, error) 
 		return InstanceStatus{}, err
 	}
 	status.Keys = countKeys(info["Keyspace"])
-	return status, nil
+	if info["Cluster"]["cluster_enabled"] == "1" {
+		status.Cluster, err = readClusterStatus(ctx, rdb)
+	}
+	return status, err
 }
 
 // countKeys sums the keys of every database in INFO keyspace, whose lines

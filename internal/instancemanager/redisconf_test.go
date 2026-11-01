@@ -127,6 +127,38 @@ func TestRedisConfigStartsAReplicaAsOne(t *testing.T) {
 	}
 }
 
+func TestRedisConfigOfAClusterNode(t *testing.T) {
+	opts := testOptions
+	opts.Cluster, opts.PodName, opts.Instance, opts.Namespace = true, "cache-0-1", "cache-0", "prod"
+	conf := redisConfig(testAuth, opts, 0, "noeviction", "", false)
+	for _, line := range []string{
+		"cluster-enabled yes",
+		"cluster-config-file /data/nodes.conf",
+		"cluster-port 16379",
+		"cluster-announce-hostname cache-0-1.cache-0-hl.prod.svc",
+		"cluster-preferred-endpoint-type hostname",
+		"cluster-allow-replica-migration no",
+		// Redis Cluster promotes replicas by itself, so every node lets
+		// replicas sync from the start.
+		"user _replication on >repl-secret +psync +replconf +ping",
+	} {
+		if !hasLine(conf, line) {
+			t.Errorf("redis.conf of a cluster node has no line %q:\n%s", line, conf)
+		}
+	}
+	if strings.Contains(conf, "tls-cluster") {
+		t.Errorf("redis.conf without TLS has tls-cluster:\n%s", conf)
+	}
+
+	opts.TLS = true
+	if conf := redisConfig(testAuth, opts, 0, "noeviction", "", false); !hasLine(conf, "tls-cluster yes") {
+		t.Errorf("redis.conf with TLS keeps the cluster bus in plaintext:\n%s", conf)
+	}
+	if conf := redisConfig(testAuth, testOptions, 0, "noeviction", "", false); strings.Contains(conf, "cluster-") {
+		t.Errorf("redis.conf outside cluster mode has cluster options:\n%s", conf)
+	}
+}
+
 func TestReadInternalAuth(t *testing.T) {
 	tests := []struct {
 		name                string

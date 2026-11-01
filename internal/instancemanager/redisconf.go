@@ -73,7 +73,7 @@ func readInternalAuth(dir string) (internalAuth, error) {
 // redisConfig returns the redis.conf: what Redis needs before it takes the
 // first command. The default user is off unless opts.DefaultUser is set, when
 // it needs no password at all. A non-empty replicaOf makes Redis start as a
-// replica of that host. aof tells whether an AOF is on the volume to load;
+// replica of that host; in cluster mode Redis Cluster sets the roles. aof tells whether an AOF is on the volume to load;
 // the rest of spec.redis comes with CONFIG SET after the start.
 func redisConfig(auth internalAuth, opts Options, maxmemory int64, maxmemoryPolicy, replicaOf string, aof bool) string {
 	defaultACL := "user default off"
@@ -95,8 +95,10 @@ unixsocketperm 700
 `, defaultACL,
 		OperatorUser, auth.operatorPassword,
 		// A primary lets no replica sync until the operator approved its
-		// dataset with /promote: an empty one would wipe the replicas.
-		ReplicationUser, onOff(replicaOf != ""), auth.replicationPassword,
+		// dataset with /promote: an empty one would wipe the replicas. In a
+		// Redis Cluster a node with an empty volume never becomes a master
+		// of slots, so it needs no approval.
+		ReplicationUser, onOff(replicaOf != "" || opts.Cluster), auth.replicationPassword,
 		ReplicationUser, auth.replicationPassword,
 		maxmemory, maxmemoryPolicy, opts.Databases, opts.IOThreads, yesNo(aof), redisSocketPath)
 	if opts.TLS {
@@ -107,6 +109,9 @@ unixsocketperm 700
 		for _, option := range tlsFileOptions {
 			conf += fmt.Sprintf("%s %s\n", option.name, option.value)
 		}
+	}
+	if opts.Cluster {
+		conf += clusterConfig(PodFQDN(opts.PodName, opts.Instance, opts.Namespace), opts.TLS)
 	}
 	if replicaOf != "" {
 		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
