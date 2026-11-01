@@ -264,6 +264,10 @@ func (r *RedisInstanceReconciler) cleanupExcessPods(ctx context.Context, instanc
 		if ordinal >= instance.Spec.Instances {
 			if pod.Name == instance.Status.CurrentPrimary {
 				// Deleting the primary would lose the writes not yet replicated.
+				// A shard moves its master on its own, see reconcileShardScaleDown.
+				if clusterOf(instance) != "" {
+					continue
+				}
 				r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "ScaleDownBlocked", "ScaleDown",
 					"Pod %s is the primary; switch over to a remaining instance first", pod.Name)
 				continue

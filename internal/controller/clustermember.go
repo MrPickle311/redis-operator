@@ -138,10 +138,26 @@ func (r *RedisInstanceReconciler) reconcileShardSwitchover(ctx context.Context, 
 	return nil
 }
 
+// reconcileShardScaleDown moves the master off an instance that a scale-down
+// removes, to the remaining replica with the most of the dataset; then
+// cleanupExcessPods deletes it, and the RedisCluster makes the other nodes
+// forget it.
+func (r *RedisInstanceReconciler) reconcileShardScaleDown(ctx context.Context, instance *redisv1.RedisInstance) error {
+	if instance.Status.TargetPrimary != "" || primaryOrdinal(instance) < instance.Spec.Instances {
+		return nil
+	}
+	target, ok := r.failoverCandidate(ctx, instance)
+	if !ok {
+		return nil // no remaining replica is Ready yet
+	}
+	return r.startClusterFailover(ctx, instance, target)
+}
+
 // reconcileShard finishes the reconcile of a shard of a RedisCluster once its
 // Pods exist. The RedisCluster builds the cluster; the shard moves its master
-// with CLUSTER FAILOVER, for a switchover, a failing volume or a rolling
-// update, keeps the configuration and the users of Redis and reports its state.
+// with CLUSTER FAILOVER, for a switchover, a scale-down, a failing volume or
+// a rolling update, keeps the configuration and the users of Redis and
+// reports its state.
 //
 // ponytail: no switchover off a cordoned node; add it with CLUSTER FAILOVER
 // like the rolling update.
@@ -150,6 +166,9 @@ func (r *RedisInstanceReconciler) reconcileShard(ctx context.Context, instance *
 	healthy, memoryUnlimited bool) (ctrl.Result, error) {
 	r.finishClusterFailover(instance)
 	if err := r.reconcileShardSwitchover(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileShardScaleDown(ctx, instance); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileVolumeFailures(ctx, instance, ready); err != nil {

@@ -270,6 +270,28 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 		}))
 	})
 
+	It("removes a node of a smaller shard only once it is not the master", func() {
+		instance := getInstance("rc-0")
+		instance.Status.CurrentPrimary = "rc-0-2"
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		cluster := getCluster(name)
+		cluster.Spec.InstancesPerShard = 2
+		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+		Expect(reconcileCluster(name)).To(Succeed())
+
+		recorder := events.NewFakeRecorder(20)
+		Expect(reconcileWith(recorder, objectKey("rc-0"))).To(Succeed())
+		Expect(existingPodNames("rc-0", 3)).To(ConsistOf("rc-0-0", "rc-0-1", "rc-0-2"), "the master went before a failover")
+		Expect(recorder.Events).NotTo(Receive(ContainSubstring("ScaleDownBlocked")), "a shard fails over on its own")
+
+		// What observeShardPrimary records once a remaining replica took over.
+		instance = getInstance("rc-0")
+		instance.Status.CurrentPrimary = "rc-0-1"
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		Expect(reconcileOnce(objectKey("rc-0"))).To(Succeed())
+		Expect(existingPodNames("rc-0", 3)).To(ConsistOf("rc-0-0", "rc-0-1"))
+	})
+
 	It("never adopts a RedisInstance of its own", func() {
 		Expect(k8sClient.Create(ctx, newRedisInstance("other-0", 1, redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate()}))).To(Succeed())
 		DeferCleanup(deleteInstance, "other-0")
