@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -93,7 +94,6 @@ func main() {
 
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
-	var webhookCertPath, webhookCertName, webhookCertKey string
 	var webhookPort int
 	var enableLeaderElection bool
 	var probeAddr string
@@ -108,9 +108,6 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
-	flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
-	flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
-	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "Port the webhook server listens on. "+
 		"Defaults to 9443. Set -1 to disable the webhook server.")
 	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
@@ -142,23 +139,28 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	// Initial webhook TLS options
-	webhookTLSOpts := tlsOpts
-	webhookServerOptions := webhook.Options{
-		TLSOpts: webhookTLSOpts,
+	cfg := ctrl.GetConfigOrDie()
+	ctx := ctrl.SetupSignalHandler()
+	// The client of the manager reads from a cache that starts with the manager,
+	// but the reconciler and the webhook server need the CA before that, so it
+	// is loaded directly.
+	directClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "Failed to create client")
+		os.Exit(1)
+	}
+	ca, err := controller.EnsureCA(ctx, directClient, operatorNamespace)
+	if err != nil {
+		setupLog.Error(err, "Failed to load CA", "secret", controller.CASecretName)
+		os.Exit(1)
+	}
+
+	// The webhook server presents a certificate from the CA of the operator,
+	// no cert-manager needed.
+	webhookServer := webhook.NewServer(webhook.Options{
+		TLSOpts: append(slices.Clone(tlsOpts), webhookv1.ServeWithCA(ca, operatorNamespace)),
 		Port:    webhookPort,
-	}
-
-	if len(webhookCertPath) > 0 {
-		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
-			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
-
-		webhookServerOptions.CertDir = webhookCertPath
-		webhookServerOptions.CertName = webhookCertName
-		webhookServerOptions.KeyName = webhookCertKey
-	}
-
-	webhookServer := webhook.NewServer(webhookServerOptions)
+	})
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -194,7 +196,6 @@ func main() {
 		metricsServerOptions.CertName = metricsCertName
 		metricsServerOptions.KeyName = metricsCertKey
 	}
-	cfg := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -216,20 +217,6 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
-		os.Exit(1)
-	}
-
-	ctx := ctrl.SetupSignalHandler()
-	// The client of the manager reads from a cache that starts with the manager,
-	// but the reconciler needs the CA before that, so it is loaded directly.
-	directClient, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Error(err, "Failed to create client")
-		os.Exit(1)
-	}
-	ca, err := controller.EnsureCA(ctx, directClient, operatorNamespace)
-	if err != nil {
-		setupLog.Error(err, "Failed to load CA", "secret", controller.CASecretName)
 		os.Exit(1)
 	}
 
@@ -265,6 +252,13 @@ func main() {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "RedisUser")
 			os.Exit(1)
 		}
+		// Without the CA bundle the API server cannot call the webhook and,
+		// with failurePolicy Ignore, admits every RedisUser: only the
+		// controller checks them then.
+		if err := webhookv1.InjectCABundle(ctx, directClient, ca); err != nil {
+			setupLog.Error(err, "Failed to inject the CA bundle into the webhook configuration",
+				"name", webhookv1.ConfigurationName)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
@@ -275,6 +269,14 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up ready check")
 		os.Exit(1)
+	}
+	// Ready only once the webhook server serves: the Service sends the API
+	// server nowhere else.
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+			setupLog.Error(err, "Failed to set up webhook ready check")
+			os.Exit(1)
+		}
 	}
 
 	setupLog.Info("Starting manager")

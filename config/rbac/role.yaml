@@ -40,6 +40,15 @@ rules:
   - update
   - watch
 - apiGroups:
+  - admissionregistration.k8s.io
+  resourceNames:
+  - redis-operator-validating-webhook-configuration
+  resources:
+  - validatingwebhookconfigurations
+  verbs:
+  - get
+  - update
+- apiGroups:
   - events.k8s.io
   resources:
   - events
