@@ -84,6 +84,24 @@ func TestReplicaOfSendsTheEpochAndThePrimary(t *testing.T) {
 	}
 }
 
+func TestClusterSendsTheCommandAndItsRequest(t *testing.T) {
+	ca := mustCA(t)
+	var got instancemanager.ClusterRequest
+	client := newTestClient(t, ca, startInstanceManager(t, ca, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/cluster/addslots" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(instancemanager.CommandResponse{Changed: true})
+	}))
+
+	changed, err := client.Cluster(context.Background(), "localhost", "addslots", instancemanager.ClusterRequest{Slots: "0-5460"})
+	if err != nil || !changed || got.Slots != "0-5460" {
+		t.Errorf("Cluster() = %v, %v with request %+v, want changed and the slots sent", changed, err, got)
+	}
+}
+
 func TestFenceAndPromoteSendTheEpoch(t *testing.T) {
 	ca := mustCA(t)
 	got := map[string]instancemanager.EpochRequest{}

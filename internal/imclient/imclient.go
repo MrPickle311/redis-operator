@@ -96,6 +96,15 @@ func (c *Client) Config(ctx context.Context, host string, req instancemanager.Co
 	return resp, err
 }
 
+// Cluster runs POST /cluster/<command> on the node of a Redis Cluster at
+// host: meet, addslots, replicate, failover or forget. It returns true when
+// the command changed the node.
+func (c *Client) Cluster(ctx context.Context, host, command string, req instancemanager.ClusterRequest) (bool, error) {
+	var resp instancemanager.CommandResponse
+	err := c.do(ctx, http.MethodPost, host, "/cluster/"+command, req, &resp)
+	return resp.Changed, err
+}
+
 // do sends body as JSON, unless it is nil, and decodes the response into out.
 func (c *Client) do(ctx context.Context, method, host, path string, body, out any) error {
 	var reqBody io.Reader

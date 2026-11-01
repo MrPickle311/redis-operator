@@ -117,7 +117,11 @@ func podRole(instance *redisv1.RedisInstance, ordinal int32) string {
 
 // rolePodLabels returns the labels of a Pod of the RedisInstance in role.
 func rolePodLabels(instance *redisv1.RedisInstance, role string) map[string]string {
-	return map[string]string{labelName: appName, labelInstance: instance.Name, labelRole: role}
+	labels := map[string]string{labelName: appName, labelInstance: instance.Name, labelRole: role}
+	if cluster := clusterOf(instance); cluster != "" {
+		labels[labelCluster] = cluster
+	}
+	return labels
 }
 
 // instanceSelector matches every Pod of the RedisInstance.

@@ -262,8 +262,9 @@ func main() {
 		}
 	}
 	if err := (&controller.RedisClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		InstanceManager: instanceManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "rediscluster")
 		os.Exit(1)

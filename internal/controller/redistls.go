@@ -43,8 +43,18 @@ const (
 )
 
 // instanceCASecretName returns the Secret with the CA of the TLS of Redis.
+// The shards of a RedisCluster share the CA of the cluster: a client trusts
+// every node with one ca.crt.
 func instanceCASecretName(instance *redisv1.RedisInstance) string {
+	if cluster := clusterOf(instance); cluster != "" {
+		return clusterCASecretName(cluster)
+	}
 	return instance.Name + "-ca"
+}
+
+// clusterCASecretName returns the Secret with the CA of a RedisCluster.
+func clusterCASecretName(cluster string) string {
+	return cluster + "-ca"
 }
 
 // redisTLSSecretName returns the Secret the Pods mount for the TLS of Redis.
@@ -77,9 +87,12 @@ func mountRedisTLS(pod *corev1.Pod, instance *redisv1.RedisInstance) {
 // ponytail: assumes the cluster domain cluster.local; a flag of the operator
 // if a cluster uses another one.
 func redisDNSNames(instance *redisv1.RedisInstance) []string {
+	services := []string{instance.Name + "-rw", instance.Name + "-ro", instance.Name + "-r"}
+	if cluster := clusterOf(instance); cluster != "" {
+		services = []string{cluster} // the seed Service of the RedisCluster
+	}
 	var names []string
-	for _, suffix := range []string{"rw", "ro", "r"} {
-		service := instance.Name + "-" + suffix
+	for _, service := range services {
 		names = append(names,
 			service,
 			service+"."+instance.Namespace,
@@ -244,6 +257,9 @@ func (r *RedisInstanceReconciler) clientCA(ctx context.Context, instance *redisv
 func (r *RedisInstanceReconciler) ensureInstanceCA(ctx context.Context, instance *redisv1.RedisInstance) (pki.KeyPair, error) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: instanceCASecretName(instance), Namespace: instance.Namespace}}
 	err := r.Get(ctx, client.ObjectKeyFromObject(secret), secret)
+	if apierrors.IsNotFound(err) && clusterOf(instance) != "" {
+		return pki.KeyPair{}, fmt.Errorf("waiting for the RedisCluster to create the CA %s", secret.Name)
+	}
 	if apierrors.IsNotFound(err) {
 		ca, err := pki.NewCA(fmt.Sprintf("%s/%s Redis CA", instance.Namespace, instance.Name), instanceCAValidity)
 		if err != nil {

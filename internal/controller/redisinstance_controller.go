@@ -200,6 +200,10 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 	if instance.Spec.TLS.TLSEnabled() {
 		mountRedisTLS(pod, instance)
 	}
+	if clusterOf(instance) != "" {
+		redis := &pod.Spec.Containers[0]
+		redis.Ports = append(redis.Ports, corev1.ContainerPort{ContainerPort: clusterBusPort, Name: "cluster-bus"})
+	}
 	pod.Annotations = map[string]string{annotationSpecHash: specHash(&pod.Spec)}
 	return pod
 }
@@ -214,6 +218,9 @@ func instanceCommand(instance *redisv1.RedisInstance) []string {
 	}
 	if instance.Spec.ACL.DefaultUser == redisv1.DefaultUserEnabled {
 		command = append(command, "--default-user")
+	}
+	if clusterOf(instance) != "" {
+		command = append(command, "--cluster")
 	}
 	if instance.Spec.TLS.TLSEnabled() {
 		command = append(command, "--tls")
@@ -456,12 +463,17 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
-	for _, svc := range []*corev1.Service{
-		buildHeadlessService(&instance),
-		buildClientService(&instance, "rw", map[string]string{labelRole: rolePrimary}),
-		buildClientService(&instance, "ro", map[string]string{labelRole: roleReplica}),
-		buildClientService(&instance, "r", nil),
-	} {
+	services := []*corev1.Service{buildHeadlessService(&instance)}
+	// A shard has no client Services: clients of a Redis Cluster reach every
+	// node by its name, after the seed Service of the RedisCluster.
+	if clusterOf(&instance) == "" {
+		services = append(services,
+			buildClientService(&instance, "rw", map[string]string{labelRole: rolePrimary}),
+			buildClientService(&instance, "ro", map[string]string{labelRole: roleReplica}),
+			buildClientService(&instance, "r", nil),
+		)
+	}
+	for _, svc := range services {
 		if err := r.ensureService(ctx, &instance, svc); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -542,6 +554,9 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	if err := r.cleanupExcessPods(ctx, &instance); err != nil {
 		return ctrl.Result{}, err
+	}
+	if clusterOf(&instance) != "" {
+		return r.reconcileShard(ctx, &instance, oldStatus, readyCount, len(outdated), memoryUnlimited)
 	}
 
 	// Before the rollout and the switchover: both need a primary that works.
