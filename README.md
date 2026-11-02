@@ -33,6 +33,22 @@ clients for certificates, see the TLS section of the architecture document.
 To let only some clients reach Redis, set `spec.networkPolicy.allowFrom`;
 see [Network policies](docs/architecture.md#network-policies).
 
+## Redis Cluster
+
+A `RedisCluster` (`config/samples/redis_v1_rediscluster.yaml`) splits the
+data between `shards` masters with `instancesPerShard - 1` replicas each.
+Clients need cluster support (`redis-cli -c`, Lettuce, go-redis, redis-py)
+and reach it through the seed Service `<name>`, with the CA from the Secret
+`<name>-ca`:
+
+```sh
+kubectl get secret my-cluster-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+redis-cli -c --tls --cacert ca.crt -h my-cluster.<namespace>.svc --user <user> --pass <password>
+```
+
+A `RedisUser` with `targetRef: {kind: RedisCluster, name: <name>}` is a
+user of every shard. See [RedisCluster](docs/architecture.md#rediscluster).
+
 ## Backup and restore
 
 Backups are snapshots of the PVCs, taken by the CSI driver on a schedule of

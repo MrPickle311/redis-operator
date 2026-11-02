@@ -86,7 +86,8 @@ A PVC from `spec.storage.existingClaims` takes the place of the generated
 On scale-down the operator deletes the extra Pods and their generated PVCs,
 but never the primary: if the primary is above the new `spec.instances`, it stays and the
 operator emits a `Warning` Event `ScaleDownBlocked` until you
-[switch over](#switchover) to a remaining instance.
+[switch over](#switchover) to a remaining instance. A shard of a
+[RedisCluster](#rediscluster) moves its master on its own.
 
 There is no ConfigMap: the Instance Manager builds `redis.conf` inside the
 Pod from the mounted Secrets.
@@ -408,7 +409,7 @@ Limits:
 - Cluster-wide policies (`AdminNetworkPolicy`, `BaselineAdminNetworkPolicy`,
   Calico `GlobalNetworkPolicy`, `CiliumClusterwideNetworkPolicy`) apply on
   top of `allowFrom`; the operator does not see them.
-- The cluster bus of a `RedisCluster` (`16379`) comes with it.
+- The cluster bus of a `RedisCluster` (`16379`): see [Users and network policies](#users-and-network-policies).
 
 ## Memory
 
@@ -1148,6 +1149,10 @@ sequenceDiagram
   disruption at all.
 - A Pod that is not Ready never blocks a drain
   (`unhealthyPodEvictionPolicy: AlwaysAllow`).
+- When a Pod changes its role, the operator also touches the budget of the
+  old role (annotation `redis.operator.com/recount`): Kubernetes recounts
+  only the budget a Pod now matches, and the stale count of the old one
+  would let a drain take the new primary.
 - **With `instances: 1` there are no budgets:** there is no replica to switch
   over to, so a budget would block a drain for good. The drain takes the
   primary, with an outage until it is back.
@@ -1378,3 +1383,183 @@ sequenceDiagram
         OP->>API: Warning Event MemoryLimitMissing
     end
 ```
+
+## RedisCluster
+
+A `RedisCluster` runs Redis Cluster: the 16384 hash slots are split equally
+between `spec.shards` masters, each with `instancesPerShard - 1` replicas.
+Every shard is a `RedisInstance` `<name>-<n>` of its own, owned by the
+cluster; it reuses Pods, volumes, TLS, users, configuration and rolling
+updates of a `RedisInstance`, but Redis Cluster, not the operator, elects
+the masters. The examples use the cluster `store` with `shards: 3` and
+`instancesPerShard: 2`.
+
+```mermaid
+flowchart LR
+    classDef cr fill:#e8d5ff,stroke:#7b3fbf,color:#000
+    classDef pod fill:#d5f5e3,stroke:#1e8449,color:#000
+    classDef svc fill:#d6eaf8,stroke:#2471a3,color:#000
+    classDef secret fill:#fdebd0,stroke:#ca6f1e,color:#000
+
+    RC["RedisCluster<br/>store"]:::cr
+    RC --> CA["Secret store-ca<br/>CA of every shard"]:::secret
+    RC --> SEED["Service store<br/>seed: every node"]:::svc
+    RC --> S0["RedisInstance store-0"]:::cr
+    RC --> S1["RedisInstance store-1"]:::cr
+    RC --> S2["RedisInstance store-2"]:::cr
+    S0 --> HL0["Service store-0-hl"]:::svc
+    S0 --> P00["Pod store-0-0<br/>master 0-5460"]:::pod
+    S0 --> P01["Pod store-0-1<br/>replica"]:::pod
+    S1 --> P10["Pod store-1-0<br/>master 5461-10921"]:::pod
+    S2 --> P20["Pod store-2-0<br/>master 10922-16383"]:::pod
+    RU["RedisUser app<br/>targetRef.kind: RedisCluster"]:::cr
+    RU -. every shard .-> RC
+```
+
+A shard differs from a `RedisInstance` of its own:
+
+| | `RedisInstance` | shard of a `RedisCluster` |
+|---|---|---|
+| Spec | yours | copied from the `RedisCluster`; edits are overwritten |
+| Services | `-hl`, `-rw`, `-ro`, `-r` | `-hl` only; clients go through the seed Service `store` |
+| CA of the TLS of Redis | `<name>-ca` | `store-ca`, one per cluster; certificates also name the seed Service |
+| Primary | chosen by the operator (safe start, failover) | the node that serves slots, as the Instance Manager reports it |
+| Failover | the operator, after `failover.delay` | Redis Cluster, after `cluster-node-timeout` (15 s) |
+| Pods | | `--cluster`, port `16379` (cluster bus), label `redis.operator.com/cluster=store` |
+
+The operator never takes an existing `RedisInstance` named like a shard
+for one: it would turn its data into a node of the cluster. The reconcile
+of the `RedisCluster` fails with an error that names it, until you rename
+or delete that `RedisInstance`.
+
+### Connecting
+
+Clients need cluster support (`redis-cli -c`, Lettuce, go-redis
+`ClusterClient`, redis-py `RedisCluster`). They read the slot map from any
+node through the seed Service and then connect to every node by its name:
+`MOVED` and `CLUSTER SLOTS` give Pod DNS names
+(`cluster-preferred-endpoint-type hostname`), which the certificates cover.
+
+```sh
+kubectl get secret store-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+redis-cli -c --tls --cacert ca.crt -h store.<namespace>.svc --user <user> --pass <password>
+```
+
+There is no read-only Service: a client reads from replicas with `READONLY`
+on its connections to them (Lettuce `ReadFrom.REPLICA_PREFERRED`, go-redis
+`ReadOnly: true`, redis-py `read_from_replicas=True`).
+
+Use a client with connect and command timeouts and retries. During a
+rolling update a new connection may hang for a moment on a Pod that is
+going away, and a node that has just restarted may answer `MOVED` with `?`
+for a node whose name it has not learned yet. Neither stops the cluster:
+it stays `ok` and never answers `CLUSTERDOWN`.
+
+### Building the cluster
+
+The `RedisCluster` controller asks the Instance Managers of the nodes for
+their cluster state (`GET /status`) and runs one stage per pass, once every
+Pod that runs answers:
+
+```mermaid
+flowchart TD
+    A{"every running node<br/>answers?"} -- no --> W["wait"]
+    A -- yes --> B{"a node knows fewer<br/>nodes than there are?"}
+    B -- yes --> M["store-0-0: CLUSTER MEET every other node<br/>(resolved from its DNS name)"]
+    B -- no --> C{"a shard has no master<br/>and never had slots?"}
+    C -- yes --> S["its first node: CLUSTER ADDSLOTSRANGE<br/>an equal part of 16384"]
+    C -- no --> D{"a node without slots does not<br/>replicate the master of its shard?"}
+    D -- yes --> R["CLUSTER REPLICATE &lt;master id&gt;"]
+    D -- no --> E{"every node of every shard answers,<br/>every shard has a master,<br/>a node knows an ID no node has?"}
+    E -- yes --> F["CLUSTER FORGET on every node"]
+    E -- no --> OK["done; check again in 30 s"]
+```
+
+Every command is idempotent. `status.shards` keeps the slots each shard
+had: a shard that lost them, e.g. every one of its volumes, does not get
+them again on its own, as that would serve an empty dataset. That needs a
+person.
+
+`cluster-allow-replica-migration no` keeps every replica in its shard, so
+in the `RedisInstance` that owns its Pod.
+
+### Moving a master
+
+Redis Cluster fails over on its own when a master is down longer than
+`cluster-node-timeout`; the operator only follows. A Pod that comes back
+sooner, with `nodes.conf` on its volume, is the master again and no
+failover happens. Every shard checks the role of its nodes at least every
+30 s and records the master in `status.currentPrimary`; the role label and
+the PodDisruptionBudgets follow it.
+
+The operator moves a master itself with `CLUSTER FAILOVER` on a replica,
+which waits until the replica has every write and then lets the masters
+elect it:
+
+- a switchover you ask for, with the annotation `redis.operator.com/promote`
+  on the shard, see [Requests](#requests);
+- a rolling update, after every replica of the shard is updated;
+- a scale-down of `instancesPerShard` that removes the master;
+- the volume of the master that is being deleted or lost.
+
+`status.targetPrimary` and the condition `Switchover` of the shard hold it
+until the replica is the master, or for a minute: then `Switchover=False/Failed`
+and a rolling update waits 5 minutes before it tries again. **One shard at a
+time:** the masters give one vote per epoch, and none again for the same
+shard for twice `cluster-node-timeout`, so failovers of two shards at once
+lose votes and take half a minute or more each.
+
+### Volumes and scaling
+
+A replica whose volume is replaced (deleted or lost PVC, the
+`redis.operator.com/recreate` request) starts empty with a new node ID. The
+cluster meets it and makes it a replica of its shard, which syncs it; then
+every node forgets the old ID. The volume of a master is never replaced
+before the master moves, see [Volumes](#volumes).
+
+`instancesPerShard` may change. New nodes join as replicas. On a
+scale-down the master moves to a remaining replica first, then the Pods
+above the new count go and the other nodes forget them. `shards` cannot
+change: that needs moving slots between shards.
+
+### Users and network policies
+
+A `RedisUser` with `targetRef: {kind: RedisCluster, name: store}` is a user
+of every shard; it is `Ready` once every node of every shard has it, and
+the [validation webhook](#validation-webhook) checks its username against
+every shard.
+
+`spec.networkPolicy.allowFrom` of the cluster goes to every shard. The
+policy of a shard also lets in the nodes of the whole cluster on the
+cluster bus:
+
+```yaml
+    - ports: [{port: 16379}]
+      from: [{podSelector: {matchLabels: {redis.operator.com/cluster: store}}}]
+```
+
+Without `allowFrom`, add that rule to a policy of your own, next to the ones
+of a [RedisInstance](#network-policies).
+
+### Status
+
+```sh
+kubectl get rediscluster store
+# NAME    SHARDS   STATE   READY   REASON   AGE
+# store   3        ok      True    Ready    5m
+```
+
+| Field | Content |
+|---|---|
+| `status.clusterState` | `cluster_state` of a master: `ok` or `fail` |
+| `status.shards[]` | per shard: its master and its slots |
+| `SlotsCovered` | `True/Covered`, or `False/Uncovered` with how many slots have no master |
+| `Ready` | `True/Ready`; `False` with `SlotsUncovered`, `ClusterFail` or `ShardsNotReady` |
+
+Limits:
+
+- `shards` is fixed for now.
+- A cordoned node does not move a master of a shard away; the
+  PodDisruptionBudget holds the drain until Redis Cluster or a switchover
+  moves it.
+- Redis Cluster has one database; Redis ignores `spec.redis.startup.databases`.
