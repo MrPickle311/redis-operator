@@ -27,6 +27,12 @@ import (
 // CLUSTERDOWN.
 const ConditionSlotsCovered = "SlotsCovered"
 
+// ConditionMigrating is True while slots move between shards after a change
+// of spec.shards, with the progress in its message. False with the reason
+// Blocked means a key of the slot on the way exists on both shards: a person
+// deletes the one to drop, and the move goes on.
+const ConditionMigrating = "Migrating"
+
 // RedisClusterSpec defines the desired state of RedisCluster: a Redis
 // Cluster of Shards, each a RedisInstance <name>-<n> of InstancesPerShard
 // nodes, a master and its replicas. Redis Cluster fails over by itself.
@@ -34,9 +40,11 @@ const ConditionSlotsCovered = "SlotsCovered"
 type RedisClusterSpec struct {
 	// Shards is the number of masters the 16384 slots are spread over. A
 	// replica takes over from a failed master only with the votes of most
-	// masters, so a cluster below 3 could never fail over.
+	// masters, so a cluster below 3 could never fail over. A change moves
+	// slots, with their keys, until every shard serves an equal part; the
+	// shards a decrease removes are deleted once empty. It cannot change
+	// again until the slots have moved.
 	// +kubebuilder:validation:Minimum=3
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="shards is immutable: changing it needs moving slots between shards"
 	// +kubebuilder:default=3
 	// +optional
 	Shards int32 `json:"shards,omitempty"`
@@ -90,17 +98,28 @@ type RedisClusterStatus struct {
 	// +optional
 	ClusterState string `json:"clusterState,omitempty"`
 
+	// SlotMigration is set while slots move between shards; spec.shards
+	// cannot change until it is gone.
+	// +optional
+	SlotMigration *SlotMigration `json:"slotMigration,omitempty"`
+
 	// Shards tells which node is the master of every shard.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
 	Shards []ShardStatus `json:"shards,omitempty"`
 
-	// Conditions of the cluster: Ready and SlotsCovered.
+	// Conditions of the cluster: Ready, SlotsCovered and Migrating.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// SlotMigration is the progress of moving slots between shards.
+type SlotMigration struct {
+	// SlotsToMove is how many slots still go to another shard.
+	SlotsToMove int32 `json:"slotsToMove"`
 }
 
 // ShardStatus is one shard of a RedisCluster.
@@ -124,6 +143,7 @@ type ShardStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // RedisCluster is the Schema for the redisclusters API
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.slotMigration) || self.spec.shards == oldSelf.spec.shards",message="spec.shards cannot change while slots move between shards, see status.slotMigration"
 type RedisCluster struct {
 	metav1.TypeMeta `json:",inline"`
 

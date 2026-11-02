@@ -19,8 +19,10 @@ package controller
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -73,13 +75,20 @@ var _ = Describe("RedisCluster API", func() {
 		expectInvalid(k8sClient.Create(ctx, cluster), "spec.shards")
 	})
 
-	It("rejects a change of shards", func() {
-		cluster := newRedisCluster("rc-immutable")
+	It("allows a change of shards, but not while slots move", func() {
+		cluster := newRedisCluster("rc-reshard")
 		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 		DeferCleanup(k8sClient.Delete, ctx, cluster)
 
 		cluster.Spec.Shards = 4
-		expectInvalid(k8sClient.Update(ctx, cluster), "shards is immutable")
+		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+		cluster.Status.SlotMigration = &redisv1.SlotMigration{SlotsToMove: 4096}
+		Expect(k8sClient.Status().Update(ctx, cluster)).To(Succeed())
+
+		cluster.Spec.Shards = 5
+		expectInvalid(k8sClient.Update(ctx, cluster), "spec.shards cannot change while slots move between shards")
+		cluster.Spec.Shards, cluster.Spec.InstancesPerShard = 4, 3
+		Expect(k8sClient.Update(ctx, cluster)).To(Succeed(), "the other fields still change")
 	})
 
 	It("allows a change of instancesPerShard", func() {
@@ -100,6 +109,49 @@ var _ = Describe("RedisCluster API", func() {
 		Entry("no template", redisv1.StorageSpec{}),
 		Entry("existing claims", redisv1.StorageSpec{VolumeClaimTemplate: volumeClaimTemplate(), ExistingClaims: existingClaims(0)}),
 	)
+})
+
+var _ = Describe("RedisCluster changing shards", func() {
+	It("keeps a removed shard while its nodes do not answer, and lists it in the status", func() {
+		cluster := newRedisCluster("rcd")
+		cluster.Spec.Shards = 4
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() {
+			for _, shard := range []string{"rcd-0", "rcd-1", "rcd-2", "rcd-3"} {
+				deleteInstance(shard)
+			}
+			Expect(k8sClient.Delete(ctx, getCluster("rcd"))).To(Succeed())
+		})
+		Expect(reconcileCluster("rcd")).To(Succeed())
+
+		cluster = getCluster("rcd")
+		cluster.Spec.Shards = 3
+		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+		Expect(reconcileCluster("rcd")).To(Succeed())
+		Expect(getInstance("rcd-3").DeletionTimestamp).To(BeNil(), "its slots may still be on it")
+		Expect(getCluster("rcd").Status.Shards).To(HaveLen(4))
+	})
+
+	It("starts no failover of a shard while slots move", func() {
+		cluster := newRedisCluster("rcf")
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() {
+			for _, shard := range []string{"rcf-0", "rcf-1", "rcf-2"} {
+				deleteInstance(shard)
+			}
+			Expect(k8sClient.Delete(ctx, getCluster("rcf"))).To(Succeed())
+		})
+		Expect(reconcileCluster("rcf")).To(Succeed())
+		cluster = getCluster("rcf")
+		cluster.Status.SlotMigration = &redisv1.SlotMigration{SlotsToMove: 10}
+		Expect(k8sClient.Status().Update(ctx, cluster)).To(Succeed())
+
+		// Without an Instance Manager: reaching it would panic.
+		r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: &events.FakeRecorder{}}
+		shard := getInstance("rcf-0")
+		Expect(r.startClusterFailover(ctx, shard, "rcf-0-1")).To(Succeed())
+		Expect(getInstance("rcf-0").Status.TargetPrimary).To(BeEmpty())
+	})
 })
 
 func reconcileCluster(name string) error {
@@ -260,7 +312,7 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 		})
 	})
 
-	It("lets the nodes of the cluster in on the cluster bus of a shard", func() {
+	It("lets the nodes of the cluster in on the cluster bus and, for MIGRATE, on the port of Redis of a shard", func() {
 		cluster := getCluster(name)
 		cluster.Spec.NetworkPolicy.AllowFrom = []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}
 		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
@@ -269,9 +321,9 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 
 		var policy networkingv1.NetworkPolicy
 		Expect(k8sClient.Get(ctx, objectKey("rc-1"), &policy)).To(Succeed())
-		bus, tcp := intstr.FromInt(clusterBusPort), corev1.ProtocolTCP
+		bus, redis, tcp := intstr.FromInt(clusterBusPort), intstr.FromInt(redisPort), corev1.ProtocolTCP
 		Expect(policy.Spec.Ingress).To(ContainElement(networkingv1.NetworkPolicyIngressRule{
-			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &bus}},
+			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &bus}, {Protocol: &tcp, Port: &redis}},
 			From:  []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{labelCluster: name}}}},
 		}))
 	})
@@ -387,6 +439,15 @@ func TestPlanCluster(t *testing.T) {
 			assigned: map[int32]bool{0: true, 1: true},
 		},
 		{
+			name: "a shard added later takes no slots the others serve, its first node is the master",
+			nodes: nodes(clusterNodeStatus("a0", all, "", "0-16383"), clusterNodeStatus("a1", all, "a0"),
+				clusterNodeStatus("b0", all, ""), clusterNodeStatus("b1", all, "")),
+			assigned: map[int32]bool{0: true},
+			want: []clusterAction{
+				{"b-1.svc", "replicate", instancemanager.ClusterRequest{NodeID: "b0"}},
+			},
+		},
+		{
 			name: "keeps the ID of a node whose Pod is down",
 			nodes: nodes(clusterNodeStatus("a0", withOld, "", "0-8191"), clusterNodeStatus("a1", withOld, "a0"),
 				clusterNodeStatus("b0", withOld, "", "8192-16383")),
@@ -411,5 +472,172 @@ func TestSlotRangeCoversEverySlotOnce(t *testing.T) {
 	}
 	if countSlots([]string{"0-5460", "12000"}) != 5462 {
 		t.Error("countSlots() miscounts a single slot")
+	}
+}
+
+func TestNextSlotMove(t *testing.T) {
+	// One node per shard: s0, s1, ... with the slots and flags given.
+	nodes := func(statuses ...*instancemanager.ClusterStatus) []clusterNode {
+		var nodes []clusterNode
+		for i, status := range statuses {
+			pod := fmt.Sprintf("s%d", i)
+			nodes = append(nodes, clusterNode{shard: int32(i), pod: pod, host: pod + ".svc", status: status})
+		}
+		return nodes
+	}
+	flags := func(status *instancemanager.ClusterStatus, migrating, importing map[int]string) *instancemanager.ClusterStatus {
+		status.Migrating, status.Importing = migrating, importing
+		return status
+	}
+	three := []string{slotRange(0, 3), slotRange(1, 3), slotRange(2, 3)}
+	four := []string{slotRange(0, 4), slotRange(1, 4), slotRange(2, 4), slotRange(3, 4)}
+	tests := []struct {
+		name     string
+		nodes    []clusterNode
+		shards   int32
+		assigned map[int32]bool
+		want     string // "slot from→to", the pods
+	}{
+		{
+			name:   "moves nothing when every shard has its share",
+			nodes:  nodes(clusterNodeStatus("n0", nil, "", three[0]), clusterNodeStatus("n1", nil, "", three[1]), clusterNodeStatus("n2", nil, "", three[2])),
+			shards: 3,
+		},
+		{
+			name: "a new shard gets the highest slot of the first overfull shard",
+			nodes: nodes(clusterNodeStatus("n0", nil, "", three[0]), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), clusterNodeStatus("n3", nil, "")),
+			shards: 4,
+			want:   "5460 s0→s3",
+		},
+		{
+			name: "the first overfull shard keeps its share",
+			nodes: nodes(clusterNodeStatus("n0", nil, "", "0-4095"), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), clusterNodeStatus("n3", nil, "", "4096-5460")),
+			shards: 4,
+			want:   "10921 s1→s3",
+		},
+		{
+			name: "a removed shard gives its slots to the first underfull one",
+			nodes: nodes(clusterNodeStatus("n0", nil, "", four[0]), clusterNodeStatus("n1", nil, "", four[1]),
+				clusterNodeStatus("n2", nil, "", four[2]), clusterNodeStatus("n3", nil, "", four[3])),
+			shards: 3,
+			want:   "16383 s3→s0",
+		},
+		{
+			name: "a slot on the way goes first",
+			nodes: nodes(flags(clusterNodeStatus("n0", nil, "", three[0]), map[int]string{100: "n3"}, nil), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), flags(clusterNodeStatus("n3", nil, ""), nil, map[int]string{100: "n0"})),
+			shards: 4,
+			want:   "100 s0→s3",
+		},
+		{
+			name: "a slot on the way goes on from the master that took over the source",
+			nodes: nodes(clusterNodeStatus("n0", nil, "", three[0]), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), flags(clusterNodeStatus("n3", nil, ""), nil, map[int]string{100: "gone"})),
+			shards: 4,
+			want:   "100 s0→s3",
+		},
+		{
+			name: "a slot on the way goes to the master that took over the target",
+			nodes: append(nodes(flags(clusterNodeStatus("n0", nil, "", three[0]), map[int]string{100: "n3"}, nil), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), clusterNodeStatus("n3", nil, "n4")),
+				clusterNode{shard: 3, pod: "s3b", host: "s3b.svc", status: clusterNodeStatus("n4", nil, "", "200")}),
+			shards:   4,
+			assigned: map[int32]bool{3: true},
+			want:     "100 s0→s3b",
+		},
+		{
+			name: "the source lets go of a slot the target serves already",
+			nodes: nodes(flags(clusterNodeStatus("n0", nil, "", "0-99", "101-5460"), map[int]string{100: "n3"}, nil), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), clusterNodeStatus("n3", nil, "", "100")),
+			shards:   4,
+			assigned: map[int32]bool{3: true},
+			want:     "100 s0→s3",
+		},
+		{
+			name: "stops at a flag naming a node no shard has",
+			nodes: nodes(flags(clusterNodeStatus("n0", nil, "", three[0]), map[int]string{100: "gone"}, nil), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), clusterNodeStatus("n3", nil, "")),
+			shards: 4,
+		},
+		{
+			name:   "moves nothing while a slot has no master",
+			nodes:  nodes(clusterNodeStatus("n0", nil, "", three[0]), clusterNodeStatus("n1", nil, "", three[1]), clusterNodeStatus("n2", nil, ""), clusterNodeStatus("n3", nil, "")),
+			shards: 4,
+		},
+		{
+			name:   "moves nothing while a node does not answer",
+			nodes:  nodes(clusterNodeStatus("n0", nil, "", three[0]), clusterNodeStatus("n1", nil, "", three[1]), clusterNodeStatus("n2", nil, "", three[2]), nil),
+			shards: 4,
+		},
+		{
+			name: "gives nothing to a shard that lost the slots it had",
+			nodes: nodes(clusterNodeStatus("n0", nil, "", three[0]), clusterNodeStatus("n1", nil, "", three[1]),
+				clusterNodeStatus("n2", nil, "", three[2]), clusterNodeStatus("n3", nil, "")),
+			shards:   4,
+			assigned: map[int32]bool{3: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ""
+			if move, ok := nextSlotMove(tt.nodes, tt.shards, tt.assigned); ok {
+				got = fmt.Sprintf("%d %s→%s", move.slot, move.from.pod, move.to.pod)
+			}
+			if got != tt.want {
+				t.Errorf("nextSlotMove() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSlotMovesAreMinimal(t *testing.T) {
+	// Applies nextSlotMove until nothing moves: 3 → 4 → 3 shards.
+	reshard := func(owners []int32, shards int32) ([]int32, int) {
+		moves := 0
+		for {
+			var nodes []clusterNode
+			for shard := range max(shards, slices.Max(owners)+1) {
+				var slots []string
+				for s := 0; s < clusterSlots; s++ {
+					if owners[s] == shard {
+						first := s
+						for s+1 < clusterSlots && owners[s+1] == shard {
+							s++
+						}
+						slots = append(slots, fmt.Sprintf("%d-%d", first, s))
+					}
+				}
+				nodes = append(nodes, clusterNode{shard: shard, pod: strconv.Itoa(int(shard)),
+					status: &instancemanager.ClusterStatus{NodeID: strconv.Itoa(int(shard)), Slots: slots}})
+			}
+			move, ok := nextSlotMove(nodes, shards, nil)
+			if left := slotsToMove(nodes, shards); left != 4096-moves {
+				t.Fatalf("slotsToMove() = %d after %d moves, want %d", left, moves, 4096-moves)
+			}
+			if !ok {
+				return owners, moves
+			}
+			owners[move.slot] = move.to.shard
+			moves++
+		}
+	}
+	owners := make([]int32, clusterSlots)
+	for s := range owners {
+		owners[s] = int32(s * 3 / clusterSlots)
+	}
+	before := slices.Clone(owners)
+	owners, moves := reshard(owners, 4)
+	if moves != 4096 {
+		t.Errorf("3 → 4 moved %d slots, want 4096", moves)
+	}
+	for s := range owners {
+		if owners[s] != before[s] && owners[s] != 3 {
+			t.Errorf("3 → 4 moved slot %d between old shards", s)
+		}
+	}
+	if _, moves = reshard(owners, 3); moves != 4096 {
+		t.Errorf("4 → 3 moved %d slots, want 4096", moves)
 	}
 }

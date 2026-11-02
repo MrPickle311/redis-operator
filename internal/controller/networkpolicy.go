@@ -147,11 +147,12 @@ func networkPolicySpec(instance *redisv1.RedisInstance, operatorNamespace string
 		},
 	}
 	// The nodes of a Redis Cluster talk on the cluster bus, every one with
-	// every other one, across the shards.
+	// every other one, across the shards, and MIGRATE sends keys to the port
+	// of Redis of a node of another shard.
 	if cluster := clusterOf(instance); cluster != "" {
 		nodes := metav1.LabelSelector{MatchLabels: map[string]string{labelCluster: cluster}}
 		spec.Ingress = append(spec.Ingress, networkingv1.NetworkPolicyIngressRule{
-			Ports: port(clusterBusPort), From: []networkingv1.NetworkPolicyPeer{{PodSelector: &nodes}},
+			Ports: append(port(clusterBusPort), port(redisPort)...), From: []networkingv1.NetworkPolicyPeer{{PodSelector: &nodes}},
 		})
 	}
 	return spec

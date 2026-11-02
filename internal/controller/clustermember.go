@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -71,7 +72,22 @@ func (r *RedisInstanceReconciler) observeShardPrimary(ctx context.Context, insta
 // see finishClusterFailover. The masters elect target, and they give one vote
 // per epoch and then none for the same shard for 2 × cluster-node-timeout:
 // failovers of two shards at once lose votes, so one shard at a time goes.
+// None starts while slots move: the new master would not have the MIGRATING
+// flag of the old one, and clients of the keys moved already would miss them
+// until the next slot move sets it again.
+//
+// ponytail: a slot may start right after this check, as the RedisCluster
+// reads status.targetPrimary a moment later; the move goes on after the
+// failover anyway, see nextSlotMove.
 func (r *RedisInstanceReconciler) startClusterFailover(ctx context.Context, instance *redisv1.RedisInstance, target string) error {
+	var cluster redisv1.RedisCluster
+	err := r.Get(ctx, types.NamespacedName{Name: clusterOf(instance), Namespace: instance.Namespace}, &cluster)
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if err == nil && cluster.Status.SlotMigration != nil {
+		return nil // the next reconcile tries again
+	}
 	var instances redisv1.RedisInstanceList
 	if err := r.List(ctx, &instances, client.InNamespace(instance.Namespace)); err != nil {
 		return err

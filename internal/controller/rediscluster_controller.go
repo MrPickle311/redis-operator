@@ -61,7 +61,9 @@ type RedisClusterReconciler struct {
 
 // Reconcile keeps a RedisInstance per shard and the seed Service, and builds
 // the Redis Cluster out of their Pods: meeting the nodes, handing out the
-// slots and making replicas. Failovers are Redis Cluster's own.
+// slots and making replicas. After a change of spec.shards it moves slots
+// until every shard serves its share, and deletes the shards a decrease
+// removes once empty. Failovers are Redis Cluster's own.
 func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 
@@ -89,11 +91,22 @@ func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		shardsReady = shardsReady && meta.IsStatusConditionTrue(child.Status.Conditions, redisv1.ConditionReady)
 	}
+	// The shards a decrease of spec.shards removes stay until they are empty.
+	total := cluster.Spec.Shards
+	for ; ; total++ {
+		var child redisv1.RedisInstance
+		err := r.Get(ctx, types.NamespacedName{Name: shardName(&cluster, total), Namespace: cluster.Namespace}, &child)
+		if apierrors.IsNotFound(err) || (err == nil && !metav1.IsControlledBy(&child, &cluster)) {
+			break
+		} else if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if err := r.ensureSeedService(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	nodes := r.clusterNodes(ctx, &cluster)
+	nodes := r.clusterNodes(ctx, &cluster, total)
 	actions := planCluster(nodes, cluster.Spec.Shards, cluster.Spec.InstancesPerShard, assignedShards(&cluster))
 	for _, action := range actions {
 		changed, err := r.InstanceManager.Cluster(ctx, action.host, action.command, action.req)
@@ -104,7 +117,15 @@ func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	setClusterStatus(&cluster, nodes, shardsReady)
+	// Once built: the slots move to masters with their replicas.
+	if len(actions) == 0 {
+		nodes = r.moveSlots(ctx, &cluster, nodes, total)
+		if err := r.removeDrainedShards(ctx, &cluster, nodes, total); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	setClusterStatus(&cluster, nodes, total, shardsReady)
 	if !equality.Semantic.DeepEqual(oldStatus, &cluster.Status) {
 		if err := r.Status().Update(ctx, &cluster); err != nil {
 			return ctrl.Result{}, err
@@ -194,11 +215,11 @@ func (r *RedisClusterReconciler) ensureSeedService(ctx context.Context, cluster 
 	return ignoreAlreadyExists(r.Create(ctx, service))
 }
 
-// clusterNodes returns every node of the spec, ordered by shard and ordinal,
-// with the cluster status of those that answer.
-func (r *RedisClusterReconciler) clusterNodes(ctx context.Context, cluster *redisv1.RedisCluster) []clusterNode {
+// clusterNodes returns every node of the first total shards, ordered by shard
+// and ordinal, with the cluster status of those that answer.
+func (r *RedisClusterReconciler) clusterNodes(ctx context.Context, cluster *redisv1.RedisCluster, total int32) []clusterNode {
 	var nodes []clusterNode
-	for shard := range cluster.Spec.Shards {
+	for shard := range total {
 		instance := shardName(cluster, shard)
 		for ordinal := range cluster.Spec.InstancesPerShard {
 			node := clusterNode{shard: shard, pod: fmt.Sprintf("%s-%d", instance, ordinal)}
@@ -231,10 +252,10 @@ func assignedShards(cluster *redisv1.RedisCluster) map[int32]bool {
 	return assigned
 }
 
-// setClusterStatus records the master and the slots of every shard, the
-// state of the cluster and the conditions SlotsCovered and Ready. A shard
-// without a master keeps the slots it had, see planCluster.
-func setClusterStatus(cluster *redisv1.RedisCluster, nodes []clusterNode, shardsReady bool) {
+// setClusterStatus records the master and the slots of every one of the first
+// total shards, the state of the cluster and the conditions SlotsCovered and
+// Ready. A shard without a master keeps the slots it had, see planCluster.
+func setClusterStatus(cluster *redisv1.RedisCluster, nodes []clusterNode, total int32, shardsReady bool) {
 	previous := map[string]string{}
 	for _, s := range cluster.Status.Shards {
 		previous[s.Name] = s.Slots
@@ -242,7 +263,7 @@ func setClusterStatus(cluster *redisv1.RedisCluster, nodes []clusterNode, shards
 	cluster.Status.Shards = nil
 	cluster.Status.ClusterState = ""
 	var served []string
-	for shard := range cluster.Spec.Shards {
+	for shard := range total {
 		status := redisv1.ShardStatus{Name: shardName(cluster, shard), Slots: previous[shardName(cluster, shard)]}
 		if master := shardMaster(shardNodes(nodes, shard)); master != nil {
 			status.Primary, status.Slots = master.pod, strings.Join(master.status.Slots, ",")
@@ -278,6 +299,8 @@ func setClusterStatus(cluster *redisv1.RedisCluster, nodes []clusterNode, shards
 		ready.Reason, ready.Message = "SlotsUncovered", "Some slots have no master, see the condition SlotsCovered"
 	case cluster.Status.ClusterState != "ok":
 		ready.Reason, ready.Message = "ClusterFail", "Redis Cluster reports the state "+cluster.Status.ClusterState
+	case cluster.Status.SlotMigration != nil:
+		ready.Reason, ready.Message = "Resharding", "Slots move between shards, see the condition Migrating"
 	case !shardsReady:
 		ready.Reason, ready.Message = "ShardsNotReady", "A RedisInstance of a shard is not Ready"
 	default:

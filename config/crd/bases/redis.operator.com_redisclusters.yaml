@@ -422,14 +422,13 @@ spec:
                 description: |-
                   Shards is the number of masters the 16384 slots are spread over. A
                   replica takes over from a failed master only with the votes of most
-                  masters, so a cluster below 3 could never fail over.
+                  masters, so a cluster below 3 could never fail over. A change moves
+                  slots, with their keys, until every shard serves an equal part; the
+                  shards a decrease removes are deleted once empty. It cannot change
+                  again until the slots have moved.
                 format: int32
                 minimum: 3
                 type: integer
-                x-kubernetes-validations:
-                - message: 'shards is immutable: changing it needs moving slots between
-                    shards'
-                  rule: self == oldSelf
               storage:
                 description: |-
                   StorageSpec chooses the volumes when the RedisInstance is created. After
@@ -587,7 +586,7 @@ spec:
                   slot has no master.
                 type: string
               conditions:
-                description: 'Conditions of the cluster: Ready and SlotsCovered.'
+                description: 'Conditions of the cluster: Ready, SlotsCovered and Migrating.'
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -667,10 +666,28 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              slotMigration:
+                description: |-
+                  SlotMigration is set while slots move between shards; spec.shards
+                  cannot change until it is gone.
+                properties:
+                  slotsToMove:
+                    description: SlotsToMove is how many slots still go to another
+                      shard.
+                    format: int32
+                    type: integer
+                required:
+                - slotsToMove
+                type: object
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: spec.shards cannot change while slots move between shards, see
+            status.slotMigration
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.slotMigration) || self.spec.shards
+            == oldSelf.spec.shards'
     served: true
     storage: true
     subresources:
