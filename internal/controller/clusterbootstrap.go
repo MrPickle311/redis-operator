@@ -149,13 +149,12 @@ type slotMove struct {
 	from, to clusterNode
 }
 
-// nextSlotMove returns the slot to move next so that every shard below shards
-// serves as many slots as slotRange gives it, and the shards from shards on
-// none. A slot already on the way goes first, from whichever master serves it
-// now to the master of the shard it goes to: a failover loses the flags of the
-// master that had them. Otherwise the first overfull shard gives its highest
-// slot to the first underfull one, so no slot moves twice. Nothing moves while
-// a node does not answer or a slot has no master.
+// nextSlotMove returns the one slot to move next, so that in the end every
+// shard below shards serves its slotShare and the shards from shards on none.
+// It reads only the nodes, never a state of its own, so it is safe to call
+// after a restart, a failover or a move cut short. Nothing moves while a node
+// does not answer, as its slots would look free, or while a slot has no
+// master, as there is nothing to move it from.
 func nextSlotMove(nodes []clusterNode, shards int32, assigned map[int32]bool) (slotMove, bool) {
 	if slices.ContainsFunc(nodes, func(n clusterNode) bool { return n.status == nil }) {
 		return slotMove{}, false
@@ -165,68 +164,104 @@ func nextSlotMove(nodes []clusterNode, shards int32, assigned map[int32]bool) (s
 		return slotMove{}, false
 	}
 	leader := func(shard int32) *clusterNode { return shardLeader(shardNodes(nodes, shard), assigned[shard]) }
+	if slot, ok := flaggedSlot(nodes); ok {
+		return finishSlotMove(nodes, owners, slot, leader)
+	}
+	return balanceSlotMove(nodes, owners, shards, leader)
+}
 
+// flaggedSlot returns the lowest slot that a node has a MIGRATING or
+// IMPORTING flag for: a move that started and has not ended.
+func flaggedSlot(nodes []clusterNode) (int, bool) {
 	slot := -1
 	for _, node := range nodes {
-		for s := range node.status.Migrating {
-			slot = minSlot(slot, s)
-		}
-		for s := range node.status.Importing {
-			slot = minSlot(slot, s)
+		for _, flags := range []map[int]string{node.status.Migrating, node.status.Importing} {
+			for s := range flags {
+				if slot < 0 || s < slot {
+					slot = s
+				}
+			}
 		}
 	}
-	if slot >= 0 {
-		toShard := int32(-1)
+	return slot, slot >= 0
+}
+
+// finishSlotMove returns the move that ends the slot on the way. The flags
+// say where it goes: the IMPORTING flag sits on the target, and the MIGRATING
+// flag of the source names the target, in case a failover of the target lost
+// the first. It goes from the master that serves it now, which after a
+// failover of the source is the old replica without the flag; moveSlot sets
+// the flags again. Once the target serves it, the source with the MIGRATING
+// flag is all that is left to hand over.
+//
+// ponytail: a flag naming a node gone for good, or a target serving the slot
+// with no source left, stops all moves; a person clears the flag.
+func finishSlotMove(nodes []clusterNode, owners []int, slot int, leader func(int32) *clusterNode) (slotMove, bool) {
+	toShard := int32(-1)
+	if i := slices.IndexFunc(nodes, func(n clusterNode) bool { return n.status.Importing[slot] != "" }); i >= 0 {
+		toShard = nodes[i].shard
+	} else {
 		for _, node := range nodes {
-			if _, ok := node.status.Importing[slot]; ok {
-				toShard = node.shard
+			if target := nodeByID(nodes, node.status.Migrating[slot]); target != nil {
+				toShard = target.shard
+				break
 			}
 		}
-		for _, node := range nodes {
-			if id, ok := node.status.Migrating[slot]; ok && toShard < 0 {
-				for _, target := range nodes {
-					if target.status.NodeID == id {
-						toShard = target.shard
-					}
-				}
-			}
-		}
-		from := nodes[owners[slot]]
-		if from.shard == toShard {
-			// The target serves it already: the source still has to let go.
-			for _, node := range nodes {
-				if _, ok := node.status.Migrating[slot]; ok && node.shard != toShard {
-					from = node
-				}
-			}
-		}
-		// ponytail: a flag naming a node gone for good, or a target serving the
-		// slot with no source left, stops all moves; a person clears the flag.
-		to := leader(toShard)
-		if toShard < 0 || to == nil || from.shard == toShard {
+	}
+	from := nodes[owners[slot]]
+	if from.shard == toShard {
+		i := slices.IndexFunc(nodes, func(n clusterNode) bool { return n.status.Migrating[slot] != "" && n.shard != toShard })
+		if i < 0 {
 			return slotMove{}, false
 		}
-		return slotMove{slot, from, *to}, true
+		from = nodes[i]
 	}
+	to := leader(toShard)
+	if toShard < 0 || to == nil {
+		return slotMove{}, false
+	}
+	return slotMove{slot, from, *to}, true
+}
 
+// balanceSlotMove returns the move of a new slot: the highest slot of the
+// first shard with more than its share goes to the first shard with less.
+// A slot only ever leaves a shard with too many for one with too few, so no
+// slot moves twice, and the moves are as few as slotsToMove counts.
+func balanceSlotMove(nodes []clusterNode, owners []int, shards int32, leader func(int32) *clusterNode) (slotMove, bool) {
 	counts := shardSlotCounts(nodes, owners)
+	var to *clusterNode
 	for shard := range shards {
-		to := leader(shard)
-		if counts[shard] >= slotShare(shard, shards) || to == nil {
-			continue
+		if counts[shard] < slotShare(shard, shards) {
+			if to = leader(shard); to != nil {
+				break
+			}
 		}
-		for _, donor := range nodes {
-			if counts[donor.shard] <= slotShare(donor.shard, shards) {
-				continue
-			}
-			for s := clusterSlots - 1; s >= 0; s-- {
-				if nodes[owners[s]].shard == donor.shard {
-					return slotMove{s, nodes[owners[s]], *to}, true
-				}
-			}
+	}
+	// nodes are ordered by shard, so this is the overfull shard with the lowest number.
+	donor := slices.IndexFunc(nodes, func(n clusterNode) bool { return counts[n.shard] > slotShare(n.shard, shards) })
+	if to == nil || donor < 0 {
+		return slotMove{}, false
+	}
+	for s := clusterSlots - 1; s >= 0; s-- {
+		if nodes[owners[s]].shard == nodes[donor].shard {
+			return slotMove{s, nodes[owners[s]], *to}, true
 		}
 	}
 	return slotMove{}, false
+}
+
+func nodeByID(nodes []clusterNode, id string) *clusterNode {
+	for i := range nodes {
+		if id != "" && nodes[i].status.NodeID == id {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
+// hasSlotFlags reports whether the node has a slot on the way in or out.
+func hasSlotFlags(node clusterNode) bool {
+	return node.status != nil && (len(node.status.Migrating) > 0 || len(node.status.Importing) > 0)
 }
 
 // slotsToMove counts the slots nextSlotMove has yet to move to reach the
@@ -257,13 +292,6 @@ func shardSlotCounts(nodes []clusterNode, owners []int) map[int32]int {
 		}
 	}
 	return counts
-}
-
-func minSlot(slot, s int) int {
-	if slot < 0 || s < slot {
-		return s
-	}
-	return slot
 }
 
 // slotOwners returns the index in nodes of the master serving each slot, as

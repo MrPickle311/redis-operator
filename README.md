@@ -47,7 +47,11 @@ redis-cli -c --tls --cacert ca.crt -h my-cluster.<namespace>.svc --user <user> -
 ```
 
 A `RedisUser` with `targetRef: {kind: RedisCluster, name: <name>}` is a
-user of every shard. See [RedisCluster](docs/architecture.md#rediscluster).
+user of every shard. `shards` may change, down to 3: the operator moves
+slots with their keys, one at a time, and removes the shards it emptied
+(condition `Migrating`, see
+[Changing the number of shards](docs/architecture.md#changing-the-number-of-shards)).
+See [RedisCluster](docs/architecture.md#rediscluster).
 
 ## Backup and restore
 

@@ -133,19 +133,22 @@ func (r *RedisClusterReconciler) moveSlot(ctx context.Context, move slotMove, de
 	return nil
 }
 
-// removeDrainedShards deletes the shards from spec.shards on, with their
-// PVCs, once the masters of the other shards serve every slot and no slot is
-// on the way; then planCluster makes the other nodes forget their nodes.
+// removeDrainedShards deletes the RedisInstances of the shards from
+// spec.shards on, with their Pods and PVCs, once they are empty; then
+// planCluster makes the other nodes forget their nodes. Deleting a shard
+// that still serves a slot would lose its keys, so it waits until:
+//   - every slot has a master in a shard that stays: a slot without one may
+//     belong to a node of a removed shard that does not answer;
+//   - no node has a slot on the way: the last move may still have to hand
+//     its slot over on the source.
 func (r *RedisClusterReconciler) removeDrainedShards(ctx context.Context, cluster *redisv1.RedisCluster,
 	nodes []clusterNode, total int32) error {
 	if total == cluster.Spec.Shards {
-		return nil
+		return nil // no shard to remove
 	}
 	owners := slotOwners(nodes)
-	if slices.ContainsFunc(owners, func(o int) bool { return o < 0 || nodes[o].shard >= cluster.Spec.Shards }) ||
-		slices.ContainsFunc(nodes, func(n clusterNode) bool {
-			return n.status != nil && (len(n.status.Migrating) > 0 || len(n.status.Importing) > 0)
-		}) {
+	servedByRemaining := !slices.ContainsFunc(owners, func(o int) bool { return o < 0 || nodes[o].shard >= cluster.Spec.Shards })
+	if !servedByRemaining || slices.ContainsFunc(nodes, hasSlotFlags) {
 		return nil
 	}
 	for shard := cluster.Spec.Shards; shard < total; shard++ {

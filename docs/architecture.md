@@ -1403,6 +1403,7 @@ flowchart LR
 
     RC["RedisCluster<br/>store"]:::cr
     RC --> CA["Secret store-ca<br/>CA of every shard"]:::secret
+    RC --> AUTH["Secret store-internal-auth<br/>internal users of every shard"]:::secret
     RC --> SEED["Service store<br/>seed: every node"]:::svc
     RC --> S0["RedisInstance store-0"]:::cr
     RC --> S1["RedisInstance store-1"]:::cr
@@ -1423,6 +1424,7 @@ A shard differs from a `RedisInstance` of its own:
 | Spec | yours | copied from the `RedisCluster`; edits are overwritten |
 | Services | `-hl`, `-rw`, `-ro`, `-r` | `-hl` only; clients go through the seed Service `store` |
 | CA of the TLS of Redis | `<name>-ca` | `store-ca`, one per cluster; certificates also name the seed Service |
+| Internal users | `<name>-internal-auth` | `store-internal-auth`, one per cluster, see [Changing the number of shards](#changing-the-number-of-shards) |
 | Primary | chosen by the operator (safe start, failover) | the node that serves slots, as the Instance Manager reports it |
 | Failover | the operator, after `failover.delay` | Redis Cluster, after `cluster-node-timeout` (15 s) |
 | Pods | | `--cluster`, port `16379` (cluster bus), label `redis.operator.com/cluster=store` |
@@ -1466,9 +1468,9 @@ flowchart TD
     A{"every running node<br/>answers?"} -- no --> W["wait"]
     A -- yes --> B{"a node knows fewer<br/>nodes than there are?"}
     B -- yes --> M["store-0-0: CLUSTER MEET every other node<br/>(resolved from its DNS name)"]
-    B -- no --> C{"a shard has no master<br/>and never had slots?"}
+    B -- no --> C{"a shard has no master, never had slots,<br/>and no node serves a slot of its part?"}
     C -- yes --> S["its first node: CLUSTER ADDSLOTSRANGE<br/>an equal part of 16384"]
-    C -- no --> D{"a node without slots does not<br/>replicate the master of its shard?"}
+    C -- no --> D{"a node without slots does not<br/>replicate the master of its shard?<br/>(a shard without slots: its first node)"}
     D -- yes --> R["CLUSTER REPLICATE &lt;master id&gt;"]
     D -- no --> E{"every node of every shard answers,<br/>every shard has a master,<br/>a node knows an ID no node has?"}
     E -- yes --> F["CLUSTER FORGET on every node"]
@@ -1479,6 +1481,11 @@ Every command is idempotent. `status.shards` keeps the slots each shard
 had: a shard that lost them, e.g. every one of its volumes, does not get
 them again on its own, as that would serve an empty dataset. That needs a
 person.
+
+A shard added later finds its part of the slots served by the other
+shards, so it takes no slots here: its first node is an empty master that
+the other nodes of the shard replicate, and the slots come to it by
+[moving](#changing-the-number-of-shards).
 
 `cluster-allow-replica-migration no` keeps every replica in its shard, so
 in the `RedisInstance` that owns its Pod.
@@ -1509,6 +1516,10 @@ time:** the masters give one vote per epoch, and none again for the same
 shard for twice `cluster-node-timeout`, so failovers of two shards at once
 lose votes and take half a minute or more each.
 
+None of these starts while slots move between shards: the shard waits
+until `status.slotMigration` of the cluster is gone, see
+[Changing the number of shards](#changing-the-number-of-shards).
+
 ### Volumes and scaling
 
 A replica whose volume is replaced (deleted or lost PVC, the
@@ -1519,8 +1530,109 @@ before the master moves, see [Volumes](#volumes).
 
 `instancesPerShard` may change. New nodes join as replicas. On a
 scale-down the master moves to a remaining replica first, then the Pods
-above the new count go and the other nodes forget them. `shards` cannot
-change: that needs moving slots between shards.
+above the new count go and the other nodes forget them. For `shards`, see
+the next section.
+
+### Changing the number of shards
+
+`spec.shards` may change, down to 3. The operator then moves slots, with
+their keys, until every shard serves its equal part of the 16384 and the
+shards above the new count none:
+
+```sh
+kubectl patch rediscluster store --type merge -p '{"spec":{"shards":4}}'
+kubectl get rediscluster store -o jsonpath='{.status.conditions[?(@.type=="Migrating")].message}'
+# Moving slot 5460 from store-0-0 to store-3-0; 3812 slots to move
+```
+
+A slot moves the classic way of Redis 7.2, the way `redis-cli --cluster
+reshard` does it: `CLUSTER SETSLOT IMPORTING` on the target,
+`MIGRATING` on the source, `MIGRATE` of the keys of the slot, 100 at a time,
+until none is left, then `SETSLOT NODE` on the target and then on the
+source. Meanwhile clients get `ASK` for a key that has moved already, and
+`TRYAGAIN` for a command on several keys of which only some have; a cluster
+client follows the first and retries the second. The cluster stays `ok`.
+
+```mermaid
+flowchart TD
+    A{"every node answers and<br/>every slot has a master?"} -- no --> W["Migrating=True/Waiting"]
+    A -- yes --> B{"a slot has a MIGRATING<br/>or IMPORTING flag?"}
+    B -- yes --> F["that slot: from its master now<br/>to the master of its target shard"]
+    B -- no --> C{"a shard serves fewer<br/>slots than its part?"}
+    C -- no --> OK["Migrating=False/Balanced<br/>remove the shards above spec.shards"]
+    C -- yes --> D["the highest slot of the first shard<br/>with more than its part"]
+    F --> G{"every instance Ready,<br/>no master moving?"}
+    D --> G
+    G -- no --> W
+    G -- yes --> M["move the slot; next one,<br/>for up to 20 s per reconcile"]
+```
+
+The decisions, and why:
+
+1. **Minimal move.** A shard with more than its part gives its highest
+   slots to a shard with fewer, like `redis-cli --cluster rebalance`, so no
+   slot moves twice: 3 → 4 moves 4096 slots, the part of the new shard, and
+   every old shard keeps the rest of its own. The parts are those of
+   `slotRange`, but the slots of a shard are no longer one range after a
+   move: `store-0` may serve `0-4095` and `store-3` `4096-5460,10922-…`.
+2. **One internal Secret for the cluster.** `MIGRATE` logs in to the target
+   with `AUTH2 _operator <password>`, so the source must know the password
+   of the target. Every shard mounts `store-internal-auth`, which the
+   `RedisCluster` creates before the shards, like the one CA `store-ca`:
+   `MIGRATE` goes over TLS with `tls-cluster yes`, to the Pod DNS name of
+   the target. The policy of a shard lets the nodes of the cluster in on
+   `6379` too, see [Users and network policies](#users-and-network-policies):
+   without it `MIGRATE` would hang until its timeout.
+3. **Gates.** A slot starts only while every instance of every shard is
+   Ready and no shard has `status.targetPrimary`: a move to a master that is
+   going away is wasted, and a Pod that restarts takes `MIGRATE` down with
+   it. The gate is checked before every slot, not once per reconcile. The
+   shards in turn start no `CLUSTER FAILOVER` of their own (rolling update,
+   promote, scale-down, volume) while `status.slotMigration` is set, also
+   while `Blocked`: a failover of the source loses its `MIGRATING` flag. Its
+   rolling update waits, its promote waits and runs once the slots are in
+   place. A failover of Redis Cluster itself, of a master that is down,
+   still happens; see resuming below.
+4. **`BUSYKEY` stops.** A key of the slot that the target has already, e.g.
+   written there with `ASKING` by a client, makes `MIGRATE` fail with
+   `BUSYKEY`. The operator does not use `REPLACE`, which could overwrite the
+   newer value: it stops with `Migrating=False/Blocked`, the slot, both
+   nodes and the key. Delete the key on the node whose copy is wrong (on the
+   target with `ASKING` first), and the move goes on.
+5. **No change of `shards` while slots move.** A rule of the CRD rejects a
+   change of `spec.shards` while `status.slotMigration` is set: the target
+   parts would change under a slot on the way. Change it again once
+   `Migrating` is `Balanced`.
+6. **Shrinking is automatic.** With fewer `shards`, the shards from the new
+   count on give away every slot, with its keys. Once every slot has a
+   master of a remaining shard and no slot has a flag, the operator deletes
+   their `RedisInstance`s, with the Pods and the PVCs, and then the other
+   nodes forget them. In that order: a node forgotten while it still runs
+   comes back by gossip, and one deleted while it still serves a slot takes
+   the keys with it.
+7. **Status.** `Ready=False/Resharding` while slots move; the condition
+   `Migrating` says what happens: `True/Moving` with the slot and how many
+   are left, `True/Waiting` with what it waits for, `False/Blocked`, or
+   `False/Balanced` when done. `status.slotMigration.slotsToMove` counts the
+   slots left. The health check of Argo CD in
+   [Ready condition](#ready-condition), as
+   `redis.operator.com_RedisCluster`, shows `Resharding` as `Progressing`.
+8. **One slot at a time** in the whole cluster: at most one slot has a
+   flag at any moment, so a failover or a restart has at most one slot to
+   finish. One reconcile moves slots for up to 20 s, one call of the
+   Instance Manager runs `MIGRATE` for up to 5 s, and the reconcile after it
+   goes on. That is about 50 slots a second without keys: 3 → 4 takes about
+   two minutes, plus the time to send the keys.
+
+**Resuming.** The operator keeps no state of a move: the flags are in
+`nodes.conf` of the nodes and in `CLUSTER NODES` (`[5460->-<id>]`,
+`[5460-<-<id>]`), and the Instance Manager reports them. Every reconcile
+first finishes a slot that has a flag, from the master that serves it now
+to the master of the shard it goes to, and every step does nothing when it
+is done already. A restart of the operator, a reconcile cut by its 20 s, or
+a failover of the source or the target, which lose the flags of the old
+master, all go on from where the nodes are. A flag that names a node gone
+for good stops all moves; clear it with `CLUSTER SETSLOT <slot> STABLE`.
 
 ### Users and network policies
 
@@ -1531,10 +1643,10 @@ every shard.
 
 `spec.networkPolicy.allowFrom` of the cluster goes to every shard. The
 policy of a shard also lets in the nodes of the whole cluster on the
-cluster bus:
+cluster bus, and on the port of Redis for `MIGRATE`:
 
 ```yaml
-    - ports: [{port: 16379}]
+    - ports: [{port: 16379}, {port: 6379}]
       from: [{podSelector: {matchLabels: {redis.operator.com/cluster: store}}}]
 ```
 
@@ -1552,13 +1664,14 @@ kubectl get rediscluster store
 | Field | Content |
 |---|---|
 | `status.clusterState` | `cluster_state` of a master: `ok` or `fail` |
-| `status.shards[]` | per shard: its master and its slots |
+| `status.shards[]` | per shard: its master and its slots, also of a shard on its way out |
+| `status.slotMigration` | while slots move: `slotsToMove` |
 | `SlotsCovered` | `True/Covered`, or `False/Uncovered` with how many slots have no master |
-| `Ready` | `True/Ready`; `False` with `SlotsUncovered`, `ClusterFail` or `ShardsNotReady` |
+| `Migrating` | `True/Moving`, `True/Waiting`, `False/Blocked` or `False/Balanced` |
+| `Ready` | `True/Ready`; `False` with `SlotsUncovered`, `ClusterFail`, `Resharding` or `ShardsNotReady` |
 
 Limits:
 
-- `shards` is fixed for now.
 - A cordoned node does not move a master of a shard away; the
   PodDisruptionBudget holds the drain until Redis Cluster or a switchover
   moves it.
