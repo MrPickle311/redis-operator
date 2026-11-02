@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -52,6 +53,10 @@ type ClusterStatus struct {
 	// Nodes are the IDs of the nodes this one knows, itself included. A node
 	// still in the handshake of CLUSTER MEET has a temporary ID and is left out.
 	Nodes []string `json:"nodes"`
+	// Migrating are the slots this master moves out, to the node of the value.
+	Migrating map[int]string `json:"migrating,omitempty"`
+	// Importing are the slots this master takes in, from the node of the value.
+	Importing map[int]string `json:"importing,omitempty"`
 }
 
 // ClusterRequest is the body of the POST /cluster/* commands; each one reads
@@ -61,16 +66,28 @@ type ClusterRequest struct {
 	Host string `json:"host,omitempty"`
 	// Slots is the range to serve, e.g. "0-5460", for /cluster/addslots.
 	Slots string `json:"slots,omitempty"`
-	// NodeID is the master to replicate, for /cluster/replicate, or the node
-	// to forget, for /cluster/forget.
+	// NodeID is the master to replicate, for /cluster/replicate, the node to
+	// forget, for /cluster/forget, the node a slot comes from, for
+	// /cluster/importing, goes to, for /cluster/migrate, or belongs to, for
+	// /cluster/setnode.
 	NodeID string `json:"nodeID,omitempty"`
+	// Slot is the slot of /cluster/importing, /cluster/migrate and /cluster/setnode.
+	Slot int `json:"slot"`
+}
+
+// MigrateResponse is the answer of /cluster/migrate.
+type MigrateResponse struct {
+	Changed bool `json:"changed"`
+	// Done tells that the node holds no key of the slot any more.
+	Done bool `json:"done"`
 }
 
 // clusterNode is one line of CLUSTER NODES.
 type clusterNode struct {
-	id, addr, master string
-	flags            []string
-	slots            []string
+	id, addr, master     string
+	flags                []string
+	slots                []string
+	migrating, importing map[int]string
 }
 
 // parseClusterNodes reads CLUSTER NODES, whose lines are
@@ -91,14 +108,61 @@ func parseClusterNodes(text string) []clusterNode {
 			node.master = fields[3]
 		}
 		for _, slot := range fields[8:] {
-			// ponytail: skips "[slot->-id]" migrations, add them with step 10b.
-			if !strings.HasPrefix(slot, "[") {
+			// "[1234->-<id>]" moves out, "[1234-<-<id>]" comes in; only the
+			// line of myself lists them.
+			move, ok := strings.CutPrefix(slot, "[")
+			if !ok {
 				node.slots = append(node.slots, slot)
+				continue
+			}
+			move = strings.TrimSuffix(move, "]")
+			if number, id, found := strings.Cut(move, "->-"); found {
+				node.migrating = addMove(node.migrating, number, id)
+			} else if number, id, found := strings.Cut(move, "-<-"); found {
+				node.importing = addMove(node.importing, number, id)
 			}
 		}
 		nodes = append(nodes, node)
 	}
 	return nodes
+}
+
+func addMove(moves map[int]string, number, id string) map[int]string {
+	slot, err := strconv.Atoi(number)
+	if err != nil {
+		return moves
+	}
+	if moves == nil {
+		moves = map[int]string{}
+	}
+	moves[slot] = id
+	return moves
+}
+
+// slotOwner returns the ID of the node that serves slot, or "".
+func slotOwner(nodes []clusterNode, slot int) string {
+	for _, node := range nodes {
+		if slotInRanges(node.slots, slot) {
+			return node.id
+		}
+	}
+	return ""
+}
+
+// slotInRanges reports whether slot is in ranges like "0-5460" or "12000".
+func slotInRanges(ranges []string, slot int) bool {
+	for _, r := range ranges {
+		start, end, found := strings.Cut(r, "-")
+		if !found {
+			end = start
+		}
+		first, err1 := strconv.Atoi(start)
+		last, err2 := strconv.Atoi(end)
+		if err1 == nil && err2 == nil && first <= slot && slot <= last {
+			return true
+		}
+	}
+	return false
 }
 
 // myself returns the node of CLUSTER NODES that answered.
@@ -125,7 +189,8 @@ func readClusterStatus(ctx context.Context, rdb *redis.Client) (*ClusterStatus, 
 	if err != nil {
 		return nil, err
 	}
-	status := &ClusterStatus{NodeID: self.id, MasterID: self.master, Slots: self.slots}
+	status := &ClusterStatus{NodeID: self.id, MasterID: self.master, Slots: self.slots,
+		Migrating: self.migrating, Importing: self.importing}
 	for _, node := range nodes {
 		if !slices.Contains(node.flags, "handshake") {
 			status.Nodes = append(status.Nodes, node.id)
@@ -149,10 +214,12 @@ func clusterHandlers(mux *http.ServeMux, rdb *redis.Client) {
 		"replicate": clusterReplicate,
 		"failover":  clusterFailover,
 		"forget":    clusterForget,
+		"importing": clusterImporting,
+		"setnode":   clusterSetNode,
 	}
 	// One at a time: each reads the state of the node before it acts.
 	var mu sync.Mutex
-	for name, command := range commands {
+	serve := func(name string, command func(context.Context, ClusterRequest) (any, error)) {
 		mux.HandleFunc("POST /cluster/"+name, func(w http.ResponseWriter, r *http.Request) {
 			var req ClusterRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -161,14 +228,23 @@ func clusterHandlers(mux *http.ServeMux, rdb *redis.Client) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			changed, err := command(r.Context(), rdb, req)
+			response, err := command(r.Context(), req)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 				return
 			}
-			writeJSON(w, CommandResponse{Changed: changed})
+			writeJSON(w, response)
 		})
 	}
+	for name, command := range commands {
+		serve(name, func(ctx context.Context, req ClusterRequest) (any, error) {
+			changed, err := command(ctx, rdb, req)
+			return CommandResponse{Changed: changed}, err
+		})
+	}
+	serve("migrate", func(ctx context.Context, req ClusterRequest) (any, error) {
+		return clusterMigrate(ctx, rdb, req, migrateBudget)
+	})
 }
 
 // clusterMeet introduces the node req.Host. CLUSTER MEET takes only an IP, so
@@ -247,4 +323,108 @@ func clusterForget(ctx context.Context, rdb *redis.Client, req ClusterRequest) (
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// migrateBudget is how long one /cluster/migrate moves keys before it
+// answers, well below the timeout of the client of the operator.
+const migrateBudget = 5 * time.Second
+
+// migrateBatch is how many keys one MIGRATE moves.
+const migrateBatch = 100
+
+// clusterImporting makes this master take in req.Slot from the master
+// req.NodeID: it accepts the keys MIGRATE sends and the commands of clients
+// sent there by ASK. A slot it serves already needs nothing.
+func clusterImporting(ctx context.Context, rdb *redis.Client, req ClusterRequest) (bool, error) {
+	status, err := readClusterStatus(ctx, rdb)
+	if err != nil {
+		return false, err
+	}
+	if slotInRanges(status.Slots, req.Slot) || status.Importing[req.Slot] == req.NodeID {
+		return false, nil
+	}
+	return true, rdb.Do(ctx, "CLUSTER", "SETSLOT", req.Slot, "IMPORTING", req.NodeID).Err()
+}
+
+// clusterMigrate moves the keys of req.Slot to the master req.NodeID at
+// req.Host, which must be importing it, for up to budget. Done means the slot
+// is empty here, or not served here at all; then /cluster/setnode hands it
+// over. A key that exists on the target already stops it: overwriting it
+// could lose the newer of the two, so a person decides.
+func clusterMigrate(ctx context.Context, rdb *redis.Client, req ClusterRequest, budget time.Duration) (MigrateResponse, error) {
+	status, err := readClusterStatus(ctx, rdb)
+	if err != nil {
+		return MigrateResponse{}, err
+	}
+	if !slotInRanges(status.Slots, req.Slot) {
+		return MigrateResponse{Done: true}, nil
+	}
+	var response MigrateResponse
+	if status.Migrating[req.Slot] != req.NodeID {
+		if err := rdb.Do(ctx, "CLUSTER", "SETSLOT", req.Slot, "MIGRATING", req.NodeID).Err(); err != nil {
+			return response, err
+		}
+		response.Changed = true
+	}
+	// The target knows the user this node runs as: one Secret for the cluster.
+	var auth []any
+	if opts := rdb.Options(); opts.Password != "" {
+		auth = []any{"AUTH2", opts.Username, opts.Password}
+	}
+	migrate := func(keys []string) error {
+		args := append([]any{"MIGRATE", req.Host, redisPort, "", 0, 5000}, auth...)
+		args = append(args, "KEYS")
+		for _, key := range keys {
+			args = append(args, key)
+		}
+		return rdb.Do(ctx, args...).Err()
+	}
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		keys, err := rdb.ClusterGetKeysInSlot(ctx, req.Slot, migrateBatch).Result()
+		if err != nil {
+			return response, err
+		}
+		if len(keys) == 0 {
+			response.Done = true
+			return response, nil
+		}
+		if err := migrate(keys); err != nil {
+			if !strings.Contains(err.Error(), "BUSYKEY") {
+				return response, err
+			}
+			// Move them one by one to name the key.
+			for _, key := range keys {
+				if err := migrate([]string{key}); err != nil {
+					if strings.Contains(err.Error(), "BUSYKEY") {
+						return response, fmt.Errorf("BUSYKEY: key %q of slot %d exists on the target already", key, req.Slot)
+					}
+					return response, err
+				}
+			}
+		}
+		response.Changed = true
+	}
+	return response, nil
+}
+
+// clusterSetNode hands req.Slot to the master req.NodeID: on the target it
+// ends the import, on the source, emptied by /cluster/migrate, it ends the
+// migration, and the other masters learn it sooner than by gossip.
+func clusterSetNode(ctx context.Context, rdb *redis.Client, req ClusterRequest) (bool, error) {
+	text, err := rdb.ClusterNodes(ctx).Result()
+	if err != nil {
+		return false, err
+	}
+	nodes := parseClusterNodes(text)
+	self, err := myself(nodes)
+	if err != nil {
+		return false, err
+	}
+	_, migrating := self.migrating[req.Slot]
+	_, importing := self.importing[req.Slot]
+	if slotOwner(nodes, req.Slot) == req.NodeID && !migrating && !importing {
+		return false, nil
+	}
+	return true, rdb.Do(ctx, "CLUSTER", "SETSLOT", req.Slot, "NODE", req.NodeID).Err()
 }

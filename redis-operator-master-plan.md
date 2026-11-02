@@ -781,6 +781,21 @@ Do doprecyzowania przy kroku 10:
 
 **Poza krokiem 10:** dostęp spoza K8s, restore całego klastra i testy partycji klastra są w sekcji 20.
 
+**Krok 10b — decyzje (2026-11-02):**
+- **Migracja klasyczna (Redis 7.2):** `SETSLOT IMPORTING` na celu, `SETSLOT MIGRATING` na źródle, `GETKEYSINSLOT` + `MIGRATE … AUTH2 … KEYS` (100 kluczy), `SETSLOT NODE` najpierw na celu, potem na źródle. `MIGRATE` idzie przez TLS przy `tls-cluster yes` i przyjmuje nazwę DNS celu (sprawdzone na `redis:7.2` z TLS i ACL). Klienci dostają `ASK`, przy wielu kluczach `TRYAGAIN`.
+- **Wznawianie bez stanu operatora:** flagi MIGRATING/IMPORTING są w `nodes.conf` i w `CLUSTER NODES` (`[s->-id]`, `[s-<-id]`), IM pokazuje je w `/status`. Planner w każdym przebiegu czyta stan z Redisa i najpierw kończy sloty w trakcie; po failoverze źródła każdy krok ustawia flagi na nowo względem obecnego właściciela.
+- **Docelowy układ: minimalny ruch.** Przepełnione shardy oddają końcówki swoich zakresów niedopełnionym (jak `redis-cli --cluster rebalance`); zakresy przestają być ciągłe.
+- **Jeden Secret `<cluster>-internal-auth`** dla wszystkich shardów (jak wspólne CA): źródło loguje się do celu jako `_operator`. Tworzy go `RedisCluster`, shard na niego czeka.
+- **Blokady:** kolejny slot startuje tylko przy wszystkich shardach Ready i bez `targetPrimary`; shard nie robi własnego `CLUSTER FAILOVER` (rolling update, `promote`, scale-down, wolumin), gdy klaster ma `Migrating=True` (failover gubi flagę MIGRATING). Natywny failover i tak może się zdarzyć, obsługuje go wznawianie.
+- **`BUSYKEY`** (klucz istnieje już na celu): stop, `Migrating=False/Blocked` z kluczem i slotem, decyduje człowiek. Bez `REPLACE`, które mogłoby nadpisać nowsze dane.
+- **CEL blokuje zmianę `shards`, dopóki trwa migracja** (`status.slotMigration`); minimum 3 zostaje.
+- **Zmniejszanie automatyczne:** sloty i dane wychodzą z shardów o najwyższych numerach, potem `RedisInstance` (i PVC) znika, potem `FORGET` (martwy node nie wraca gossipem).
+- **Ready:** `False/Resharding` w trakcie; condition `Migrating` z postępem. Argo: `Progressing`.
+- **Tempo:** jeden slot naraz w całym klastrze; kontroler w jednym przebiegu przenosi kolejne sloty do budżetu czasu, jedno wywołanie `/cluster/migrate` do 5 s.
+- **Bootstrap:** shard dostaje swój domyślny zakres tylko, gdy żaden node nie serwuje żadnego slotu z niego (nowy shard po 3→4 dostaje sloty migracją). Shard bez slotów, który nigdy ich nie miał: master = ordinal 0, reszta go replikuje.
+
+**Podkroki 10b:** 10b.1 IM: `/status` z MIGRATING/IMPORTING, `/cluster/importing`, `/cluster/migrate` (budżet 5 s, `BUSYKEY` z nazwą klucza), `/cluster/setnode`, `imclient.Migrate`, wspólne `<cluster>-internal-auth` · 10b.2 planner: docelowy podział (minimalny ruch), następny krok ze stanu (sloty w trakcie najpierw), reguły `addslots` i mastera pustego shardu · 10b.3 kontroler: CEL (blokada w trakcie migracji), nowe shardy, opróżnianie i usuwanie nadmiarowych, `Migrating`/`Resharding`/`status.slotMigration`, blokady failoverów · 10b.4 e2e: 3→4 z danymi i writerem (żaden klucz nie ginie), 4→3, restart operatora w trakcie, failover źródła w trakcie, oraz **po jednym przypadku na każdą decyzję**: (1) minimalny ruch — po 3→4 przeniesione jest dokładnie tyle slotów, ile dostał nowy shard (~4096), a każdy stary shard zachował resztę swoich; (2) wspólny Secret — Pody wszystkich shardów montują `<cluster>-internal-auth`, `MIGRATE` przechodzi po TLS; (3) blokady — `promote` w trakcie migracji czeka (master bez zmian, dopóki `Migrating=True`), potem się wykonuje; migracja nie bierze kolejnego slotu, gdy shard nie jest Ready; (4) `BUSYKEY` — przy wyłączonym operatorze ręcznie IMPORTING slotu na celu, klucz zapisany tam z `ASKING` i ten sam klucz na źródle; po starcie operator kończy slot w trakcie, staje na `Migrating=False/Blocked` z kluczem i slotem, klucz na źródle nietknięty; (5) CEL — zmiana `shards` w trakcie migracji odrzucona; (6) automatyczne zmniejszanie — 4→3: sloty wychodzą z `<name>-3`, jego `RedisInstance` i PVC znikają, pozostałe node'y go zapominają, wszystkie klucze są; (7) `Ready=False/Resharding` i `Migrating` z postępem w trakcie, potem `Ready=True`; (8) jeden slot naraz — w każdej próbce `CLUSTER NODES` w trakcie co najwyżej jeden slot z MIGRATING/IMPORTING w całym klastrze · 10b.5 docs (każda decyzja 1–8 opisana w `docs/architecture.md` z uzasadnieniem) i plan.
+
 ---
 
 ## 12. Walidacja — CEL najpierw, webhooki tylko tam, gdzie muszą
@@ -1146,3 +1161,7 @@ Dopisane 2026-11-02 (obserwacja z e2e 10.7). Raz podczas rolling update klient d
 **Rozwiązania:**
 - Dokumentacja dla klientów: klient klastra z timeoutem, ponawianiem i odświeżaniem topologii po błędzie (Lettuce, go-redis, redis-py robią to same); `?` w `MOVED` traktować jak błąd chwilowy.
 - Zbadać przyczynę: logować `CLUSTER NODES` wszystkich node'ów podczas rolling update; jeśli `?` widać na zrestartowanym node, rolling update może czekać, aż każdy node zna nazwy wszystkich pozostałych (nowe pole w `/status` IM), zanim zastąpi następny Pod.
+
+### RedisCluster: atomowa migracja slotów
+
+Dopisane 2026-11-02 (poza krokiem 10b). Nowsze Redisy (8.x, wersja do sprawdzenia) przenoszą slot jednym poleceniem po stronie serwera, bez `ASK`/`TRYAGAIN` dla klientów i bez stanu pośredniego, który gubi failover. Krok 10b celuje w 7.2, więc migracja klasyczna; przy podniesieniu minimalnej wersji Redisa IM może wybierać mechanizm po wersji.

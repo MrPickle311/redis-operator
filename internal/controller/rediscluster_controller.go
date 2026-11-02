@@ -77,6 +77,10 @@ func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 	}
+	// Before the shards too: they share it, see ensureInternalAuthSecret.
+	if err := ensureInternalAuth(ctx, r.Client, r.Scheme, &cluster, clusterInternalAuthSecretName(cluster.Name)); err != nil {
+		return ctrl.Result{}, err
+	}
 	shardsReady := true
 	for shard := range cluster.Spec.Shards {
 		child, err := r.ensureShard(ctx, &cluster, shard)

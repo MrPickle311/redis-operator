@@ -97,12 +97,20 @@ func (c *Client) Config(ctx context.Context, host string, req instancemanager.Co
 }
 
 // Cluster runs POST /cluster/<command> on the node of a Redis Cluster at
-// host: meet, addslots, replicate, failover or forget. It returns true when
-// the command changed the node.
+// host: meet, addslots, replicate, failover, forget, importing or setnode.
+// It returns true when the command changed the node.
 func (c *Client) Cluster(ctx context.Context, host, command string, req instancemanager.ClusterRequest) (bool, error) {
 	var resp instancemanager.CommandResponse
 	err := c.do(ctx, http.MethodPost, host, "/cluster/"+command, req, &resp)
 	return resp.Changed, err
+}
+
+// Migrate runs POST /cluster/migrate on the master at host, which moves keys
+// of req.Slot to the master req.NodeID for a few seconds.
+func (c *Client) Migrate(ctx context.Context, host string, req instancemanager.ClusterRequest) (instancemanager.MigrateResponse, error) {
+	var resp instancemanager.MigrateResponse
+	err := c.do(ctx, http.MethodPost, host, "/cluster/migrate", req, &resp)
+	return resp, err
 }
 
 // do sends body as JSON, unless it is nil, and decodes the response into out.

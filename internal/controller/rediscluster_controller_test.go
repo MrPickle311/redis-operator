@@ -150,6 +150,10 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 		var ca corev1.Secret
 		Expect(k8sClient.Get(ctx, objectKey("rc-ca"), &ca)).To(Succeed())
 		Expect(ca.Data).To(HaveKey(caKeyKey))
+		var auth corev1.Secret
+		Expect(k8sClient.Get(ctx, objectKey("rc-internal-auth"), &auth)).To(Succeed())
+		Expect(metav1.GetControllerOf(&auth).Name).To(Equal(name))
+		Expect(auth.Data).To(HaveKey(instancemanager.OperatorPasswordKey))
 	})
 
 	It("reports the slots uncovered while no node answers", func() {
@@ -177,6 +181,8 @@ var _ = Describe("RedisCluster controller", Ordered, func() {
 		Expect(pod.Labels).To(HaveKeyWithValue(labelCluster, name))
 		Expect(pod.Spec.Containers[0].Command).To(ContainElement("--cluster"))
 		Expect(pod.Spec.Containers[0].Ports).To(ContainElement(HaveField("ContainerPort", int32(clusterBusPort))))
+		Expect(pod.Spec.Volumes).To(ContainElement(HaveField("VolumeSource.Secret.SecretName", "rc-internal-auth")),
+			"every shard logs in to the others for MIGRATE with the same password")
 
 		Expect(k8sClient.Get(ctx, objectKey("rc-0-rw"), &corev1.Service{})).NotTo(Succeed(), "a shard has no client Services")
 		Expect(k8sClient.Get(ctx, objectKey("rc-0-hl"), &corev1.Service{})).To(Succeed())

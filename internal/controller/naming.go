@@ -67,9 +67,18 @@ func serverSecretName(instance *redisv1.RedisInstance) string {
 }
 
 // internalAuthSecretName returns the name of the Secret with the passwords of
-// the internal Redis users.
+// the internal Redis users, one for every shard of a RedisCluster.
 func internalAuthSecretName(instance *redisv1.RedisInstance) string {
+	if cluster := clusterOf(instance); cluster != "" {
+		return clusterInternalAuthSecretName(cluster)
+	}
 	return instance.Name + "-internal-auth"
+}
+
+// clusterInternalAuthSecretName returns the Secret with the passwords of the
+// internal users of every shard of the RedisCluster.
+func clusterInternalAuthSecretName(cluster string) string {
+	return cluster + "-internal-auth"
 }
 
 // serverCertDNSName returns the wildcard name that matches podFQDN of every
