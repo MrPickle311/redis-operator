@@ -764,5 +764,5 @@ func (r *RedisInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A cordoned node of a primary needs a switchover, see reconcileCordon.
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.instancesOnCordonedNode)).
 		Named("redisinstance").
-		Complete(r)
+		Complete(Instrument("RedisInstance", r))
 }

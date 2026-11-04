@@ -323,5 +323,5 @@ func (r *RedisUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Watches(&redisv1.RedisInstance{}, handler.EnqueueRequestsFromMapFunc(r.usersOfInstance)).
 		Named("redisuser").
-		Complete(r)
+		Complete(Instrument("RedisUser", r))
 }

@@ -1369,6 +1369,11 @@ read from its cache, so a deleted object leaves no series behind:
 | `redis_operator_cluster_slot_block_shard` | `…`, `block` | the shard that serves most of a block of 256 slots, -1 for none |
 | `redis_operator_events_total` (counter) | `namespace`, `kind`, `name`, `type`, `reason` | Events the operator emitted |
 | `redis_operator_slots_moved_total` (counter) | `namespace`, `redis_cluster`, `from_shard`, `to_shard` | slots moved |
+| `redis_operator_reconcile_total` (counter) | `kind`, `namespace`, `name`, `result` | reconciles of every object: `success`, `requeue_after`, `requeue`, `error` |
+| `redis_operator_reconcile_seconds_total` (counter) | `kind`, `namespace`, `name` | time spent reconciling it |
+| `redis_operator_api_requests_total` (counter) | `kind`, `namespace`, `name`, `verb`, `resource`, `source` | calls of the client by the reconciles of an object: `source` `cache` for reads the informers answer, `api` for writes |
+| `redis_operator_im_requests_total` (counter) | `namespace`, `redis_instance`, `pod`, `path`, `code` | calls to the Instance Managers; `code` the HTTP status or `error` |
+| `redis_operator_im_request_duration_seconds` (histogram) | `path` | how long they took |
 
 The ServiceMonitor sets `honorLabels`, so `namespace` and `pod` name the
 Redis Pods, not the operator. The labels are `redis_instance` and
@@ -1424,6 +1429,23 @@ A `RedisCluster` passes `monitoring` to its shards.
   move, grey when balanced, red when blocked), a slot map of 64 rows of 256
   slots coloured by shard, the role of every node, and commands and keys
   per shard.
+- *Redis Operator / Operator*: a node graph of the operator now, with an
+  arrow to every RedisInstance, RedisCluster and RedisUser (its calls to the
+  Kubernetes API per minute) and to the Instance Managers of every instance
+  (HTTP calls per minute), a node showing the reconciles per minute; the
+  controllers of controller-runtime (reconciles by result, duration, errors,
+  workers, webhook), their workqueues (depth, adds, retries, time in the
+  queue, the longest running reconcile), a table of every object (reconciles,
+  errors, average time, reads and writes), the calls to the API in time by
+  verb, kind and object, and what client-go really sends; the calls to the
+  Instance Managers by path and instance, failures and latency; the Events
+  and, from Loki, *Every decision*: a row per decision with its kind,
+  object and details (from → to, epoch, how long, the Pod, the cluster
+  command, the error), blue when something starts, green when done, orange
+  an Event, red an error. The per object numbers
+  come from the operator: every controller runs behind `Instrument`, which
+  counts its reconciles and puts the object in the context, where the client
+  of the reconcilers (`CountingClient`) finds it.
 
 **To the millisecond, with Loki.** A switchover is over in about 100 ms,
 far below what Prometheus samples (scraping every 10 ms would be a hundred

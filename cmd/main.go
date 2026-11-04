@@ -232,7 +232,7 @@ func main() {
 	}
 
 	if err := (&controller.RedisInstanceReconciler{
-		Client:            mgr.GetClient(),
+		Client:            controller.CountingClient(mgr.GetClient()),
 		Scheme:            mgr.GetScheme(),
 		OperatorImage:     operatorImage,
 		CA:                ca,
@@ -244,7 +244,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.RedisUserReconciler{
-		Client:   mgr.GetClient(),
+		Client:   controller.CountingClient(mgr.GetClient()),
 		Scheme:   mgr.GetScheme(),
 		Recorder: controller.CountingRecorder{EventRecorder: mgr.GetEventRecorder("redis-operator")},
 	}).SetupWithManager(mgr); err != nil {
@@ -266,7 +266,7 @@ func main() {
 		}
 	}
 	if err := (&controller.RedisClusterReconciler{
-		Client:          mgr.GetClient(),
+		Client:          controller.CountingClient(mgr.GetClient()),
 		Scheme:          mgr.GetScheme(),
 		InstanceManager: instanceManager,
 		Recorder:        controller.CountingRecorder{EventRecorder: mgr.GetEventRecorder("redis-operator")},

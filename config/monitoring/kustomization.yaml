@@ -16,6 +16,7 @@ configMapGenerator:
   files:
   - dashboards/redis-instance.json
   - dashboards/redis-cluster.json
+  - dashboards/redis-operator.json
   options:
     disableNameSuffixHash: true
     labels:

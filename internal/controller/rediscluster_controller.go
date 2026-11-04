@@ -345,5 +345,5 @@ func (r *RedisClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// The Pods belong to the shards; a new one may need to join.
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(clusterOfPod)).
 		Named("rediscluster").
-		Complete(r)
+		Complete(Instrument("RedisCluster", r))
 }

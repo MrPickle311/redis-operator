@@ -12,7 +12,11 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 	"github.com/MrPickle311/redis-operator/internal/pki"
@@ -132,7 +136,9 @@ func (c *Client) do(ctx context.Context, method, host, path string, body, out an
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	start := time.Now()
 	resp, err := c.http.Do(req)
+	observe(host, path, resp, err, time.Since(start))
 	if err != nil {
 		return withNetworkPolicyHint(err)
 	}
@@ -153,4 +159,37 @@ func withNetworkPolicyHint(err error) error {
 		return fmt.Errorf("%w (no answer on port %d: is a NetworkPolicy of the namespace blocking the operator?)", err, instancemanager.StatusPort)
 	}
 	return err
+}
+
+// The calls of the operator to the Instance Managers, by the instance and Pod
+// they went to.
+var (
+	requestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "redis_operator_im_requests_total",
+		Help: "Calls of the operator to the API of the Instance Managers, by path and HTTP status, or error.",
+	}, []string{"namespace", "redis_instance", "pod", "path", "code"})
+	requestSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "redis_operator_im_request_duration_seconds",
+		Help:    "How long a call of the operator to an Instance Manager took.",
+		Buckets: []float64{.002, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+	}, []string{"path"})
+)
+
+func init() {
+	metrics.Registry.MustRegister(requestsTotal, requestSeconds)
+}
+
+// observe counts a call to host, a Pod DNS name "<pod>.<instance>-hl.<namespace>.svc".
+func observe(host, path string, resp *http.Response, err error, took time.Duration) {
+	parts := strings.Split(host, ".")
+	pod, instance, namespace := parts[0], "", ""
+	if len(parts) > 2 {
+		instance, namespace = strings.TrimSuffix(parts[1], "-hl"), parts[2]
+	}
+	code := "error"
+	if err == nil {
+		code = strconv.Itoa(resp.StatusCode)
+	}
+	requestsTotal.WithLabelValues(namespace, instance, pod, path, code).Inc()
+	requestSeconds.WithLabelValues(path).Observe(took.Seconds())
 }
