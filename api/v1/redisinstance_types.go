@@ -141,6 +141,24 @@ type RedisInstanceSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	NetworkPolicy NetworkPolicySpec `json:"networkPolicy,omitzero"`
+
+	// Monitoring adds a Prometheus exporter to every Pod.
+	// +kubebuilder:default={}
+	// +optional
+	Monitoring MonitoringSpec `json:"monitoring,omitzero"`
+}
+
+// MonitoringSpec adds redis_exporter as a sidecar of every Pod, on the port
+// metrics (9121), for a PodMonitor of the Prometheus Operator to scrape.
+type MonitoringSpec struct {
+	// Enabled adds the sidecar; a change rolls the Pods.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Image of redis_exporter.
+	// +kubebuilder:default="oliver006/redis_exporter:v1.94.0"
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // NetworkPolicySpec chooses who isolates the instances: the operator, with a

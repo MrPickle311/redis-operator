@@ -1,0 +1,2230 @@
+{
+ "uid": "redis-operator-instance",
+ "title": "Redis Operator / RedisInstance",
+ "description": "Roles, conditions, Events and replication of a RedisInstance",
+ "tags": [
+  "redis-operator"
+ ],
+ "editable": true,
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "5s",
+ "graphTooltip": 1,
+ "time": {
+  "from": "now-30m",
+  "to": "now"
+ },
+ "timepicker": {
+  "refresh_intervals": [
+   "5s",
+   "10s",
+   "30s",
+   "1m",
+   "5m"
+  ]
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "datasource",
+    "label": "Prometheus",
+    "type": "datasource",
+    "query": "prometheus",
+    "current": {},
+    "hide": 0
+   },
+   {
+    "name": "loki",
+    "label": "Loki",
+    "type": "datasource",
+    "query": "loki",
+    "current": {},
+    "hide": 0
+   },
+   {
+    "name": "namespace",
+    "label": "Namespace",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "hide": 0,
+    "query": {
+     "query": "label_values(redis_operator_instance_instances, namespace)",
+     "refId": "namespace"
+    },
+    "definition": "label_values(redis_operator_instance_instances, namespace)",
+    "refresh": 2,
+    "sort": 1,
+    "includeAll": false,
+    "multi": false,
+    "current": {}
+   },
+   {
+    "name": "instance",
+    "label": "RedisInstance",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "hide": 0,
+    "query": {
+     "query": "label_values(redis_operator_instance_instances{namespace=\"$namespace\"}, redis_instance)",
+     "refId": "instance"
+    },
+    "definition": "label_values(redis_operator_instance_instances{namespace=\"$namespace\"}, redis_instance)",
+    "refresh": 2,
+    "sort": 1,
+    "includeAll": false,
+    "multi": false,
+    "current": {}
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   },
+   {
+    "name": "Switchover",
+    "datasource": {
+     "type": "loki",
+     "uid": "${loki}"
+    },
+    "enable": true,
+    "iconColor": "blue",
+    "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `Started switchover|reason\": \"Switchover` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+    "target": {
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `Started switchover|reason\": \"Switchover` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+     "refId": "Anno"
+    }
+   },
+   {
+    "name": "Failover",
+    "datasource": {
+     "type": "loki",
+     "uid": "${loki}"
+    },
+    "enable": true,
+    "iconColor": "red",
+    "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `Started failover|reason\": \"Failover` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+    "target": {
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `Started failover|reason\": \"Failover` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+     "refId": "Anno"
+    }
+   },
+   {
+    "name": "Rolling update",
+    "datasource": {
+     "type": "loki",
+     "uid": "${loki}"
+    },
+    "enable": true,
+    "iconColor": "purple",
+    "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `reason\": \"RollingUpdate` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+    "target": {
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `reason\": \"RollingUpdate` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+     "refId": "Anno"
+    }
+   },
+   {
+    "name": "Other events",
+    "datasource": {
+     "type": "loki",
+     "uid": "${loki}"
+    },
+    "enable": true,
+    "iconColor": "orange",
+    "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `reason\": \"(Primary|Replica|Volume|Recreate|Scale|Memory|Foreign|Instance|Parameters|Invalid|CA)` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+    "target": {
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` |~ `reason\": \"(Primary|Replica|Volume|Recreate|Scale|Memory|Foreign|Instance|Parameters|Invalid|CA)` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+     "refId": "Anno"
+    }
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "text",
+   "title": "",
+   "options": {
+    "mode": "markdown",
+    "content": "**How to read it.** The top row is now. Below, every timeline is one row per Pod or per reason, coloured over time; select a range on any graph with the mouse to replay what happened in it (a switchover, a failover, a rolling update), and read it to the millisecond in *What happened*. Vertical markers on every graph come from the log of the operator: **blue** a switchover, **red** a failover, **purple** a rolling update, **orange** another Event; the switches at the top name them, hover a marker for its text."
+   },
+   "transparent": true,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 3
+   },
+   "id": 1,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Primary",
+   "description": "The Pod in status.currentPrimary: the one -rw sends clients to",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_operator_instance_pod_role{namespace=\"$namespace\",redis_instance=\"$instance\"}) == 1",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "name",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 3,
+    "w": 5,
+    "h": 4
+   },
+   "id": 2,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Primary epoch",
+   "description": "Grows by one with every switchover and failover",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(redis_operator_instance_primary_epoch{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 5,
+    "y": 3,
+    "w": 3,
+    "h": 4
+   },
+   "id": 3,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Ready instances",
+   "description": "Ready Pods of status.readyInstances, and spec.instances",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(redis_operator_instance_ready_instances{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "ready",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(redis_operator_instance_instances{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "wanted",
+     "refId": "B",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value_and_name",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   },
+   "id": 4,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Ready",
+   "description": "The condition Ready: green with reason Ready, red with the reason why not",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (reason) (redis_operator_condition{namespace=\"$namespace\",kind=\"RedisInstance\",name=\"$instance\",type=\"Ready\"})",
+     "legendFormat": "{{reason}}",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "name",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "True",
+         "color": "green",
+         "index": 0
+        },
+        "0": {
+         "text": "False",
+         "color": "red",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 3,
+    "w": 12,
+    "h": 4
+   },
+   "id": 5,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Switchovers and failovers",
+   "collapsed": false,
+   "id": 6,
+   "gridPos": {
+    "x": 0,
+    "y": 7,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "Switchovers",
+   "description": "Planned moves of the primary of this instance in the time range",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "sum(count_over_time({namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind | drop fields |= `\"kind\": \"switchover\"` [$__range])) or vector(0)",
+     "refId": "A",
+     "queryType": "instant",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 4,
+    "h": 4
+   },
+   "id": 7
+  },
+  {
+   "type": "stat",
+   "title": "Failovers",
+   "description": "Failovers of this instance in the time range",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "sum(count_over_time({namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind | drop fields |= `\"kind\": \"failover\"` [$__range])) or vector(0)",
+     "refId": "A",
+     "queryType": "instant",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 8,
+    "w": 4,
+    "h": 4
+   },
+   "id": 8
+  },
+  {
+   "type": "stat",
+   "title": "Slowest switchover",
+   "description": "From the start of the switchover until the target is the primary",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "max(max_over_time({namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind, durationMs | drop fields |= `\"kind\": \"switchover\"` | unwrap durationMs [$__range]))",
+     "refId": "A",
+     "queryType": "instant",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 8,
+    "w": 5,
+    "h": 4
+   },
+   "id": 9
+  },
+  {
+   "type": "stat",
+   "title": "Slowest failover",
+   "description": "From the start of the failover until the target is the primary",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "max(max_over_time({namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind, durationMs | drop fields |= `\"kind\": \"failover\"` | unwrap durationMs [$__range]))",
+     "refId": "A",
+     "queryType": "instant",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "x": 13,
+    "y": 8,
+    "w": 5,
+    "h": 4
+   },
+   "id": 10
+  },
+  {
+   "type": "stat",
+   "title": "Longest primary outage",
+   "description": "How long the primary was unavailable before a failover ended: failover.delay and the failover",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "max(max_over_time({namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind, downMs | drop fields |= `\"kind\": \"failover\"` | unwrap downMs [$__range]))",
+     "refId": "A",
+     "queryType": "instant",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "x": 18,
+    "y": 8,
+    "w": 6,
+    "h": 4
+   },
+   "id": 11
+  },
+  {
+   "type": "table",
+   "title": "Every switchover and failover",
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "description": "One row per switchover or failover, from the line the operator logs when it ends. Took: from its start to the new primary. Primary down: for a failover, since the old primary became unavailable.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind, name, from, to, epoch, durationMs, downMs | drop fields",
+     "refId": "A",
+     "queryType": "range"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels"
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "labels": true,
+       "Line": true,
+       "tsNs": true,
+       "id": true,
+       "fields": true
+      },
+      "indexByName": {
+       "Time": 0,
+       "kind": 1,
+       "name": 2,
+       "from": 3,
+       "to": 4,
+       "epoch": 5,
+       "durationMs": 6,
+       "downMs": 7
+      },
+      "renameByName": {
+       "kind": "What",
+       "name": "Of",
+       "from": "From",
+       "to": "To",
+       "epoch": "Epoch",
+       "durationMs": "Took",
+       "downMs": "Primary down"
+      }
+     }
+    },
+    {
+     "id": "convertFieldType",
+     "options": {
+      "conversions": [
+       {
+        "targetField": "Took",
+        "destinationType": "number"
+       },
+       {
+        "targetField": "Primary down",
+        "destinationType": "number"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Time",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "md"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "What"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "switchover": {
+            "text": "switchover",
+            "color": "blue",
+            "index": 0
+           },
+           "failover": {
+            "text": "failover",
+            "color": "red",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "Took|Primary down"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "gradient",
+         "valueDisplayMode": "text"
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "continuous-GrYlRd"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 14,
+    "h": 9
+   },
+   "id": 12
+  },
+  {
+   "type": "timeseries",
+   "title": "How long each one took",
+   "description": "A point per switchover (blue) and failover (red) at the moment it ended; the height is how long it took (log scale)",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "refId": "A",
+     "queryType": "range",
+     "legendFormat": "{{kind}}",
+     "expr": "max by (kind) (max_over_time({namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` |~ `Completed (switchover|failover)` | regexp `\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json kind, durationMs | drop fields | unwrap durationMs [$__interval]))"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "drawStyle": "points",
+      "pointSize": 12,
+      "scaleDistribution": {
+       "type": "log",
+       "log": 10
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "switchover"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "blue"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "failover"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "interval": "1s",
+   "gridPos": {
+    "x": 14,
+    "y": 12,
+    "w": 10,
+    "h": 9
+   },
+   "id": 13
+  },
+  {
+   "type": "row",
+   "title": "What happened",
+   "collapsed": false,
+   "id": 14,
+   "gridPos": {
+    "x": 0,
+    "y": 21,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "logs",
+   "title": "What happened, to the millisecond",
+   "description": "The log of the operator about this instance and the logs of its Pods (Redis, the Instance Manager, the exporter), in order. Select the time of a switchover or failover on a graph to read it step by step: the fence, the promotion, REPLICAOF, the partial resync.",
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |~ `\\{\"name\":\"$instance\",\"namespace\":\"$namespace\"\\}` != `Moved slot` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:events\\t)?(?P<msg>[^\\t]+)` | regexp `\"reason\": \"(?P<reason>[^\"]+)\"` | line_format `operator  {{.msg}} {{.reason}}`",
+     "refId": "A",
+     "queryType": "range"
+    },
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "{namespace=\"$namespace\", pod=~\"$instance-[0-9]+\"} != `Could not configure` | line_format `{{.pod}} {{.container}}  {{__line__}}`",
+     "refId": "B",
+     "queryType": "range"
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "sortOrder": "Ascending",
+    "wrapLogMessage": true,
+    "enableLogDetails": true,
+    "dedupStrategy": "none",
+    "prettifyLogMessage": false,
+    "showLabels": false
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 22,
+    "w": 24,
+    "h": 12
+   },
+   "id": 15
+  },
+  {
+   "type": "state-timeline",
+   "title": "Role of every Pod",
+   "description": "Green: the primary. Orange: the replica the operator is promoting (status.targetPrimary). The green bar jumping rows is a switchover or a failover.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_operator_instance_pod_role{namespace=\"$namespace\",redis_instance=\"$instance\"}) or (max by (pod) (max_over_time(redis_operator_instance_pod_role{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__range])) * 0 - 1)",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "interval": "5s",
+   "options": {
+    "mergeValues": true,
+    "showValue": "auto",
+    "alignValue": "center",
+    "rowHeight": 0.85,
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "replica",
+         "color": "blue",
+         "index": 0
+        },
+        "1": {
+         "text": "primary",
+         "color": "green",
+         "index": 1
+        },
+        "2": {
+         "text": "becoming primary",
+         "color": "orange",
+         "index": 2
+        },
+        "-1": {
+         "text": " ",
+         "color": "transparent",
+         "index": 99
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "insertNulls": 20000,
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 34,
+    "w": 24,
+    "h": 6
+   },
+   "id": 16,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "state-timeline",
+   "title": "Pod Ready (kubelet)",
+   "description": "Red while a Pod restarts, or a replica has not finished its first sync",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (kube_pod_status_ready{namespace=\"$namespace\",pod=~\"$instance-[0-9]+\",condition=\"true\"}) or (max by (pod) (max_over_time(kube_pod_status_ready{namespace=\"$namespace\",pod=~\"$instance-[0-9]+\",condition=\"true\"}[$__range])) * 0 - 1)",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "interval": "5s",
+   "options": {
+    "mergeValues": true,
+    "showValue": "auto",
+    "alignValue": "center",
+    "rowHeight": 0.85,
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "Ready",
+         "color": "green",
+         "index": 0
+        },
+        "0": {
+         "text": "not Ready",
+         "color": "red",
+         "index": 1
+        },
+        "-1": {
+         "text": " ",
+         "color": "transparent",
+         "index": 99
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "insertNulls": 20000,
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 40,
+    "w": 24,
+    "h": 5
+   },
+   "id": 17,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "state-timeline",
+   "title": "Conditions: one row each, the text is the reason",
+   "description": "Every condition of the RedisInstance on one row; the bar shows its reason over time. Green: fine (Ready, Applied, Issued). Grey: idle (Completed). Orange: something runs (InProgress, RollingUpdate, Switchover). Red: a problem (PrimaryUnavailable, Failed, ...).",
+   "interval": "5s",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (type, reason) (redis_operator_condition{namespace=\"$namespace\",kind=\"RedisInstance\",name=\"$instance\"})",
+     "format": "table",
+     "range": true,
+     "instant": false,
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "partitionByValues",
+     "options": {
+      "fields": [
+       "type"
+      ],
+      "keepFields": false,
+      "naming": {
+       "asLabels": true
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Value": true
+      }
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "Time"
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "mergeValues": true,
+    "showValue": "auto",
+    "alignValue": "center",
+    "rowHeight": 0.85,
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "displayName": "${__field.labels.type}",
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "insertNulls": 20000,
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "red"
+     },
+     "mappings": [
+      {
+       "type": "regex",
+       "options": {
+        "pattern": "^(Ready|Applied|Issued|Validated|VolumesReady|MemoryLimitSet|Covered)$",
+        "result": {
+         "color": "green",
+         "index": 0
+        }
+       }
+      },
+      {
+       "type": "regex",
+       "options": {
+        "pattern": "^(Completed|Balanced)$",
+        "result": {
+         "color": "#5a6270",
+         "index": 1
+        }
+       }
+      },
+      {
+       "type": "regex",
+       "options": {
+        "pattern": "^(InProgress|Moving|Waiting|Pending|RollingUpdate|Switchover|Failover|Resharding|InstancesNotReady|ShardsNotReady|CAExpiresSoon)$",
+        "result": {
+         "color": "orange",
+         "index": 2
+        }
+       }
+      },
+      {
+       "type": "regex",
+       "options": {
+        "pattern": ".*",
+        "result": {
+         "color": "red",
+         "index": 3
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 45,
+    "w": 24,
+    "h": 10
+   },
+   "id": 18,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Traffic and replication",
+   "collapsed": false,
+   "id": 19,
+   "gridPos": {
+    "x": 0,
+    "y": 55,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "nodeGraph",
+   "title": "Replication: who replicates from whom, and where it runs",
+   "description": "Every Pod with the machine it runs on and its commands per second (green the primary, blue a replica); every arrow a replica, with the bytes per second it replicates.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (id, title, subtitle, color) (label_replace(label_replace(label_replace(label_replace(label_replace(sum by (pod, node, role) ((rate(redis_commands_processed_total{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__rate_interval]) and redis_commands_processed_total{namespace=\"$namespace\",redis_instance=\"$instance\"}) * on (pod) group_left (node) max by (pod, pod_ip, node) (kube_pod_info{namespace=\"$namespace\",pod=~\"$instance-[0-9]+\"})), \"id\", \"$1\", \"pod\", \"(.*)\"), \"title\", \"$1\", \"pod\", \"(.*)\"), \"subtitle\", \"$1\", \"node\", \"(.*)\"), \"color\", \"green\", \"role\", \"primary\"), \"color\", \"blue\", \"role\", \"replica\"))",
+     "refId": "A",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (id, source, target) (label_join(label_replace(label_replace(sum by (pod, slave_ip) (deriv(redis_connected_slave_offset_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__rate_interval]) and redis_connected_slave_offset_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"}) * on (slave_ip) group_left (replica) label_replace(label_replace(max by (pod, pod_ip, node) (kube_pod_info{namespace=\"$namespace\",pod=~\"$instance-[0-9]+\"}), \"replica\", \"$1\", \"pod\", \"(.*)\"), \"slave_ip\", \"$1\", \"pod_ip\", \"(.*)\"), \"source\", \"$1\", \"pod\", \"(.*)\"), \"target\", \"$1\", \"replica\", \"(.*)\"), \"id\", \"->\", \"source\", \"target\"))",
+     "refId": "B",
+     "format": "table",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "transformations": [
+    {
+     "id": "calculateField",
+     "options": {
+      "mode": "reduceRow",
+      "reduce": {
+       "reducer": "sum"
+      },
+      "alias": "mainstat",
+      "replaceFields": false,
+      "timeSeries": false
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "Value": true,
+       "Value #A": true,
+       "Value #B": true
+      }
+     }
+    }
+   ],
+   "options": {
+    "nodes": {
+     "mainStatUnit": "ops"
+    },
+    "edges": {
+     "mainStatUnit": "Bps"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ops"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "Bps"
+       }
+      ]
+     }
+    ]
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 56,
+    "w": 24,
+    "h": 10
+   },
+   "id": 20,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Replication throughput per replica",
+   "description": "Bytes per second each replica takes from its primary: the write traffic of the primary",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod, slave_ip) ((deriv(redis_connected_slave_offset_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__rate_interval])) and on (pod, slave_ip) redis_connected_slave_offset_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"}) * on (slave_ip) group_left (replica) label_replace(label_replace(max by (pod, pod_ip, node) (kube_pod_info{namespace=\"$namespace\",pod=~\"$instance-[0-9]+\"}), \"replica\", \"$1\", \"pod\", \"(.*)\"), \"slave_ip\", \"$1\", \"pod_ip\", \"(.*)\")",
+     "legendFormat": "{{pod}} \u2192 {{replica}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 66,
+    "w": 8,
+    "h": 8
+   },
+   "id": 21,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Lag of every replica",
+   "description": "The most bytes of writes the replica had not acknowledged in each minute, as its primary sees it. A replica acknowledges once a second, so up to a second of writes is normal; a line that keeps growing is a replica that falls behind.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod, slave_ip) ((max_over_time((max by (pod) (redis_master_repl_offset{namespace=\"$namespace\",redis_instance=\"$instance\"}) - on (pod) group_right redis_connected_slave_offset_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"})[1m:])) and on (pod, slave_ip) redis_connected_slave_offset_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"}) * on (slave_ip) group_left (replica) label_replace(label_replace(max by (pod, pod_ip, node) (kube_pod_info{namespace=\"$namespace\",pod=~\"$instance-[0-9]+\"}), \"replica\", \"$1\", \"pod\", \"(.*)\"), \"slave_ip\", \"$1\", \"pod_ip\", \"(.*)\")",
+     "legendFormat": "{{pod}} \u2192 {{replica}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 66,
+    "w": 8,
+    "h": 8
+   },
+   "id": 22,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "bargauge",
+   "title": "Resyncs served in the time range",
+   "description": "Full: the primary sent a whole snapshot (a new or a lost replica). Partial: a replica caught up from the backlog, e.g. after a switchover.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod) (increase(redis_replica_resyncs_full{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__range]))",
+     "legendFormat": "{{pod}} full",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod) (increase(redis_replica_partial_resync_accepted{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__range]))",
+     "legendFormat": "{{pod}} partial",
+     "refId": "B",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "basic",
+    "showUnfilled": true,
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "decimals": 0,
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 66,
+    "w": 8,
+    "h": 8
+   },
+   "id": 23,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Commands per second",
+   "description": "A dip on the primary is the pause of a switchover or the gap of a failover",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod) (rate(redis_commands_processed_total{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 74,
+    "w": 12,
+    "h": 8
+   },
+   "id": 24,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Keys",
+   "description": "Equal on every Pod once the replicas are in sync",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod) (redis_db_keys{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 74,
+    "w": 8,
+    "h": 8
+   },
+   "id": 25,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Connected clients",
+   "description": "",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_connected_clients{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 82,
+    "w": 8,
+    "h": 8
+   },
+   "id": 26,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Memory",
+   "description": "",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_memory_used_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "{{pod}} used",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(redis_memory_max_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "maxmemory",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 82,
+    "w": 8,
+    "h": 8
+   },
+   "id": 27,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Disk",
+   "collapsed": false,
+   "id": 28,
+   "gridPos": {
+    "x": 0,
+    "y": 90,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "bargauge",
+   "title": "Volumes used",
+   "description": "Used space of every PVC, from the kubelet; orange from 70 %, red from 85 %",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "100 * max by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{namespace=\"$namespace\",persistentvolumeclaim=~\"$instance-[0-9]+-data\"}) / max by (persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace=\"$namespace\",persistentvolumeclaim=~\"$instance-[0-9]+-data\"})",
+     "legendFormat": "{{persistentvolumeclaim}}",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "lcd",
+    "showUnfilled": true,
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 70
+       },
+       {
+        "color": "red",
+        "value": 85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 91,
+    "w": 8,
+    "h": 8
+   },
+   "id": 29,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Volume used over time",
+   "description": "",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{namespace=\"$namespace\",persistentvolumeclaim=~\"$instance-[0-9]+-data\"})",
+     "legendFormat": "{{persistentvolumeclaim}}",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(max by (persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace=\"$namespace\",persistentvolumeclaim=~\"$instance-[0-9]+-data\"}))",
+     "legendFormat": "capacity",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 91,
+    "w": 8,
+    "h": 8
+   },
+   "id": 30,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "AOF size",
+   "description": "The append-only file grows with every write and shrinks at a rewrite",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_aof_current_size_bytes{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 91,
+    "w": 4,
+    "h": 8
+   },
+   "id": 31,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Since the last RDB save",
+   "description": "How old the snapshot on the volume is; with persistence aof the AOF has the writes since",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "time() - max by (pod) (redis_rdb_last_save_timestamp_seconds{namespace=\"$namespace\",redis_instance=\"$instance\"})",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value_and_name",
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "mappings": [],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 91,
+    "w": 4,
+    "h": 8
+   },
+   "id": 32,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "row",
+   "title": "Volumes",
+   "collapsed": false,
+   "id": 33,
+   "gridPos": {
+    "x": 0,
+    "y": 99,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "state-timeline",
+   "title": "State of every volume",
+   "description": "status.volumes: a new row appears when a volume becomes Terminating, Missing or Lost",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (ordinal, state) (redis_operator_instance_volume{namespace=\"$namespace\",redis_instance=\"$instance\"}) or (max by (ordinal, state) (max_over_time(redis_operator_instance_volume{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__range])) * 0 - 1)",
+     "legendFormat": "volume {{ordinal}}: {{state}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "interval": "5s",
+   "options": {
+    "mergeValues": true,
+    "showValue": "never",
+    "alignValue": "center",
+    "rowHeight": 0.85,
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "",
+         "color": "green",
+         "index": 0
+        },
+        "-1": {
+         "text": " ",
+         "color": "transparent",
+         "index": 99
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "insertNulls": 20000,
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 100,
+    "w": 24,
+    "h": 5
+   },
+   "id": 34,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  }
+ ]
+}

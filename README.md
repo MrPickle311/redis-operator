@@ -53,6 +53,15 @@ slots with their keys, one at a time, and removes the shards it emptied
 [Changing the number of shards](docs/architecture.md#changing-the-number-of-shards)).
 See [RedisCluster](docs/architecture.md#rediscluster).
 
+## Monitoring
+
+`spec.monitoring.enabled` adds a redis_exporter sidecar to every Pod, and the
+operator serves the status of every instance and cluster as metrics.
+`kustomize build config/monitoring | kubectl apply --server-side -f -`
+installs the operator with a ServiceMonitor, a PodMonitor and two Grafana
+dashboards for kube-prometheus-stack. See
+[Monitoring](docs/architecture.md#monitoring).
+
 ## Backup and restore
 
 Backups are snapshots of the PVCs, taken by the CSI driver on a schedule of

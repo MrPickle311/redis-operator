@@ -1,0 +1,13 @@
+# Lets Prometheus read the metrics endpoint of the operator.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: redis-operator-prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: redis-operator-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: kube-prometheus-stack-prometheus # the ServiceAccount of your Prometheus
+  namespace: monitoring

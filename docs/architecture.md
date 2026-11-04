@@ -1245,8 +1245,8 @@ Known limits:
   parallel: one switchover per instance (a short write pause and reconnects
   for its clients) and a burst of resyncs over the whole cluster. There is no
   way yet to delay or spread it (planned: a cluster-wide limit and a
-  maintenance window, step 11), nor to keep `redis-server` running while
-  the Instance Manager is replaced (planned: in-place upgrade, step 11).
+  maintenance window), nor to keep `redis-server` running while
+  the Instance Manager is replaced (planned: in-place upgrade).
 - A replacement waits for Ready, which means the first sync is done, not
   for a zero replication lag. Only the primary waits for zero lag, through
   the switchover.
@@ -1316,6 +1316,185 @@ resource.customizations.health.redis.operator.com_RedisInstance: |
   end
   return hs
 ```
+
+## Monitoring
+
+Two sources of metrics, for the Prometheus Operator (e.g.
+kube-prometheus-stack), and two Grafana dashboards that draw them:
+
+```mermaid
+flowchart LR
+    classDef op fill:#e8d5ff,stroke:#7b3fbf,color:#000
+    classDef pod fill:#d5f5e3,stroke:#1e8449,color:#000
+    classDef mon fill:#d6eaf8,stroke:#2471a3,color:#000
+
+    OP["Operator<br/>:8443/metrics<br/>redis_operator_*"]:::op
+    subgraph pod [Pod cache-0]
+        RS["redis-server"]:::pod
+        EX["exporter sidecar<br/>:9121/metrics<br/>redis_*"]:::pod
+    end
+    PROM["Prometheus"]:::mon
+    GRAF["Grafana<br/>RedisInstance, RedisCluster"]:::mon
+
+    EX -- "unix socket<br/>/controller/redis.sock" --> RS
+    PROM -- "ServiceMonitor, token" --> OP
+    PROM -- "PodMonitor" --> EX
+    GRAF --> PROM
+```
+
+```sh
+kustomize build config/monitoring | kubectl apply --server-side -f -
+```
+
+`config/monitoring` is `config/default` plus a ServiceMonitor of the
+operator, a PodMonitor of the exporters, a ClusterRoleBinding that lets
+Prometheus read the metrics of the operator, and the dashboards as a
+ConfigMap for the Grafana sidecar (label `grafana_dashboard: "1"`). Edit
+the label `release` and the ServiceAccount of Prometheus to match yours.
+
+**The status as metrics.** The operator turns the status of every
+`RedisInstance` and `RedisCluster` into metrics when Prometheus scrapes,
+read from its cache, so a deleted object leaves no series behind:
+
+| Metric | Labels | Value |
+|---|---|---|
+| `redis_operator_instance_pod_role` | `namespace`, `redis_instance`, `pod` | 0 replica, 1 primary, 2 becoming the primary (`targetPrimary`) |
+| `redis_operator_instance_primary_epoch` | `namespace`, `redis_instance` | `status.primaryEpoch` |
+| `redis_operator_instance_instances`, `_ready_instances` | `namespace`, `redis_instance` | `spec.instances`, `status.readyInstances` |
+| `redis_operator_instance_volume` | `…`, `ordinal`, `state` | 1 for the state of every volume |
+| `redis_operator_condition` | `namespace`, `kind`, `name`, `type`, `reason` | 1 True, 0 False |
+| `redis_operator_cluster_shard_slots` | `namespace`, `redis_cluster`, `shard` | slots of the master |
+| `redis_operator_cluster_shard_primary` | `…`, `shard`, `pod` | 1 for the master of every shard |
+| `redis_operator_cluster_slots_to_move` | `namespace`, `redis_cluster` | `status.slotMigration.slotsToMove`, 0 when balanced |
+| `redis_operator_cluster_slot_block_shard` | `…`, `block` | the shard that serves most of a block of 256 slots, -1 for none |
+| `redis_operator_events_total` (counter) | `namespace`, `kind`, `name`, `type`, `reason` | Events the operator emitted |
+| `redis_operator_slots_moved_total` (counter) | `namespace`, `redis_cluster`, `from_shard`, `to_shard` | slots moved |
+
+The ServiceMonitor sets `honorLabels`, so `namespace` and `pod` name the
+Redis Pods, not the operator. The labels are `redis_instance` and
+`redis_cluster`, not `instance`, which Prometheus keeps for the address of
+a target; the PodMonitor gives the metrics of the exporters the same
+labels, and `role` from the label of the Pod, so the two sources join.
+
+**Redis itself** comes from a sidecar:
+
+```yaml
+spec:
+  monitoring:
+    enabled: true                                  # default false; a change rolls the Pods
+    image: oliver006/redis_exporter:v1.94.0        # default
+```
+
+[redis_exporter](https://github.com/oliver006/redis_exporter) reads Redis
+over the unix socket of the Pod, so it needs no TLS, as `_operator`, with
+the password from the internal Secret. `/controller` is read-only to it,
+as it also holds the binary of the Instance Manager. It serves port
+`metrics` (9121): commands, memory, keys, clients, replication offsets.
+With `spec.networkPolicy.allowFrom`, the policy lets anyone in on 9121, as
+Prometheus may run in any namespace and the exporter only reports numbers.
+A `RedisCluster` passes `monitoring` to its shards.
+
+**Dashboards** (`config/monitoring/dashboards`, folder `databases`):
+
+- *Redis Operator / RedisInstance*: *What happened, to the millisecond* (below), the role of every Pod as a timeline,
+  so a switchover, a failover or a rolling update shows as the primary
+  moving from row to row; Pod Ready; why Ready is False, over time; *Health*
+  (conditions that are good when True: green, a problem red) and *Operations*
+  (Switchover and Failover: orange while one runs, grey when idle, red when
+  it failed), every reason a row and a bar of how long it lasted; commands per second,
+  keys, clients, memory and the state of the volumes; an annotation where
+  the epoch grew. A shard is a `RedisInstance`, so it works for one too.
+- Both: *Replication*, a node graph with a node per Pod (green the primary,
+  blue a replica, under it the machine it runs on, its commands per second)
+  and an arrow per replica with the bytes per second it replicates (the
+  primary reports its replicas by IP, which `kube_pod_info` names; only the
+  pairs and roles of now, as a rate looks minutes back over a switchover;
+  hover an arrow for its number), the
+  throughput of every replica and its lag in bytes (the offset of the
+  primary minus the one the replica acknowledged, once a second, so up to a
+  second of writes is normal; the highest in each minute, from one INFO of
+  the primary: offsets of different Pods are scraped at different moments).
+  Graph and both graphs keep at every moment only the pairs the primary
+  reports then, so a pair ends at the switchover instead of a window later;
+  and the full and partial resyncs;
+  *Disk*, the used space of every PVC (kubelet), over time, the AOF size and
+  the age of the last RDB save.
+- *Redis Operator / RedisCluster*: slots per shard as bars and over time, slots moved from shard to shard,
+  slots to move, the health of the cluster, `Migrating` (orange while slots
+  move, grey when balanced, red when blocked), a slot map of 64 rows of 256
+  slots coloured by shard, the role of every node, and commands and keys
+  per shard.
+
+**To the millisecond, with Loki.** A switchover is over in about 100 ms,
+far below what Prometheus samples (scraping every 10 ms would be a hundred
+requests a second per target). The logs have it: with Loki (e.g.
+loki-stack with promtail), both dashboards have a panel *What happened, to
+the millisecond* with the log lines of the operator about the object and,
+for a `RedisInstance`, of its Pods (Redis, the Instance Manager, the
+exporter), in order, and markers on every graph from the log of the
+operator, a switch and a colour per kind: **Switchover** blue, **Failover**
+red, **Rolling update** purple, **Other events** orange; for a cluster
+**Resharding** purple, **Failover of a shard** red and **Slots move**
+shaded orange. A switchover reads like this:
+
+```text
+22:26:55.093 operator  Started switchover
+22:26:55.105 cache-2 redis  * MASTER MODE enabled (user request from 'id=5 addr=/controller/redis.sock…')
+22:26:55.122 operator  Event occurred SwitchoverCompleted
+22:26:55.128 cache-0 redis  * REPLICAOF cache-2.cache-hl.redis-play.svc:6379 enabled
+22:26:55.135 cache-0 redis  * Successful partial resynchronization with master.
+22:26:55.165 operator  Updated Pod role label
+```
+
+**Every switchover and failover as a row.** When one ends, the operator
+logs one line with all of it:
+
+```text
+INFO  Completed failover  {…, "kind": "failover", "from": "cache-2", "to": "cache-0", "epoch": 11, "durationMs": 2005, "downMs": 34211}
+```
+
+`durationMs` is from its start to the new primary, measured in the
+operator, as conditions keep whole seconds (after a restart of the
+operator, from the condition); `downMs`, of a failover, is since the
+primary became unavailable, `failover.delay` included. A switchover of a
+shard (`CLUSTER FAILOVER`) logs the same. The section *Switchovers and
+failovers* of both dashboards reads these lines from Loki: how many in the
+time range, the slowest of each and the longest outage of a primary, a
+table with a row per operation (when, what, of which instance, from, to,
+epoch, and how long, as a bar), and a point per operation on a log scale.
+
+Without Loki these panels stay empty and the rest works.
+
+**States shorter than a scrape, in Prometheus.** Both monitors scrape every 5 s, and a
+switchover is over in a second, so `targetPrimary` rarely shows in the
+gauges. The counters keep it: every Event (`SwitchoverCompleted`,
+`FailoverStarted`, `RollingUpdate`, …; a `RedisCluster` emits
+`ReshardingMoving`, `ReshardingWaiting`, `ReshardingBlocked` and
+`ReshardingBalanced` when `Migrating` changes) and every moved slot is counted,
+for alerts and rates, however fast they went; the dashboards show the moved
+slots as bars. A counter appears with its first increment, which
+`increase()` misses, so the dashboards count `X - (X offset W or X * 0)`.
+The series of a deleted object stay until the operator restarts.
+
+The dashboards aggregate by the labels they show (`max by (pod)`, …): a
+restart of the operator changes the label `instance` of its series, and a
+switchover the label `role` of the exporter, which would draw a row twice.
+A timeline ends a bar 20 s after its series stops, instead of drawing the
+last value of an old reason or a deleted Pod up to now. The timelines take their colours from value mappings, not
+thresholds: with merged values Grafana turns numbers into threshold labels
+(`-∞+`) and drops the mappings. A reason that is gone shows as -1, drawn
+transparent: Grafana draws the last value of a series that stopped up to
+now, which a gap threshold does not end. To watch a switchover or a resharding
+again, pick its time range: the timelines replay it from the history of
+Prometheus.
+
+Limits:
+
+- The exporter logs in as `_operator`, which may do anything; it shares
+  the Pod, its user and its Secrets with the Instance Manager anyway.
+- The metrics endpoint of the operator serves a self-signed certificate,
+  so the ServiceMonitor skips its verification; see `config/prometheus`
+  for one from cert-manager.
 
 ## Reconcile loop
 
@@ -1487,6 +1666,19 @@ shards, so it takes no slots here: its first node is an empty master that
 the other nodes of the shard replicate, and the slots come to it by
 [moving](#changing-the-number-of-shards).
 
+**Every Pod restarted at once** (e.g. a restart of the nodes) gives every
+node a new IP, while `nodes.conf` of each knows the others by the old ones:
+the cluster bus reaches nobody and the cluster stays `fail`. The Instance
+Manager reports the nodes it flags `fail` or `fail?`; when one of them is a
+node that runs, the first node meets every other one again by its DNS name,
+and Redis gives the ID it knows the new address, which gossip spreads. A
+replica takes a new address of its master into the replication only from
+the master itself, so the Instance Manager also reports a replica that
+replicates from an address its master no longer has (`staleMaster`), and it
+gets `CLUSTER REPLICATE` of the same master again. On the homelab the
+cluster was `ok` and `Ready` with every replica in sync about 70 s after all
+6 Pods were deleted.
+
 `cluster-allow-replica-migration no` keeps every replica in its shard, so
 in the `RedisInstance` that owns its Pod.
 
@@ -1564,7 +1756,7 @@ flowchart TD
     F --> G{"every instance Ready,<br/>no master moving?"}
     D --> G
     G -- no --> W
-    G -- yes --> M["move the slot; next one,<br/>for up to 20 s per reconcile"]
+    G -- yes --> M["move the slot; next one,<br/>for up to 5 s per reconcile"]
 ```
 
 The decisions, and why:
@@ -1574,7 +1766,7 @@ The decisions, and why:
    slot moves twice: 3 → 4 moves 4096 slots, the part of the new shard, and
    every old shard keeps the rest of its own. The parts are those of
    `slotRange`, but the slots of a shard are no longer one range after a
-   move: `store-0` may serve `0-4095` and `store-3` `4096-5460,10922-…`.
+   move: `store-0` may serve `0-4095` and `store-3` `4096-5460,9557-10921,15018-16383`.
 2. **One internal Secret for the cluster.** `MIGRATE` logs in to the target
    with `AUTH2 _operator <password>`, so the source must know the password
    of the target. Every shard mounts `store-internal-auth`, which the
@@ -1619,9 +1811,10 @@ The decisions, and why:
    `redis.operator.com_RedisCluster`, shows `Resharding` as `Progressing`.
 8. **One slot at a time** in the whole cluster: at most one slot has a
    flag at any moment, so a failover or a restart has at most one slot to
-   finish. One reconcile moves slots for up to 20 s, one call of the
-   Instance Manager runs `MIGRATE` for up to 5 s, and the reconcile after it
-   goes on. That is about 50 slots a second without keys: 3 → 4 takes about
+   finish. One reconcile moves slots for up to 5 s, one call of the
+   Instance Manager runs `MIGRATE` for up to 5 s, and the reconcile a
+   second after it goes on, so the status, with the slots of every shard,
+   follows every few seconds. That is about 50 slots a second without keys: 3 → 4 takes about
    two minutes, plus the time to send the keys.
 
 **Resuming.** The operator keeps no state of a move: the flags are in
@@ -1629,7 +1822,7 @@ The decisions, and why:
 `[5460-<-<id>]`), and the Instance Manager reports them. Every reconcile
 first finishes a slot that has a flag, from the master that serves it now
 to the master of the shard it goes to, and every step does nothing when it
-is done already. A restart of the operator, a reconcile cut by its 20 s, or
+is done already. A restart of the operator, a reconcile cut by its 5 s, or
 a failover of the source or the target, which lose the flags of the old
 master, all go on from where the nodes are. A flag that names a node gone
 for good stops all moves; clear it with `CLUSTER SETSLOT <slot> STABLE`.

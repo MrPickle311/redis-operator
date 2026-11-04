@@ -120,6 +120,7 @@ func (r *RedisInstanceReconciler) startSwitchover(ctx context.Context, instance 
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}
+	startOperation(instance, target)
 	logf.FromContext(ctx).Info("Started switchover", "from", instance.Status.CurrentPrimary, "to", target,
 		"epoch", instance.Status.PrimaryEpoch)
 	return nil
@@ -129,12 +130,14 @@ func (r *RedisInstanceReconciler) startSwitchover(ctx context.Context, instance 
 // same reconcile then demotes the old primary, which also lifts its fence.
 func (r *RedisInstanceReconciler) finishSwitchover(ctx context.Context, instance *redisv1.RedisInstance) error {
 	from, to := instance.Status.CurrentPrimary, instance.Status.TargetPrimary
+	logCompleted := operationLog(instance, "switchover", redisv1.ConditionSwitchover, from, to)
 	instance.Status.CurrentPrimary = to
 	instance.Status.TargetPrimary = ""
 	r.setSwitchoverCondition(instance, metav1.ConditionFalse, "Completed", "The primary moved to "+to)
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}
+	logCompleted(ctx)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "SwitchoverCompleted", "Switchover",
 		"Moved the primary from %s to %s", from, to)
 	return nil

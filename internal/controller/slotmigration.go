@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,11 +18,16 @@ import (
 	"github.com/MrPickle311/redis-operator/internal/instancemanager"
 )
 
-// reshardBudget is how long one reconcile moves slots.
+// reshardBudget is how long one reconcile moves slots. Short, as the status,
+// with the slots of every shard, is written once per reconcile; the next one
+// follows a second later, see reshardRequeue.
 //
 // ponytail: other RedisClusters wait meanwhile; add MaxConcurrentReconciles
 // when one operator runs many clusters.
-const reshardBudget = 20 * time.Second
+const reshardBudget = 5 * time.Second
+
+// reshardRequeue is when the next reconcile goes on with the slots.
+const reshardRequeue = time.Second
 
 // shardsIdle reports whether a slot may move while the first total shards
 // are as they are: every instance Ready and no master moving. Ready of a
@@ -86,7 +92,7 @@ func (r *RedisClusterReconciler) moveSlots(ctx context.Context, cluster *redisv1
 		setMigrating(cluster, metav1.ConditionTrue, "Moving",
 			fmt.Sprintf("Moving slot %d from %s to %s; %d slots to move", move.slot, move.from.pod, move.to.pod, toMove))
 
-		if err := r.moveSlot(ctx, move, deadline); err != nil {
+		if err := r.moveSlot(ctx, cluster, move, deadline); err != nil {
 			if strings.Contains(err.Error(), "BUSYKEY") {
 				setMigrating(cluster, metav1.ConditionFalse, "Blocked", fmt.Sprintf("Moving slot %d from %s to %s "+
 					"stopped: %s; delete the key on one of them", move.slot, move.from.pod, move.to.pod, err))
@@ -103,7 +109,7 @@ func (r *RedisClusterReconciler) moveSlots(ctx context.Context, cluster *redisv1
 // it, the source sends its keys, and both take the new owner, the target
 // first. Each step does nothing when done already, so a move cut short by
 // the deadline, a restart or a failover goes on from where it is.
-func (r *RedisClusterReconciler) moveSlot(ctx context.Context, move slotMove, deadline time.Time) error {
+func (r *RedisClusterReconciler) moveSlot(ctx context.Context, cluster *redisv1.RedisCluster, move slotMove, deadline time.Time) error {
 	im := r.InstanceManager
 	from, to := move.from, move.to
 	if _, err := im.Cluster(ctx, to.host, "importing",
@@ -130,6 +136,7 @@ func (r *RedisClusterReconciler) moveSlot(ctx context.Context, move slotMove, de
 		}
 	}
 	logf.FromContext(ctx).Info("Moved slot", "slot", move.slot, "from", from.pod, "to", to.pod)
+	slotsMovedTotal.WithLabelValues(cluster.Namespace, cluster.Name, strconv.Itoa(int(from.shard)), strconv.Itoa(int(to.shard))).Inc()
 	return nil
 }
 

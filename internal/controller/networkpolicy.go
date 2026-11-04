@@ -125,7 +125,8 @@ func (r *RedisInstanceReconciler) instancesWithNetworkPolicy(ctx context.Context
 // networkPolicySpec lets in the clients of allowFrom and the other instances
 // on the port of Redis, the operator on the API of the Instance Manager,
 // anyone on its probes, which come from the kubelet on the node and change
-// nothing, and in a shard the nodes of the cluster on the cluster bus.
+// nothing, and on the exporter of spec.monitoring, and in a shard the nodes
+// of the cluster on the cluster bus.
 func networkPolicySpec(instance *redisv1.RedisInstance, operatorNamespace string) networkingv1.NetworkPolicySpec {
 	// TCP like the default of the API server: CreateOrUpdate must see no change.
 	port := func(number int) []networkingv1.NetworkPolicyPort {
@@ -145,6 +146,10 @@ func networkPolicySpec(instance *redisv1.RedisInstance, operatorNamespace string
 			}}},
 			{Ports: port(instancemanager.ProbePort)},
 		},
+	}
+	// Prometheus may live anywhere; the exporter only reports numbers.
+	if instance.Spec.Monitoring.Enabled {
+		spec.Ingress = append(spec.Ingress, networkingv1.NetworkPolicyIngressRule{Ports: port(exporterPort)})
 	}
 	// The nodes of a Redis Cluster talk on the cluster bus, every one with
 	// every other one, across the shards, and MIGRATE sends keys to the port

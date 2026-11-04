@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -49,6 +50,8 @@ type RedisClusterReconciler struct {
 	Scheme *runtime.Scheme
 	// InstanceManager builds the cluster through the Instance Managers.
 	InstanceManager *imclient.Client
+	// Recorder emits the Events of RedisClusters.
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=redis.operator.com,resources=redisclusters,verbs=get;list;watch;create;update;patch;delete
@@ -126,10 +129,23 @@ func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	setClusterStatus(&cluster, nodes, total, shardsReady)
+	// An Event per change of Migrating marks when a resharding starts, waits and ends.
+	before := meta.FindStatusCondition(oldStatus.Conditions, redisv1.ConditionMigrating)
+	if now := meta.FindStatusCondition(cluster.Status.Conditions, redisv1.ConditionMigrating); now != nil &&
+		(before != nil && before.Reason != now.Reason || before == nil && now.Reason != "Balanced") {
+		eventType := corev1.EventTypeNormal
+		if now.Reason == "Blocked" {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Eventf(&cluster, nil, eventType, "Resharding"+now.Reason, "Reshard", "%s", now.Message)
+	}
 	if !equality.Semantic.DeepEqual(oldStatus, &cluster.Status) {
 		if err := r.Status().Update(ctx, &cluster); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+	if cluster.Status.SlotMigration != nil {
+		return ctrl.Result{RequeueAfter: reshardRequeue}, nil
 	}
 	if len(actions) > 0 || !meta.IsStatusConditionTrue(cluster.Status.Conditions, redisv1.ConditionReady) {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -187,6 +203,7 @@ func (r *RedisClusterReconciler) ensureShard(ctx context.Context, cluster *redis
 		spec.Affinity = cluster.Spec.Affinity
 		spec.TLS = cluster.Spec.TLS
 		spec.NetworkPolicy = cluster.Spec.NetworkPolicy
+		spec.Monitoring = cluster.Spec.Monitoring
 		return ctrl.SetControllerReference(cluster, child, r.Scheme)
 	})
 	if result != controllerutil.OperationResultNone {

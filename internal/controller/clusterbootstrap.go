@@ -46,8 +46,17 @@ func planCluster(nodes []clusterNode, shards, perShard int32, assigned map[int32
 		return nil // every node must answer before the cluster changes
 	}
 	var actions []clusterAction
-	// One node meets every other one; gossip tells the rest.
-	if slices.ContainsFunc(nodes, func(n clusterNode) bool { return len(n.status.Nodes) < len(nodes) }) {
+	// One node meets every other one; gossip tells the rest. Also when a node
+	// cannot reach one that runs: after every Pod restarted, each node knows
+	// the others by their old addresses, and a MEET by DNS name gives the new
+	// one to the ID it knows.
+	live := map[string]bool{}
+	for _, node := range nodes {
+		live[node.status.NodeID] = true
+	}
+	if slices.ContainsFunc(nodes, func(n clusterNode) bool {
+		return len(n.status.Nodes) < len(nodes) || slices.ContainsFunc(n.status.Unreachable, func(id string) bool { return live[id] })
+	}) {
 		for _, node := range nodes[1:] {
 			actions = append(actions, clusterAction{nodes[0].host, "meet", instancemanager.ClusterRequest{Host: node.host}})
 		}
@@ -72,7 +81,8 @@ func planCluster(nodes []clusterNode, shards, perShard int32, assigned map[int32
 			continue
 		}
 		for _, node := range members {
-			if node.status.NodeID != master.status.NodeID && len(node.status.Slots) == 0 && node.status.MasterID != master.status.NodeID {
+			if node.status.NodeID != master.status.NodeID && len(node.status.Slots) == 0 &&
+				(node.status.MasterID != master.status.NodeID || node.status.StaleMaster) {
 				actions = append(actions, clusterAction{node.host, "replicate",
 					instancemanager.ClusterRequest{NodeID: master.status.NodeID}})
 			}

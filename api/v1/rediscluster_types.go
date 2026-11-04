@@ -89,6 +89,11 @@ type RedisClusterSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	NetworkPolicy NetworkPolicySpec `json:"networkPolicy,omitzero"`
+
+	// Monitoring adds a Prometheus exporter to every Pod of every shard.
+	// +kubebuilder:default={}
+	// +optional
+	Monitoring MonitoringSpec `json:"monitoring,omitzero"`
 }
 
 // RedisClusterStatus defines the observed state of RedisCluster.

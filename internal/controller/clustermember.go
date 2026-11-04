@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -104,6 +105,7 @@ func (r *RedisInstanceReconciler) startClusterFailover(ctx context.Context, inst
 	instance.Status.TargetPrimary = target
 	r.setSwitchoverCondition(instance, metav1.ConditionTrue, "InProgress",
 		fmt.Sprintf("Failing over from %s to %s", instance.Status.CurrentPrimary, target))
+	startOperation(instance, target)
 	logf.FromContext(ctx).Info("Started cluster failover", "from", instance.Status.CurrentPrimary, "to", target)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "Switchover", "Switchover",
 		"Failing over from %s to %s", instance.Status.CurrentPrimary, target)
@@ -113,12 +115,19 @@ func (r *RedisInstanceReconciler) startClusterFailover(ctx context.Context, inst
 // finishClusterFailover ends the failover in status.targetPrimary once target
 // is the master, or gives up after switchoverTimeout: Redis drops a manual
 // failover that did not finish in 5 seconds.
-func (r *RedisInstanceReconciler) finishClusterFailover(instance *redisv1.RedisInstance) {
+func (r *RedisInstanceReconciler) finishClusterFailover(ctx context.Context, instance *redisv1.RedisInstance) {
 	target := instance.Status.TargetPrimary
 	if target == "" {
 		return
 	}
 	if instance.Status.CurrentPrimary == target {
+		// The master before is gone from the status, but named by the condition.
+		var from string
+		if c := meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionSwitchover); c != nil {
+			_, rest, _ := strings.Cut(c.Message, "from ")
+			from, _, _ = strings.Cut(rest, " ")
+		}
+		operationLog(instance, "switchover", redisv1.ConditionSwitchover, from, target)(ctx)
 		instance.Status.TargetPrimary = ""
 		r.setSwitchoverCondition(instance, metav1.ConditionFalse, "Completed", "The master moved to "+target)
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "SwitchoverCompleted", "Switchover",
@@ -180,7 +189,7 @@ func (r *RedisInstanceReconciler) reconcileShardScaleDown(ctx context.Context, i
 func (r *RedisInstanceReconciler) reconcileShard(ctx context.Context, instance *redisv1.RedisInstance,
 	oldStatus *redisv1.RedisInstanceStatus, readyCount int32, ready map[int32]bool, outdated []int32,
 	healthy, memoryUnlimited bool) (ctrl.Result, error) {
-	r.finishClusterFailover(instance)
+	r.finishClusterFailover(ctx, instance)
 	if err := r.reconcileShardSwitchover(ctx, instance); err != nil {
 		return ctrl.Result{}, err
 	}

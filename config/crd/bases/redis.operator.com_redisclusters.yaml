@@ -126,6 +126,19 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              monitoring:
+                default: {}
+                description: Monitoring adds a Prometheus exporter to every Pod of
+                  every shard.
+                properties:
+                  enabled:
+                    description: Enabled adds the sidecar; a change rolls the Pods.
+                    type: boolean
+                  image:
+                    default: oliver006/redis_exporter:v1.94.0
+                    description: Image of redis_exporter.
+                    type: string
+                type: object
               networkPolicy:
                 default: {}
                 description: NetworkPolicy lets the operator isolate the nodes on

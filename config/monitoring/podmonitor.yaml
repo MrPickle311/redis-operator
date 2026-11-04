@@ -1,0 +1,27 @@
+# The redis_exporter sidecars of spec.monitoring, in every namespace. Pods
+# without the sidecar have no port metrics and give no target.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: redis-exporter
+  namespace: redis-operator-system
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchExpressions:
+    - {key: redis.operator.com/instance, operator: Exists}
+  podMetricsEndpoints:
+  - port: metrics
+    # Often enough for the dashboards to show a switchover, which takes seconds.
+    interval: 5s
+    relabelings:
+    # instance is the address of the target in Prometheus, so other names.
+    - sourceLabels: [__meta_kubernetes_pod_label_redis_operator_com_instance]
+      targetLabel: redis_instance
+    - sourceLabels: [__meta_kubernetes_pod_label_redis_operator_com_cluster]
+      targetLabel: redis_cluster
+    - sourceLabels: [__meta_kubernetes_pod_label_redis_operator_com_role]
+      targetLabel: role

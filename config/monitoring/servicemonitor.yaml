@@ -1,0 +1,29 @@
+# The metrics of the operator: controller-runtime, and the status of every
+# RedisInstance and RedisCluster (redis_operator_*).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: redis-operator-controller-manager
+  namespace: redis-operator-system
+  labels:
+    release: kube-prometheus-stack # the serviceMonitorSelector of your Prometheus
+spec:
+  endpoints:
+  - path: /metrics
+    # Often enough for the dashboards to show a switchover, which takes seconds.
+    interval: 5s
+    port: https
+    scheme: https
+    # The labels namespace and pod of redis_operator_* name the Redis Pods, not
+    # the operator.
+    honorLabels: true
+    # The metrics endpoint checks the token of Prometheus, see prometheus-rbac.yaml.
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    # The operator serves a self-signed certificate; see config/prometheus for
+    # one from cert-manager.
+    tlsConfig:
+      insecureSkipVerify: true
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: redis-operator

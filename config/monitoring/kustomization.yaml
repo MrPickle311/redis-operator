@@ -1,0 +1,25 @@
+# The operator with monitoring for the Prometheus Operator and Grafana, e.g.
+# kube-prometheus-stack:
+#   kustomize build config/monitoring | kubectl apply --server-side -f -
+# Edit the label release and the ServiceAccount of Prometheus to match yours.
+resources:
+- ../default
+- servicemonitor.yaml
+- podmonitor.yaml
+- prometheus-rbac.yaml
+
+# The Grafana sidecar of kube-prometheus-stack loads every ConfigMap with
+# this label, from any namespace.
+configMapGenerator:
+- name: redis-operator-dashboards
+  namespace: redis-operator-system
+  files:
+  - dashboards/redis-instance.json
+  - dashboards/redis-cluster.json
+  options:
+    disableNameSuffixHash: true
+    labels:
+      grafana_dashboard: "1"
+    # The folder in Grafana, next to the other dashboards of databases.
+    annotations:
+      k8s-sidecar-target-directory: databases

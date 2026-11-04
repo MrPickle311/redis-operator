@@ -154,6 +154,7 @@ func (r *RedisInstanceReconciler) startFailover(ctx context.Context, instance *r
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "FailoverStarted", "Failover",
 		"Promoting %s: %s", target, reason)
+	startOperation(instance, target)
 	logf.FromContext(ctx).Info("Started failover", "from", from, "to", target, "epoch", instance.Status.PrimaryEpoch)
 	return nil
 }
@@ -178,6 +179,7 @@ func (r *RedisInstanceReconciler) continueFailover(ctx context.Context, instance
 	if _, err := r.InstanceManager.Promote(ctx, podFQDN(instance, targetOrdinal), epoch); err != nil {
 		return err
 	}
+	logCompleted := operationLog(instance, "failover", redisv1.ConditionFailover, from, to)
 	instance.Status.CurrentPrimary = to
 	instance.Status.TargetPrimary = ""
 	// The reason of the failover stays, after "Promoting <target>: ".
@@ -187,6 +189,7 @@ func (r *RedisInstanceReconciler) continueFailover(ctx context.Context, instance
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}
+	logCompleted(ctx)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "FailoverCompleted", "Failover",
 		"Promoted %s in place of %s", to, from)
 	return nil

@@ -53,6 +53,13 @@ type ClusterStatus struct {
 	// Nodes are the IDs of the nodes this one knows, itself included. A node
 	// still in the handshake of CLUSTER MEET has a temporary ID and is left out.
 	Nodes []string `json:"nodes"`
+	// StaleMaster is set when this replica replicates from an address its
+	// master no longer has: Redis takes a new address of the master into the
+	// replication only from the master itself, not from the gossip of others.
+	StaleMaster bool `json:"staleMaster,omitempty"`
+	// Unreachable are the nodes this one flags fail or fail?: down, or known
+	// by an address they no longer have.
+	Unreachable []string `json:"unreachable,omitempty"`
 	// Migrating are the slots this master moves out, to the node of the value.
 	Migrating map[int]string `json:"migrating,omitempty"`
 	// Importing are the slots this master takes in, from the node of the value.
@@ -195,13 +202,41 @@ func readClusterStatus(ctx context.Context, rdb *redis.Client) (*ClusterStatus, 
 		if !slices.Contains(node.flags, "handshake") {
 			status.Nodes = append(status.Nodes, node.id)
 		}
+		if slices.Contains(node.flags, "fail") || slices.Contains(node.flags, "fail?") {
+			status.Unreachable = append(status.Unreachable, node.id)
+		}
 	}
 	for line := range strings.Lines(info) {
 		if state, ok := strings.CutPrefix(strings.TrimSpace(line), "cluster_state:"); ok {
 			status.State = state
 		}
 	}
+	if master := slices.IndexFunc(nodes, func(n clusterNode) bool { return n.id == self.master }); master >= 0 {
+		replication, err := rdb.Info(ctx, "replication").Result()
+		if err != nil {
+			return nil, err
+		}
+		// The IP only: with TLS, CLUSTER NODES gives port 0.
+		host := infoValue(replication, "master_host")
+		status.StaleMaster = host != "" && host != nodeIP(nodes[master])
+	}
 	return status, nil
+}
+
+// nodeIP returns the IP of the address of a node in CLUSTER NODES.
+func nodeIP(n clusterNode) string {
+	host, _, _ := net.SplitHostPort(n.addr)
+	return host
+}
+
+// infoValue returns the value of a "field:value" line of INFO.
+func infoValue(info, field string) string {
+	for line := range strings.Lines(info) {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), field+":"); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // clusterHandlers serves the commands the operator builds and repairs a Redis
@@ -261,8 +296,8 @@ func clusterMeet(ctx context.Context, rdb *redis.Client, req ClusterRequest) (bo
 	if err != nil {
 		return false, err
 	}
-	addr := net.JoinHostPort(ips[0], strconv.Itoa(redisPort))
-	if slices.ContainsFunc(parseClusterNodes(text), func(n clusterNode) bool { return n.addr == addr }) {
+	// The IP only: with TLS, CLUSTER NODES gives port 0.
+	if slices.ContainsFunc(parseClusterNodes(text), func(n clusterNode) bool { return nodeIP(n) == ips[0] }) {
 		return false, nil
 	}
 	return true, rdb.ClusterMeet(ctx, ips[0], strconv.Itoa(redisPort)).Err()
@@ -294,9 +329,10 @@ func clusterReplicate(ctx context.Context, rdb *redis.Client, req ClusterRequest
 	if err != nil {
 		return false, err
 	}
-	if status.MasterID == req.NodeID {
+	if status.MasterID == req.NodeID && !status.StaleMaster {
 		return false, nil
 	}
+	// Again for the same master: the replication takes its current address.
 	return true, rdb.ClusterReplicate(ctx, req.NodeID).Err()
 }
 

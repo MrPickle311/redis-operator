@@ -155,7 +155,7 @@ var _ = Describe("RedisCluster changing shards", func() {
 })
 
 func reconcileCluster(name string) error {
-	r := &RedisClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+	r := &RedisClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: events.NewFakeRecorder(100)}
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: objectKey(name)})
 	return err
 }
@@ -445,6 +445,48 @@ func TestPlanCluster(t *testing.T) {
 			assigned: map[int32]bool{0: true},
 			want: []clusterAction{
 				{"b-1.svc", "replicate", instancemanager.ClusterRequest{NodeID: "b0"}},
+			},
+		},
+		{
+			name: "meets the others again when a node cannot reach one that runs, e.g. after every Pod restarted",
+			nodes: func() []clusterNode {
+				n := nodes(clusterNodeStatus("a0", all, "", "0-8191"), clusterNodeStatus("a1", all, "a0"),
+					clusterNodeStatus("b0", all, "", "8192-16383"), clusterNodeStatus("b1", all, "b0"))
+				n[1].status.Unreachable = []string{"a0", "b0"}
+				return n
+			}(),
+			assigned: map[int32]bool{0: true, 1: true},
+			want: []clusterAction{
+				{"a-0.svc", "meet", instancemanager.ClusterRequest{Host: "a-1.svc"}},
+				{"a-0.svc", "meet", instancemanager.ClusterRequest{Host: "b-0.svc"}},
+				{"a-0.svc", "meet", instancemanager.ClusterRequest{Host: "b-1.svc"}},
+			},
+		},
+		{
+			name: "a replica replicates its master again when it still uses the old address of the master",
+			nodes: func() []clusterNode {
+				n := nodes(clusterNodeStatus("a0", all, "", "0-8191"), clusterNodeStatus("a1", all, "a0"),
+					clusterNodeStatus("b0", all, "", "8192-16383"), clusterNodeStatus("b1", all, "b0"))
+				n[3].status.StaleMaster = true
+				return n
+			}(),
+			assigned: map[int32]bool{0: true, 1: true},
+			want: []clusterAction{
+				{"b-1.svc", "replicate", instancemanager.ClusterRequest{NodeID: "b0"}},
+			},
+		},
+		{
+			name: "forgets, not meets, a node that cannot be reached because it is gone",
+			nodes: func() []clusterNode {
+				n := nodes(clusterNodeStatus("a0", withOld, "", "0-8191"), clusterNodeStatus("a1", all, "a0"),
+					clusterNodeStatus("b0", withOld, "", "8192-16383"), clusterNodeStatus("b1", all, "b0"))
+				n[0].status.Unreachable = []string{"old"}
+				return n
+			}(),
+			assigned: map[int32]bool{0: true, 1: true},
+			want: []clusterAction{
+				{"a-0.svc", "forget", instancemanager.ClusterRequest{NodeID: "old"}},
+				{"b-0.svc", "forget", instancemanager.ClusterRequest{NodeID: "old"}},
 			},
 		},
 		{

@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -221,6 +222,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Status of every RedisInstance and RedisCluster as metrics, see docs/architecture.md#monitoring.
+	metrics.Registry.MustRegister(controller.StatusCollector{Reader: mgr.GetClient()})
+
 	instanceManager, err := imclient.New(ca)
 	if err != nil {
 		setupLog.Error(err, "Failed to create Instance Manager client")
@@ -233,7 +237,7 @@ func main() {
 		OperatorImage:     operatorImage,
 		CA:                ca,
 		InstanceManager:   instanceManager,
-		Recorder:          mgr.GetEventRecorder("redis-operator"),
+		Recorder:          controller.CountingRecorder{EventRecorder: mgr.GetEventRecorder("redis-operator")},
 		OperatorNamespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisinstance")
@@ -242,7 +246,7 @@ func main() {
 	if err := (&controller.RedisUserReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("redis-operator"),
+		Recorder: controller.CountingRecorder{EventRecorder: mgr.GetEventRecorder("redis-operator")},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "redisuser")
 		os.Exit(1)
@@ -265,6 +269,7 @@ func main() {
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		InstanceManager: instanceManager,
+		Recorder:        controller.CountingRecorder{EventRecorder: mgr.GetEventRecorder("redis-operator")},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "rediscluster")
 		os.Exit(1)

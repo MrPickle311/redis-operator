@@ -41,6 +41,7 @@ spec:
   networkPolicy:
     allowFrom:
     - podSelector: {matchLabels: {role: client}}
+  monitoring: {enabled: true, image: %[4]s}
 ---
 apiVersion: redis.operator.com/v1
 kind: RedisUser
@@ -49,7 +50,7 @@ spec:
   targetRef: {kind: RedisCluster, name: %[1]s}
   authentication: {generate: true}
   acl: {rules: ["~*", "+@all"]}
-`, rcName, rcNamespace, redisImage)
+`, rcName, rcNamespace, redisImage, exporterImage)
 
 // rcClient is a Pod with redis-cli, the CA of the cluster and the password of
 // the user app; role tells whether the NetworkPolicy lets it in. It runs
@@ -201,6 +202,7 @@ var _ = Describe("RedisCluster", Ordered, func() {
 
 	BeforeAll(func() {
 		Expect(loadImageIntoKind(redisImage)).To(Succeed())
+		Expect(loadImageIntoKind(exporterImage)).To(Succeed())
 		Expect(ensureRestrictedNamespace(rcNamespace)).To(Succeed())
 		Expect(kubectlApply(rcManifest)).To(Succeed())
 		Eventually(clusterReady).Should(Equal("ok True"))
@@ -241,6 +243,24 @@ var _ = Describe("RedisCluster", Ordered, func() {
 				Expect(cli("client", nodeFQDN(shard+"-"+ordinal), "ping")).To(Equal("PONG"), "%s-%s", shard, ordinal)
 			}
 		}
+	})
+
+	It("reports shards and slots to Prometheus: the exporter of every node, past the NetworkPolicy, and the operator", func() {
+		Eventually(func(g Gomega) {
+			metrics, err := kubectl("get", "--raw", "/api/v1/namespaces/"+rcNamespace+"/pods/rc-0-0:9121/proxy/metrics")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(metrics).To(ContainSubstring("redis_up 1"))
+		}).Should(Succeed())
+		Eventually(func(g Gomega) {
+			metrics, err := operatorMetrics()
+			g.Expect(err).NotTo(HaveOccurred())
+			for shard, slots := range []int{5461, 5461, 5462} {
+				g.Expect(metrics).To(ContainSubstring(fmt.Sprintf(
+					`redis_operator_cluster_shard_slots{namespace="%s",redis_cluster="%s",shard="%d"} %d`, rcNamespace, rcName, shard, slots)))
+			}
+			g.Expect(metrics).To(ContainSubstring(fmt.Sprintf(
+				`redis_operator_cluster_slot_block_shard{block="16128-16383",namespace="%s",redis_cluster="%s"} 2`, rcNamespace, rcName)))
+		}).Should(Succeed())
 	})
 
 	It("lets in only the clients of the NetworkPolicy", func() {
@@ -464,6 +484,16 @@ var _ = Describe("RedisCluster", Ordered, func() {
 		Eventually(func() string { return primaryOf("rc-2") }).Should(Equal(promoted))
 	})
 
+	It("counts every moved slot as a metric of the operator, by the shards it went between", func() {
+		Eventually(func(g Gomega) {
+			metrics, err := operatorMetrics()
+			g.Expect(err).NotTo(HaveOccurred())
+			// The operator restarted meanwhile, so the count starts from that.
+			g.Expect(metrics).To(MatchRegexp(fmt.Sprintf(
+				`redis_operator_slots_moved_total\{from_shard="\d",namespace="%s",redis_cluster="%s",to_shard="3"\} [1-9]`, rcNamespace, rcName)))
+		}).Should(Succeed())
+	})
+
 	It("moves the keys with one Secret of the cluster, over TLS (decision 2)", func() {
 		for _, shard := range []string{"rc-0", "rc-1", "rc-2", "rc-3"} {
 			Expect(get("pod", primaryOf(shard), "{.spec.volumes[*].secret.secretName}")).To(ContainSubstring("rc-internal-auth"))
@@ -532,5 +562,18 @@ var _ = Describe("RedisCluster", Ordered, func() {
 		}
 		expectAllKeys()
 		expectOneSlotAtATime("sampler-shrink")
+	})
+
+	It("comes back on its own after every Pod restarted at once, each with a new address", func() {
+		_, err := kubectl("delete", "pod", "-n", rcNamespace, "-l", "redis.operator.com/cluster="+rcName, "--wait=false")
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(clusterReady, 5*time.Minute).Should(Equal("ok True"))
+		// Every replica replicates from the address its master has now.
+		for _, shard := range []string{"rc-0", "rc-1", "rc-2"} {
+			Eventually(func() string {
+				return cli("client", nodeFQDN(replicaOf(shard)), "info", "replication")
+			}, 2*time.Minute).Should(ContainSubstring("master_link_status:up"), shard)
+		}
+		expectAllKeys()
 	})
 })

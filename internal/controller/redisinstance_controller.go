@@ -204,6 +204,9 @@ func buildRedisPod(instance *redisv1.RedisInstance, ordinal int32, operatorImage
 		redis := &pod.Spec.Containers[0]
 		redis.Ports = append(redis.Ports, corev1.ContainerPort{ContainerPort: clusterBusPort, Name: "cluster-bus"})
 	}
+	if instance.Spec.Monitoring.Enabled {
+		pod.Spec.Containers = append(pod.Spec.Containers, exporterContainer(instance, controllerMount, containerSecurity))
+	}
 	pod.Annotations = map[string]string{annotationSpecHash: specHash(&pod.Spec)}
 	return pod
 }
