@@ -124,7 +124,7 @@ func (r *RedisInstanceReconciler) reconcileCordon(ctx context.Context, instance 
 	target := instancePodName(instance, best)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "PrimaryNodeCordoned", "Switchover",
 		"Switching over to %s: node %s of the primary is cordoned", target, node)
-	return r.startSwitchover(ctx, instance, target)
+	return r.startSwitchover(ctx, instance, target, "node "+node+" of the primary is cordoned")
 }
 
 // cordonedNode returns the node of the Pod and whether it takes no new Pods.

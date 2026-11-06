@@ -42,12 +42,14 @@ func (r *RedisInstanceReconciler) reconcileSwitchover(ctx context.Context, insta
 			if err := r.Status().Update(ctx, instance); err != nil {
 				return ctrl.Result{}, err
 			}
+			endOperation(instance, "switchover", "rejected", "", "",
+				"from", instance.Status.CurrentPrimary, "to", target, "reason", reason)(ctx)
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "SwitchoverRejected", "Switchover",
 				"Cannot switch over to %s: %s", target, reason)
 			return ctrl.Result{}, nil
 		}
 		// startSwitchover writes the handled request with the new epoch.
-		if err := r.startSwitchover(ctx, instance, target); err != nil {
+		if err := r.startSwitchover(ctx, instance, target, "asked for with "+redisv1.AnnotationPromote); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -112,7 +114,7 @@ func (r *RedisInstanceReconciler) switchoverRejection(ctx context.Context, insta
 // startSwitchover records the target and takes a new epoch. It writes the
 // status before any Instance Manager sees the epoch, and the update fails on a
 // stale resourceVersion, so two operator leaders cannot both take it.
-func (r *RedisInstanceReconciler) startSwitchover(ctx context.Context, instance *redisv1.RedisInstance, target string) error {
+func (r *RedisInstanceReconciler) startSwitchover(ctx context.Context, instance *redisv1.RedisInstance, target, reason string) error {
 	instance.Status.TargetPrimary = target
 	instance.Status.PrimaryEpoch++
 	r.setSwitchoverCondition(instance, metav1.ConditionTrue, "InProgress",
@@ -120,7 +122,7 @@ func (r *RedisInstanceReconciler) startSwitchover(ctx context.Context, instance 
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}
-	startOperation(instance, target)
+	startOperation(instance, target, reason)
 	logf.FromContext(ctx).Info("Started switchover", "from", instance.Status.CurrentPrimary, "to", target,
 		"epoch", instance.Status.PrimaryEpoch)
 	return nil
@@ -130,7 +132,7 @@ func (r *RedisInstanceReconciler) startSwitchover(ctx context.Context, instance 
 // same reconcile then demotes the old primary, which also lifts its fence.
 func (r *RedisInstanceReconciler) finishSwitchover(ctx context.Context, instance *redisv1.RedisInstance) error {
 	from, to := instance.Status.CurrentPrimary, instance.Status.TargetPrimary
-	logCompleted := operationLog(instance, "switchover", redisv1.ConditionSwitchover, from, to)
+	logCompleted := endOperation(instance, "switchover", "completed", to, redisv1.ConditionSwitchover, "from", from, "to", to)
 	instance.Status.CurrentPrimary = to
 	instance.Status.TargetPrimary = ""
 	r.setSwitchoverCondition(instance, metav1.ConditionFalse, "Completed", "The primary moved to "+to)
@@ -153,10 +155,13 @@ func (r *RedisInstanceReconciler) abortSwitchover(ctx context.Context, instance 
 	target := instance.Status.TargetPrimary
 	instance.Status.TargetPrimary = ""
 	message := fmt.Sprintf("%s did not catch up with the primary within %s", target, switchoverTimeout)
+	logFailed := endOperation(instance, "switchover", "failed", target, redisv1.ConditionSwitchover,
+		"from", instance.Status.CurrentPrimary, "to", target, "reason", message)
 	r.setSwitchoverCondition(instance, metav1.ConditionFalse, "Failed", message)
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return err
 	}
+	logFailed(ctx)
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "SwitchoverFailed", "Switchover", message)
 	return nil
 }

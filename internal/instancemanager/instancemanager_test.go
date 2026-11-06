@@ -1,6 +1,7 @@
 package instancemanager
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -8,8 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestRunReturnsTheExitCodeOfTheProcess(t *testing.T) {
@@ -62,6 +66,43 @@ func TestCopySelfWritesAnExecutableCopy(t *testing.T) {
 	}
 	if got.Mode().Perm()&0o111 == 0 {
 		t.Errorf("copy mode = %v, want executable", got.Mode())
+	}
+	if script, err := os.ReadFile(filepath.Join(filepath.Dir(dest), KeysScript)); err != nil || !bytes.Equal(script, keysScript) {
+		t.Errorf("%s next to the copy: %v", KeysScript, err)
+	}
+}
+
+// TestKeysScriptOnRedis needs a real Redis, like TestSyncACLOnRedis; one with
+// --cluster-enabled yes and every slot also checks allow-cross-slot-keys.
+func TestKeysScriptOnRedis(t *testing.T) {
+	addr := os.Getenv("REDIS_TEST_ADDR")
+	if addr == "" {
+		t.Skip("REDIS_TEST_ADDR not set")
+	}
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	defer func() { _ = rdb.Close() }()
+	if err := rdb.FlushAll(ctx).Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"a", "b", "c"} {
+		rdb.Set(ctx, "s:"+key, "x", 0)
+	}
+	rdb.RPush(ctx, "l", "x")
+	rdb.Set(ctx, "big", strings.Repeat("x", 20000), 0)
+
+	result, err := rdb.Eval(ctx, string(keysScript), nil).StringSlice()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]bool{}
+	for i := 0; i+1 < len(result); i += 2 {
+		counts[result[i]] = true
+	}
+	for _, want := range []string{"string <1KB", "list <1KB", "string 10-100KB"} {
+		if !counts[want] {
+			t.Errorf("keys.lua = %v, want a count for %q", result, want)
+		}
 	}
 }
 

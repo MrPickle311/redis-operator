@@ -109,10 +109,11 @@ func (r *RedisInstanceReconciler) reconcileVolumeFailures(ctx context.Context, i
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "PrimaryVolumeFailing", "Switchover",
 			"Switching over to %s: PVC %s of the primary %s is %s", target, claim, name, volumeOf(instance, ordinal).State)
 		if clusterOf(instance) != "" {
-			return r.startClusterFailover(ctx, instance, target)
+			return r.startClusterFailover(ctx, instance, target, "PVC "+claim+" of the master is "+string(volumeOf(instance, ordinal).State))
 		}
-		return r.startSwitchover(ctx, instance, target)
+		return r.startSwitchover(ctx, instance, target, "PVC "+claim+" of the primary is "+string(volumeOf(instance, ordinal).State))
 	case deleteReplicaPod:
+		startVolumeOperation(ctx, instance, ordinal, "volume replaced", "PVC "+claim+" is being deleted")
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "ReplicaVolumeFailing", "DeletePod",
 			"Deleting Pod %s: its PVC %s is being deleted, a new one follows", name, claim)
 		logger.Info("Deleting a replica whose PVC is being deleted", "pod", name, "pvc", claim)
@@ -126,6 +127,7 @@ func (r *RedisInstanceReconciler) reconcileVolumeFailures(ctx context.Context, i
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "ReplicaVolumeFailing", "Recreate",
 			"Recreating %s on a new generated PVC: %s", name, why)
 		logger.Info("Recreating a replica whose PVC lost its volume", "pod", name, "pvc", claim)
+		startVolumeOperation(ctx, instance, ordinal, "volume replaced", why)
 		if err := r.moveToNewVolume(ctx, instance, ordinal); err != nil {
 			return err
 		}

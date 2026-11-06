@@ -149,7 +149,7 @@ var _ = Describe("RedisCluster changing shards", func() {
 		// Without an Instance Manager: reaching it would panic.
 		r := &RedisInstanceReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: &events.FakeRecorder{}}
 		shard := getInstance("rcf-0")
-		Expect(r.startClusterFailover(ctx, shard, "rcf-0-1")).To(Succeed())
+		Expect(r.startClusterFailover(ctx, shard, "rcf-0-1", "test")).To(Succeed())
 		Expect(getInstance("rcf-0").Status.TargetPrimary).To(BeEmpty())
 	})
 })

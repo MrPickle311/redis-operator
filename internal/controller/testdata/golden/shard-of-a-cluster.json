@@ -1,0 +1,645 @@
+{
+  "networkPolicy": {
+    "podSelector": {
+      "matchLabels": {
+        "redis.operator.com/instance": "store-1"
+      }
+    },
+    "ingress": [
+      {
+        "ports": [
+          {
+            "protocol": "TCP",
+            "port": 6379
+          }
+        ]
+      },
+      {
+        "ports": [
+          {
+            "protocol": "TCP",
+            "port": 6379
+          }
+        ],
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "redis.operator.com/instance": "store-1"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "ports": [
+          {
+            "protocol": "TCP",
+            "port": 8000
+          }
+        ],
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "redis-operator",
+                "control-plane": "controller-manager"
+              }
+            },
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "redis-operator-system"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "ports": [
+          {
+            "protocol": "TCP",
+            "port": 8001
+          }
+        ]
+      },
+      {
+        "ports": [
+          {
+            "protocol": "TCP",
+            "port": 16379
+          },
+          {
+            "protocol": "TCP",
+            "port": 6379
+          }
+        ],
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "redis.operator.com/cluster": "store"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "policyTypes": [
+      "Ingress"
+    ]
+  },
+  "pod-0": {
+    "metadata": {
+      "name": "store-1-0",
+      "namespace": "app",
+      "labels": {
+        "app.kubernetes.io/name": "redis",
+        "redis.operator.com/cluster": "store",
+        "redis.operator.com/instance": "store-1",
+        "redis.operator.com/role": "primary"
+      },
+      "annotations": {
+        "redis.operator.com/spec-hash": "99e902017d7d8001"
+      }
+    },
+    "spec": {
+      "volumes": [
+        {
+          "name": "controller",
+          "emptyDir": {}
+        },
+        {
+          "name": "kube-api-access",
+          "projected": {
+            "sources": [
+              {
+                "serviceAccountToken": {
+                  "path": "token"
+                }
+              },
+              {
+                "configMap": {
+                  "name": "kube-root-ca.crt",
+                  "items": [
+                    {
+                      "key": "ca.crt",
+                      "path": "ca.crt"
+                    }
+                  ]
+                }
+              },
+              {
+                "downwardAPI": {
+                  "items": [
+                    {
+                      "path": "namespace",
+                      "fieldRef": {
+                        "fieldPath": "metadata.namespace"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "internal-auth",
+          "secret": {
+            "secretName": "store-internal-auth"
+          }
+        },
+        {
+          "name": "data",
+          "persistentVolumeClaim": {
+            "claimName": "data-0"
+          }
+        },
+        {
+          "name": "certificates",
+          "secret": {
+            "secretName": "store-1-im-tls"
+          }
+        },
+        {
+          "name": "redis-tls",
+          "secret": {
+            "secretName": "store-1-server-tls"
+          }
+        }
+      ],
+      "initContainers": [
+        {
+          "name": "bootstrap",
+          "image": "operator:v1",
+          "command": [
+            "/manager",
+            "bootstrap",
+            "/controller/manager"
+          ],
+          "resources": {},
+          "volumeMounts": [
+            {
+              "name": "controller",
+              "mountPath": "/controller"
+            }
+          ],
+          "securityContext": {
+            "capabilities": {
+              "drop": [
+                "ALL"
+              ]
+            },
+            "allowPrivilegeEscalation": false
+          }
+        }
+      ],
+      "containers": [
+        {
+          "name": "redis",
+          "image": "redis:7.2",
+          "command": [
+            "/controller/manager",
+            "instance",
+            "run",
+            "--instance=store-1",
+            "--databases=16",
+            "--io-threads=1",
+            "--cluster",
+            "--tls"
+          ],
+          "ports": [
+            {
+              "name": "redis",
+              "containerPort": 6379
+            },
+            {
+              "name": "probes",
+              "containerPort": 8001
+            },
+            {
+              "name": "status",
+              "containerPort": 8000
+            },
+            {
+              "name": "cluster-bus",
+              "containerPort": 16379
+            }
+          ],
+          "env": [
+            {
+              "name": "POD_NAME",
+              "valueFrom": {
+                "fieldRef": {
+                  "fieldPath": "metadata.name"
+                }
+              }
+            },
+            {
+              "name": "POD_NAMESPACE",
+              "valueFrom": {
+                "fieldRef": {
+                  "fieldPath": "metadata.namespace"
+                }
+              }
+            }
+          ],
+          "resources": {
+            "limits": {
+              "memory": "256Mi"
+            }
+          },
+          "volumeMounts": [
+            {
+              "name": "data",
+              "mountPath": "/data"
+            },
+            {
+              "name": "controller",
+              "mountPath": "/controller"
+            },
+            {
+              "name": "certificates",
+              "readOnly": true,
+              "mountPath": "/certificates"
+            },
+            {
+              "name": "internal-auth",
+              "readOnly": true,
+              "mountPath": "/internal-auth"
+            },
+            {
+              "name": "kube-api-access",
+              "readOnly": true,
+              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount"
+            },
+            {
+              "name": "redis-tls",
+              "readOnly": true,
+              "mountPath": "/tls"
+            }
+          ],
+          "livenessProbe": {
+            "httpGet": {
+              "path": "/healthz",
+              "port": 8001
+            },
+            "periodSeconds": 5
+          },
+          "readinessProbe": {
+            "httpGet": {
+              "path": "/readyz",
+              "port": 8001
+            },
+            "periodSeconds": 5
+          },
+          "securityContext": {
+            "capabilities": {
+              "drop": [
+                "ALL"
+              ]
+            },
+            "allowPrivilegeEscalation": false
+          }
+        }
+      ],
+      "serviceAccountName": "store-1-instance",
+      "automountServiceAccountToken": false,
+      "securityContext": {
+        "runAsUser": 999,
+        "runAsNonRoot": true,
+        "fsGroup": 999,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "hostname": "store-1-0",
+      "subdomain": "store-1-hl",
+      "affinity": {
+        "podAntiAffinity": {
+          "requiredDuringSchedulingIgnoredDuringExecution": [
+            {
+              "labelSelector": {
+                "matchLabels": {
+                  "redis.operator.com/instance": "store-1"
+                }
+              },
+              "topologyKey": "kubernetes.io/hostname"
+            }
+          ]
+        }
+      }
+    },
+    "status": {}
+  },
+  "pod-1": {
+    "metadata": {
+      "name": "store-1-1",
+      "namespace": "app",
+      "labels": {
+        "app.kubernetes.io/name": "redis",
+        "redis.operator.com/cluster": "store",
+        "redis.operator.com/instance": "store-1",
+        "redis.operator.com/role": "replica"
+      },
+      "annotations": {
+        "redis.operator.com/spec-hash": "fce8346a62c0e7a8"
+      }
+    },
+    "spec": {
+      "volumes": [
+        {
+          "name": "controller",
+          "emptyDir": {}
+        },
+        {
+          "name": "kube-api-access",
+          "projected": {
+            "sources": [
+              {
+                "serviceAccountToken": {
+                  "path": "token"
+                }
+              },
+              {
+                "configMap": {
+                  "name": "kube-root-ca.crt",
+                  "items": [
+                    {
+                      "key": "ca.crt",
+                      "path": "ca.crt"
+                    }
+                  ]
+                }
+              },
+              {
+                "downwardAPI": {
+                  "items": [
+                    {
+                      "path": "namespace",
+                      "fieldRef": {
+                        "fieldPath": "metadata.namespace"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "internal-auth",
+          "secret": {
+            "secretName": "store-internal-auth"
+          }
+        },
+        {
+          "name": "data",
+          "persistentVolumeClaim": {
+            "claimName": "data-1"
+          }
+        },
+        {
+          "name": "certificates",
+          "secret": {
+            "secretName": "store-1-im-tls"
+          }
+        },
+        {
+          "name": "redis-tls",
+          "secret": {
+            "secretName": "store-1-server-tls"
+          }
+        }
+      ],
+      "initContainers": [
+        {
+          "name": "bootstrap",
+          "image": "operator:v1",
+          "command": [
+            "/manager",
+            "bootstrap",
+            "/controller/manager"
+          ],
+          "resources": {},
+          "volumeMounts": [
+            {
+              "name": "controller",
+              "mountPath": "/controller"
+            }
+          ],
+          "securityContext": {
+            "capabilities": {
+              "drop": [
+                "ALL"
+              ]
+            },
+            "allowPrivilegeEscalation": false
+          }
+        }
+      ],
+      "containers": [
+        {
+          "name": "redis",
+          "image": "redis:7.2",
+          "command": [
+            "/controller/manager",
+            "instance",
+            "run",
+            "--instance=store-1",
+            "--databases=16",
+            "--io-threads=1",
+            "--cluster",
+            "--tls"
+          ],
+          "ports": [
+            {
+              "name": "redis",
+              "containerPort": 6379
+            },
+            {
+              "name": "probes",
+              "containerPort": 8001
+            },
+            {
+              "name": "status",
+              "containerPort": 8000
+            },
+            {
+              "name": "cluster-bus",
+              "containerPort": 16379
+            }
+          ],
+          "env": [
+            {
+              "name": "POD_NAME",
+              "valueFrom": {
+                "fieldRef": {
+                  "fieldPath": "metadata.name"
+                }
+              }
+            },
+            {
+              "name": "POD_NAMESPACE",
+              "valueFrom": {
+                "fieldRef": {
+                  "fieldPath": "metadata.namespace"
+                }
+              }
+            }
+          ],
+          "resources": {
+            "limits": {
+              "memory": "256Mi"
+            }
+          },
+          "volumeMounts": [
+            {
+              "name": "data",
+              "mountPath": "/data"
+            },
+            {
+              "name": "controller",
+              "mountPath": "/controller"
+            },
+            {
+              "name": "certificates",
+              "readOnly": true,
+              "mountPath": "/certificates"
+            },
+            {
+              "name": "internal-auth",
+              "readOnly": true,
+              "mountPath": "/internal-auth"
+            },
+            {
+              "name": "kube-api-access",
+              "readOnly": true,
+              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount"
+            },
+            {
+              "name": "redis-tls",
+              "readOnly": true,
+              "mountPath": "/tls"
+            }
+          ],
+          "livenessProbe": {
+            "httpGet": {
+              "path": "/healthz",
+              "port": 8001
+            },
+            "periodSeconds": 5
+          },
+          "readinessProbe": {
+            "httpGet": {
+              "path": "/readyz",
+              "port": 8001
+            },
+            "periodSeconds": 5
+          },
+          "securityContext": {
+            "capabilities": {
+              "drop": [
+                "ALL"
+              ]
+            },
+            "allowPrivilegeEscalation": false
+          }
+        }
+      ],
+      "serviceAccountName": "store-1-instance",
+      "automountServiceAccountToken": false,
+      "securityContext": {
+        "runAsUser": 999,
+        "runAsNonRoot": true,
+        "fsGroup": 999,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "hostname": "store-1-1",
+      "subdomain": "store-1-hl",
+      "affinity": {
+        "podAntiAffinity": {
+          "requiredDuringSchedulingIgnoredDuringExecution": [
+            {
+              "labelSelector": {
+                "matchLabels": {
+                  "redis.operator.com/instance": "store-1"
+                }
+              },
+              "topologyKey": "kubernetes.io/hostname"
+            }
+          ]
+        }
+      }
+    },
+    "status": {}
+  },
+  "pvc-0": {
+    "metadata": {
+      "name": "store-1-0-data",
+      "namespace": "app",
+      "labels": {
+        "redis.operator.com/instance": "store-1"
+      }
+    },
+    "spec": {
+      "accessModes": [
+        "ReadWriteOnce"
+      ],
+      "resources": {
+        "requests": {
+          "storage": "1Gi"
+        }
+      }
+    },
+    "status": {}
+  },
+  "service-hl": {
+    "metadata": {
+      "name": "store-1-hl",
+      "namespace": "app"
+    },
+    "spec": {
+      "ports": [
+        {
+          "name": "redis",
+          "port": 6379,
+          "targetPort": 6379
+        }
+      ],
+      "selector": {
+        "redis.operator.com/instance": "store-1"
+      },
+      "clusterIP": "None",
+      "publishNotReadyAddresses": true
+    },
+    "status": {
+      "loadBalancer": {}
+    }
+  },
+  "service-rw": {
+    "metadata": {
+      "name": "store-1-rw",
+      "namespace": "app"
+    },
+    "spec": {
+      "ports": [
+        {
+          "name": "redis",
+          "port": 6379,
+          "targetPort": 6379
+        }
+      ],
+      "selector": {
+        "redis.operator.com/instance": "store-1",
+        "redis.operator.com/role": "primary"
+      },
+      "type": "ClusterIP"
+    },
+    "status": {
+      "loadBalancer": {}
+    }
+  }
+}

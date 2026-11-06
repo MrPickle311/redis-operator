@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,7 +14,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -46,6 +49,8 @@ func exporterContainer(instance *redisv1.RedisInstance, controllerMount corev1.V
 				LocalObjectReference: corev1.LocalObjectReference{Name: internalAuthSecretName(instance)},
 				Key:                  instancemanager.OperatorPasswordKey,
 			}}},
+			// redis_script_values: a sample of the keys by type and memory.
+			{Name: "REDIS_EXPORTER_SCRIPT", Value: controllerDir + "/" + instancemanager.KeysScript},
 		},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("32Mi")},
@@ -233,37 +238,163 @@ func boolValue(b bool) float64 {
 	return 0
 }
 
-// operationStarts holds when this process started to move the primary of an
-// instance to a Pod, by namespace/name/target: the conditions keep whole
-// seconds only, and a switchover takes a tenth of one.
+// operationStarts holds when this process started an operation on an
+// instance (a switchover, failover or rolling update), by
+// namespace/name/key: the conditions keep whole seconds only, and a
+// switchover takes a tenth of one.
 var operationStarts sync.Map
 
-func operationKey(instance *redisv1.RedisInstance, target string) string {
-	return instance.Namespace + "/" + instance.Name + "/" + target
+func operationKey(instance *redisv1.RedisInstance, key string) string {
+	return instance.Namespace + "/" + instance.Name + "/" + key
 }
 
-// startOperation records the start of a switchover or failover to target.
-func startOperation(instance *redisv1.RedisInstance, target string) {
-	operationStarts.Store(operationKey(instance, target), time.Now())
+// started is when and why an operation started.
+type started struct {
+	at     time.Time
+	reason string
 }
 
-// operationLog measures a switchover or failover that ends now, so call it
-// before its condition changes; the func it returns logs it as one line,
-// "Completed <kind>", which the dashboards turn into a row. After a restart
-// of the operator the start comes from the condition, in whole seconds. A
-// failover also tells how long the primary was unavailable.
-func operationLog(instance *redisv1.RedisInstance, kind, conditionType, from, to string) func(context.Context) {
-	var took time.Duration
-	if start, ok := operationStarts.LoadAndDelete(operationKey(instance, to)); ok {
-		took = time.Since(start.(time.Time))
+// startOperation records the start of an operation and why it started; key
+// tells it apart, e.g. the target of a switchover.
+func startOperation(instance *redisv1.RedisInstance, key, reason string) {
+	operationStarts.Store(operationKey(instance, key), started{time.Now(), reason})
+}
+
+// lastLogged holds the last operation line logged per instance, so a
+// reconcile repeated after a conflict does not log it twice.
+var lastLogged sync.Map
+
+type logged struct {
+	line string
+	at   time.Time
+}
+
+// endOperation measures an operation that ends now with outcome (completed,
+// rejected, failed, interrupted, approved, ...), so call it before its
+// condition changes; the func it returns logs it as one line, "Finished
+// <kind>", which the dashboards turn into a row with its time window. The
+// start is the one of startOperation under key or, after a restart of the
+// operator, the last change of conditionType, in whole seconds; neither: the
+// operation took no time, e.g. a rejected request. A failover and a safe
+// start also tell how long the primary was unavailable.
+func endOperation(instance *redisv1.RedisInstance, kind, outcome, key, conditionType string, values ...any) func(context.Context) {
+	end := time.Now()
+	start := end
+	if v, ok := operationStarts.LoadAndDelete(operationKey(instance, key)); ok && key != "" {
+		start = v.(started).at
+		if !slices.Contains(values, any("reason")) && v.(started).reason != "" {
+			values = append(values, "reason", v.(started).reason)
+		}
 	} else if c := meta.FindStatusCondition(instance.Status.Conditions, conditionType); c != nil {
-		took = time.Since(c.LastTransitionTime.Time)
+		start = c.LastTransitionTime.Time
 	}
-	values := []any{"kind", kind, "from", from, "to", to, "epoch", instance.Status.PrimaryEpoch, "durationMs", took.Milliseconds()}
-	if c := meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionPrimaryAvailable); kind == "failover" && c != nil {
-		values = append(values, "downMs", time.Since(c.LastTransitionTime.Time).Milliseconds())
+	values = append(values, "kind", kind, "outcome", outcome, "epoch", instance.Status.PrimaryEpoch,
+		"startMs", start.UnixMilli(), "endMs", end.UnixMilli(), "durationMs", end.Sub(start).Milliseconds())
+	if c := meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionPrimaryAvailable); (kind == "failover" || kind == "safe start") &&
+		c != nil && c.Status == metav1.ConditionFalse {
+		values = append(values, "downMs", end.Sub(c.LastTransitionTime.Time).Milliseconds())
 	}
 	return func(ctx context.Context) {
-		logf.FromContext(ctx).Info("Completed "+kind, values...)
+		// The same line again within seconds is the same operation, from a
+		// reconcile repeated after a conflict; times differ, so leave them out.
+		line := fmt.Sprint(kind, outcome, values[:len(values)-6])
+		if last, ok := lastLogged.Swap(operationKey(instance, ""), logged{line, end}); ok &&
+			last.(logged).line == line && end.Sub(last.(logged).at) < 10*time.Second {
+			return
+		}
+		logf.FromContext(ctx).Info("Finished "+kind, values...)
+	}
+}
+
+// volumeOps holds the operations on a volume this process started, by
+// namespace/name/ordinal: a recreate asked for, or a replica moved off a
+// volume that is deleted or lost. One ends when the replica is Ready again
+// on another volume, after its full sync.
+var volumeOps sync.Map
+
+type volumeOp struct {
+	kind, reason string
+	start        time.Time
+	uid          types.UID // of the volume it leaves
+}
+
+// startVolumeOperation records an operation that moves the replica of
+// ordinal to a new volume; call it before the binding changes.
+func startVolumeOperation(ctx context.Context, instance *redisv1.RedisInstance, ordinal int32, kind, reason string) {
+	vol := volumeOf(instance, ordinal)
+	op := volumeOp{kind: kind, reason: reason, start: time.Now(), uid: vol.UID}
+	if _, loaded := volumeOps.LoadOrStore(operationKey(instance, strconv.Itoa(int(ordinal))), op); !loaded {
+		logf.FromContext(ctx).Info("Started "+kind, "pod", instancePodName(instance, ordinal), "pvc", vol.ClaimName, "reason", reason)
+	}
+}
+
+// endVolumeOperations logs, as "Finished <kind>", every operation on a volume
+// whose replica is Ready again on another volume.
+func endVolumeOperations(ctx context.Context, instance *redisv1.RedisInstance, ready map[int32]bool) {
+	for _, vol := range instance.Status.Volumes {
+		key := operationKey(instance, strconv.Itoa(int(vol.Ordinal)))
+		v, ok := volumeOps.Load(key)
+		if !ok || !ready[vol.Ordinal] || vol.State != redisv1.VolumeReady || vol.UID == "" || vol.UID == v.(volumeOp).uid {
+			continue
+		}
+		volumeOps.Delete(key)
+		op, end := v.(volumeOp), time.Now()
+		logf.FromContext(ctx).Info("Finished "+op.kind, "to", instancePodName(instance, vol.Ordinal), "pvc", vol.ClaimName,
+			"reason", op.reason, "kind", op.kind, "outcome", "completed", "epoch", instance.Status.PrimaryEpoch,
+			"startMs", op.start.UnixMilli(), "endMs", end.UnixMilli(), "durationMs", end.Sub(op.start).Milliseconds())
+	}
+}
+
+// lastInstances holds the spec.instances this process saw last, by
+// namespace/name, to tell a change of it.
+var lastInstances sync.Map
+
+// startScaling notes a change of spec.instances as the start of a scale-up
+// or scale-down. It runs first in a reconcile, before any early return, as
+// the instances it compares with are the ones with a volume in the status,
+// which the reconcile changes. Unseen, e.g. after a restart of the operator,
+// a count that differs from those is a change too; a new RedisInstance is a
+// scale-up from 0.
+func startScaling(ctx context.Context, instance *redisv1.RedisInstance) {
+	to := instance.Spec.Instances
+	var had int32
+	for _, vol := range instance.Status.Volumes {
+		if vol.State != redisv1.VolumeDetached {
+			had++
+		}
+	}
+	prev, seen := lastInstances.Swap(operationKey(instance, ""), to)
+	if !seen {
+		prev = had
+	}
+	if prev.(int32) == to {
+		return
+	}
+	if running, ok := operationStarts.LoadAndDelete(operationKey(instance, "scale-kind")); ok {
+		endOperation(instance, running.(string), "interrupted", "scale", "", "reason", "spec.instances changed again")(ctx)
+	}
+	kind := "scale up"
+	if to < prev.(int32) {
+		kind = "scale down"
+	}
+	startOperation(instance, "scale", fmt.Sprintf("spec.instances %d -> %d", prev.(int32), to))
+	operationStarts.Store(operationKey(instance, "scale-kind"), kind)
+	logf.FromContext(ctx).Info("Started "+kind, "from", prev, "to", to)
+}
+
+// endScaling ends a scale-up once every instance is Ready, a scale-down once
+// no instance above the count has a volume (an external one stays, Detached).
+func endScaling(ctx context.Context, instance *redisv1.RedisInstance, readyCount int32) {
+	kind, running := operationStarts.Load(operationKey(instance, "scale-kind"))
+	if !running {
+		return
+	}
+	to, above := instance.Spec.Instances, false
+	for _, vol := range instance.Status.Volumes {
+		above = above || vol.Ordinal >= to && vol.State != redisv1.VolumeDetached
+	}
+	if readyCount == to && !above {
+		operationStarts.Delete(operationKey(instance, "scale-kind"))
+		endOperation(instance, kind.(string), "completed", "scale", "", "to", fmt.Sprintf("%d instances", to))(ctx)
 	}
 }

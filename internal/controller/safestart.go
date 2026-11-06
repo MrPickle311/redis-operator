@@ -50,8 +50,12 @@ func (r *RedisInstanceReconciler) reconcileSafeStart(ctx context.Context, instan
 			return 0, err
 		}
 		logf.FromContext(ctx).Info("Approved the dataset of the restarted primary", "pod", instance.Status.CurrentPrimary)
+		endOperation(instance, "safe start", "approved", "", redisv1.ConditionPrimaryAvailable,
+			"from", instance.Status.CurrentPrimary, "to", instance.Status.CurrentPrimary, "keys", primary.Keys)(ctx)
 		return 0, nil
 	}
+	endOperation(instance, "safe start", "failover", "", redisv1.ConditionPrimaryAvailable,
+		"from", instance.Status.CurrentPrimary, "reason", "the restarted primary "+reason, "keys", primary.Keys)(ctx)
 	best, _ := bestCandidate(replicas) // a rejection always names a replica
 	if err := r.startFailover(ctx, instance, instancePodName(instance, best), "the restarted primary "+reason); err != nil {
 		return 0, err

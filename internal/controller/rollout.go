@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
@@ -29,6 +31,9 @@ func specHash(spec *corev1.PodSpec) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
 }
+
+// rollingUpdateKey keeps the start of a rolling update, see startOperation.
+const rollingUpdateKey = "rolling-update"
 
 // rolloutSettleTime is how long a Pod must have been Ready before the
 // rolling update counts it, like minReadySeconds of a StatefulSet: a replica
@@ -53,8 +58,20 @@ func isOutdated(existing, desired *corev1.Pod) bool {
 // It returns how long to wait before retrying a failed switchover, or 0.
 func (r *RedisInstanceReconciler) reconcileRollout(ctx context.Context, instance *redisv1.RedisInstance,
 	outdated []int32, allReady bool) (time.Duration, error) {
+	// A rolling update this process started is done once the last Pod has
+	// settled, which no event announces: look again then.
+	if _, ok := operationStarts.Load(operationKey(instance, rollingUpdateKey)); ok && len(outdated) == 0 {
+		if !allReady {
+			return rolloutSettleTime, nil
+		}
+		endOperation(instance, "rolling update", "completed", rollingUpdateKey, "")(ctx)
+	}
 	if len(outdated) == 0 || !allReady || instance.Status.TargetPrimary != "" {
 		return 0, nil
+	}
+	if _, loaded := operationStarts.LoadOrStore(operationKey(instance, rollingUpdateKey),
+		started{time.Now(), fmt.Sprintf("%d Pods run an outdated spec", len(outdated))}); !loaded {
+		logf.FromContext(ctx).Info("Started rolling update", "outdated", len(outdated))
 	}
 	if _, requested := pendingRequest(instance, redisv1.AnnotationPromote); requested {
 		return 0, nil // the switchover asked by the user goes first
@@ -85,14 +102,14 @@ func (r *RedisInstanceReconciler) reconcileRollout(ctx context.Context, instance
 	}
 	targetName := instancePodName(instance, target)
 	if clusterOf(instance) != "" {
-		return 0, r.startClusterFailover(ctx, instance, targetName)
+		return 0, r.startClusterFailover(ctx, instance, targetName, "rolling update: the master is outdated")
 	}
 	if reason := r.switchoverRejection(ctx, instance, targetName); reason != "" {
 		return 0, nil // e.g. no primary recorded yet; the next reconcile tries again
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, "RollingUpdate", "Switchover",
 		"Switching over to %s to update the primary", targetName)
-	return 0, r.startSwitchover(ctx, instance, targetName)
+	return 0, r.startSwitchover(ctx, instance, targetName, "rolling update: the primary is outdated")
 }
 
 // replacePod deletes the Pod of ordinal. The next reconcile creates it again

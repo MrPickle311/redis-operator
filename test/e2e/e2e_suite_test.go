@@ -51,7 +51,10 @@ func TestE2E(t *testing.T) {
 	RunSpecs(t, "e2e suite")
 }
 
-var _ = BeforeSuite(func() {
+// The suite runs on several processes with ginkgo -p (make test-e2e-parallel):
+// only the first one builds and deploys the operator, which every process
+// shares, and only the first one removes it once every process is done.
+var _ = SynchronizedBeforeSuite(func() {
 	By("building the manager image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
 	_, err := utils.Run(cmd)
@@ -66,9 +69,11 @@ var _ = BeforeSuite(func() {
 	configureKubectlKubeRC()
 	setupCertManager()
 	deployOperator()
+}, func() {
+	configureKubectlKubeRC()
 })
 
-var _ = AfterSuite(func() {
+var _ = SynchronizedAfterSuite(func() {}, func() {
 	undeployOperator()
 	teardownCertManager()
 })

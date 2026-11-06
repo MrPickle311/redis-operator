@@ -84,7 +84,8 @@ func TestExporterSidecar(t *testing.T) {
 	}
 	exporter := pod.Spec.Containers[1]
 	if exporter.Image != "exporter:v1" || exporter.Ports[0].ContainerPort != exporterPort ||
-		!exporter.VolumeMounts[0].ReadOnly || exporter.Env[2].ValueFrom.SecretKeyRef.Name != "cache-internal-auth" {
+		!exporter.VolumeMounts[0].ReadOnly || exporter.Env[2].ValueFrom.SecretKeyRef.Name != "cache-internal-auth" ||
+		exporter.Env[3].Value != "/controller/keys.lua" {
 		t.Errorf("exporter: %+v", exporter)
 	}
 	policy := networkPolicySpec(instance, "redis-operator-system")
@@ -104,7 +105,7 @@ func TestCountingRecorder(t *testing.T) {
 	}
 }
 
-func TestOperationLog(t *testing.T) {
+func TestEndOperation(t *testing.T) {
 	instance := &redisv1.RedisInstance{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "ops"}}
 	instance.Status.Conditions = []metav1.Condition{
 		{Type: redisv1.ConditionSwitchover, LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Hour))},
@@ -112,13 +113,68 @@ func TestOperationLog(t *testing.T) {
 	var line string
 	ctx := logf.IntoContext(context.Background(), funcr.New(func(prefix, args string) { line = args }, funcr.Options{}))
 
-	startOperation(instance, "cache-1")
-	operationLog(instance, "switchover", redisv1.ConditionSwitchover, "cache-0", "cache-1")(ctx)
-	if !strings.Contains(line, `"msg"="Completed switchover"`) || !strings.Contains(line, `"durationMs"=0`) {
+	startOperation(instance, "cache-1", "asked for")
+	endOperation(instance, "switchover", "completed", "cache-1", redisv1.ConditionSwitchover, "from", "cache-0", "to", "cache-1")(ctx)
+	if !strings.Contains(line, `"msg"="Finished switchover"`) || !strings.Contains(line, `"outcome"="completed"`) ||
+		!strings.Contains(line, `"reason"="asked for"`) ||
+		!strings.Contains(line, `"durationMs"=0`) || !strings.Contains(line, `"startMs"=`) {
 		t.Errorf("a switchover started in this process takes its time from memory: %s", line)
 	}
-	operationLog(instance, "switchover", redisv1.ConditionSwitchover, "cache-1", "cache-0")(ctx)
+	endOperation(instance, "switchover", "completed", "cache-0", redisv1.ConditionSwitchover)(ctx)
 	if !strings.Contains(line, `"durationMs"=3600000`) && !strings.Contains(line, `"durationMs"=3600001`) {
 		t.Errorf("one started before a restart takes it from the condition: %s", line)
+	}
+	endOperation(instance, "switchover", "rejected", "", "", "reason", "cache-9 is not a Pod of the instance")(ctx)
+	if !strings.Contains(line, `"outcome"="rejected"`) || !strings.Contains(line, `"durationMs"=0`) {
+		t.Errorf("a rejected request takes no time: %s", line)
+	}
+}
+
+func TestVolumeOperation(t *testing.T) {
+	instance := &redisv1.RedisInstance{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "vol"}}
+	instance.Status.Volumes = []redisv1.VolumeStatus{{Ordinal: 2, ClaimName: "cache-2-data", UID: "old", State: redisv1.VolumeReady}}
+	var line string
+	ctx := logf.IntoContext(context.Background(), funcr.New(func(prefix, args string) { line = args }, funcr.Options{}))
+
+	startVolumeOperation(ctx, instance, 2, "recreate", "asked for")
+	line = ""
+	endVolumeOperations(ctx, instance, map[int32]bool{2: true})
+	if line != "" {
+		t.Fatalf("still on the old volume, nothing ends: %s", line)
+	}
+	instance.Status.Volumes[0].UID = "new"
+	endVolumeOperations(ctx, instance, map[int32]bool{2: false})
+	if line != "" {
+		t.Fatalf("on the new volume but not Ready, nothing ends: %s", line)
+	}
+	endVolumeOperations(ctx, instance, map[int32]bool{2: true})
+	if !strings.Contains(line, `"msg"="Finished recreate"`) || !strings.Contains(line, `"to"="cache-2"`) {
+		t.Errorf("Ready on the new volume ends it: %s", line)
+	}
+}
+
+func TestScaling(t *testing.T) {
+	instance := &redisv1.RedisInstance{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "scale"}}
+	instance.Spec.Instances = 3
+	instance.Status.Volumes = make([]redisv1.VolumeStatus, 3)
+	var line string
+	ctx := logf.IntoContext(context.Background(), funcr.New(func(prefix, args string) { line = args }, funcr.Options{}))
+
+	startScaling(ctx, instance)
+	if line != "" {
+		t.Fatalf("as many instances as volumes is no change: %s", line)
+	}
+	instance.Spec.Instances = 4
+	startScaling(ctx, instance)
+	if !strings.Contains(line, `"msg"="Started scale up"`) {
+		t.Fatalf("a new count starts it: %s", line)
+	}
+	endScaling(ctx, instance, 3)
+	if strings.Contains(line, "Finished") {
+		t.Fatalf("not every instance is Ready: %s", line)
+	}
+	endScaling(ctx, instance, 4)
+	if !strings.Contains(line, `"msg"="Finished scale up"`) || !strings.Contains(line, `"reason"="spec.instances 3 -> 4"`) {
+		t.Errorf("every instance Ready ends it: %s", line)
 	}
 }

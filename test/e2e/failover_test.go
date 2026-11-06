@@ -45,7 +45,7 @@ var foPassword string
 
 // Scenario: the operator is stopped, so the Instance Managers are on their
 // own, as during a network partition. The specs build on each other.
-var _ = Describe("Self-fencing of the Instance Manager", Ordered, func() {
+var _ = Describe("Self-fencing of the Instance Manager", Ordered, Serial, func() {
 	SetDefaultEventuallyTimeout(3 * time.Minute)
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
 
@@ -381,7 +381,7 @@ spec:
 // operator and the kubelet probes, while clients may still reach Redis on
 // 6379. Kind runs kindnet, which ignores NetworkPolicies, so iptables on the
 // node of the primary cuts the traffic.
-var _ = Describe("Network partition", Ordered, func() {
+var _ = Describe("Network partition", Ordered, Serial, func() {
 	SetDefaultEventuallyTimeout(3 * time.Minute)
 	SetDefaultEventuallyPollingInterval(time.Second)
 

@@ -321,6 +321,13 @@ func (r *RedisInstanceReconciler) ensureRedisTLSSecret(ctx context.Context, inst
 	})
 	if result != controllerutil.OperationResultNone {
 		logf.FromContext(ctx).Info("Reconciled the TLS Secret of Redis", "name", secret.Name, "operation", result)
+		outcome := "issued"
+		if result == controllerutil.OperationResultUpdated {
+			outcome = "updated"
+		}
+		// The Instance Managers load it within a minute or two, without a restart.
+		endOperation(instance, "certificate", outcome, "", "", "to", secret.Name,
+			"reason", "the Instance Managers reload it without a restart")(ctx)
 	}
 	return err
 }

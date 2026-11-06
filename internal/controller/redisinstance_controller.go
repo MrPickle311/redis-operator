@@ -444,6 +444,8 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	oldStatus := instance.Status.DeepCopy()
+	// First: it compares with the volumes before this reconcile changes them.
+	startScaling(ctx, &instance)
 	// ponytail: the primary never changes before failover (step 4), so the epoch stays 1.
 	instance.Status.PrimaryEpoch = max(instance.Status.PrimaryEpoch, 1)
 
@@ -592,6 +594,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	retryFailover = soonest(retryFailover, retrySafeStart)
+	endVolumeOperations(ctx, &instance, ready)
 	if err := r.reconcileVolumeFailures(ctx, &instance, ready); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -604,6 +607,7 @@ func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if len(outdated) > 0 && !healthy && settleWait > 0 {
 		retryRollout = soonest(retryRollout, settleWait)
 	}
+	endScaling(ctx, &instance, readyCount)
 	// Written now, as a waiting switchover returns early below.
 	meta.SetStatusCondition(&instance.Status.Conditions, readyCondition(&instance, readyCount, len(outdated)))
 	if !equality.Semantic.DeepEqual(oldStatus, &instance.Status) {

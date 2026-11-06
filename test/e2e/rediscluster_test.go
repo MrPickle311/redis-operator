@@ -18,14 +18,12 @@ import (
 	"github.com/MrPickle311/redis-operator/test/utils"
 )
 
-const (
-	rcNamespace = "redis-e2e-cluster"
-	rcName      = "rc"
-)
+const rcName = "rc"
 
-// rcManifest is a cluster of three shards of two nodes with TLS, a user of
+// rcManifest is, in namespace ns, a cluster of three shards of two nodes with TLS, a user of
 // the cluster and a NetworkPolicy that lets in only Pods labeled role=client.
-var rcManifest = fmt.Sprintf(`
+func rcManifest(ns string) string {
+	return fmt.Sprintf(`
 apiVersion: redis.operator.com/v1
 kind: RedisCluster
 metadata: {name: %[1]s, namespace: %[2]s}
@@ -50,12 +48,13 @@ spec:
   targetRef: {kind: RedisCluster, name: %[1]s}
   authentication: {generate: true}
   acl: {rules: ["~*", "+@all"]}
-`, rcName, rcNamespace, redisImage, exporterImage)
+`, rcName, ns, redisImage, exporterImage)
+}
 
 // rcClient is a Pod with redis-cli, the CA of the cluster and the password of
 // the user app; role tells whether the NetworkPolicy lets it in. It runs
 // script, or waits for kubectl exec.
-func rcClient(name, role, script string) string {
+func rcClient(ns, name, role, script string) string {
 	if script == "" {
 		script = "sleep infinity"
 	}
@@ -79,7 +78,7 @@ spec:
     secret:
       secretName: %[5]s-ca
       items: [{key: ca.crt, path: ca.crt}]
-`, name, rcNamespace, role, redisImage, rcName, script)
+`, name, ns, role, redisImage, rcName, script)
 }
 
 // rcCLI is redis-cli as the user app, over TLS, for the scripts of rcClient.
@@ -92,7 +91,17 @@ const rcCLI = "redis-cli --tls --cacert /ca/ca.crt --user app --no-auth-warning"
 // Then it grows to 4 shards and back to 3, moving slots with their keys while
 // a client writes, through a restart of the operator and a failover of the
 // source, and stops at a key both shards of a slot have.
-var _ = Describe("RedisCluster", Ordered, func() {
+//
+// The specs run as two Describes of their own cluster, so the first runs in
+// parallel with the rest of the suite; the second stops the operator, so it is
+// Serial.
+var _ = Describe("RedisCluster", Ordered, func() { rcSpecs("redis-e2e-cluster", false) })
+var _ = Describe("RedisCluster changing shards", Ordered, Serial, func() { rcSpecs("redis-e2e-cluster-shards", true) })
+
+// rcSpecs registers the specs of a cluster in namespace rcNamespace: without
+// resharding the ones the operator keeps running for, with it the ones that
+// stop it, fail over and move slots.
+func rcSpecs(rcNamespace string, resharding bool) {
 	SetDefaultEventuallyTimeout(4 * time.Minute)
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
 
@@ -194,7 +203,7 @@ var _ = Describe("RedisCluster", Ordered, func() {
 	}
 	// sampler logs the line of CLUSTER NODES of the node of pod as fast as it can.
 	sampler := func(name, pod string) string {
-		return rcClient(name, "client", fmt.Sprintf(`while true; do timeout 5 %s -h %s cluster nodes | grep myself; sleep 0.1; done`,
+		return rcClient(rcNamespace, name, "client", fmt.Sprintf(`while true; do timeout 5 %s -h %s cluster nodes | grep myself; sleep 0.1; done`,
 			rcCLI, nodeFQDN(pod)))
 	}
 	before := map[string]map[int]bool{} // the slots of every shard before 3 → 4
@@ -204,13 +213,16 @@ var _ = Describe("RedisCluster", Ordered, func() {
 		Expect(loadImageIntoKind(redisImage)).To(Succeed())
 		Expect(loadImageIntoKind(exporterImage)).To(Succeed())
 		Expect(ensureRestrictedNamespace(rcNamespace)).To(Succeed())
-		Expect(kubectlApply(rcManifest)).To(Succeed())
+		Expect(kubectlApply(rcManifest(rcNamespace))).To(Succeed())
 		Eventually(clusterReady).Should(Equal("ok True"))
 		Eventually(func() string { return get("redisuser", "app", `{.status.conditions[?(@.type=="Ready")].reason}`) }).
 			Should(Equal("Applied"))
-		Expect(kubectlApply(rcClient("client", "client", "") + "---" + rcClient("stranger", "other", ""))).To(Succeed())
+		Expect(kubectlApply(rcClient(rcNamespace, "client", "client", "") + "---" + rcClient(rcNamespace, "stranger", "other", ""))).To(Succeed())
 		_, err := kubectl("wait", "pod", "client", "stranger", "-n", rcNamespace, "--for=condition=Ready", "--timeout=3m")
 		Expect(err).NotTo(HaveOccurred())
+		for i := range 30 {
+			Expect(cli("client", seed, "-c", "set", fmt.Sprintf("key:%d", i), fmt.Sprint(i))).To(Equal("OK"))
+		}
 	})
 
 	AfterAll(func() {
@@ -226,105 +238,105 @@ var _ = Describe("RedisCluster", Ordered, func() {
 		_, _ = kubectl("delete", "ns", rcNamespace, "--ignore-not-found", "--timeout=3m")
 	})
 
-	It("serves keys of every shard through the seed, and sends clients to the nodes by name", func() {
-		for i := range 30 {
-			Expect(cli("client", seed, "-c", "set", fmt.Sprintf("key:%d", i), fmt.Sprint(i))).To(Equal("OK"))
-		}
-		Expect(cli("client", seed, "-c", "get", "key:17")).To(Equal("17"))
-		Expect(cli("client", seed, "cluster", "info")).To(ContainSubstring("cluster_state:ok"))
-		// Without -c, a node answers for a slot of another one with MOVED to its name.
-		Eventually(func() string { return cli("client", seed, "get", "key:1") }).
-			Should(MatchRegexp(`MOVED \d+ rc-\d-\d\.rc-\d-hl\.` + rcNamespace + `\.svc:6379`))
-	})
+	if !resharding {
+		It("serves keys of every shard through the seed, and sends clients to the nodes by name", func() {
+			Expect(cli("client", seed, "-c", "get", "key:17")).To(Equal("17"))
+			Expect(cli("client", seed, "cluster", "info")).To(ContainSubstring("cluster_state:ok"))
+			// Without -c, a node answers for a slot of another one with MOVED to its name.
+			Eventually(func() string { return cli("client", seed, "get", "key:1") }).
+				Should(MatchRegexp(`MOVED \d+ rc-\d-\d\.rc-\d-hl\.` + rcNamespace + `\.svc:6379`))
+		})
 
-	It("has the user of the cluster on every node", func() {
-		for _, shard := range []string{"rc-0", "rc-1", "rc-2"} {
-			for _, ordinal := range []string{"0", "1"} {
-				Expect(cli("client", nodeFQDN(shard+"-"+ordinal), "ping")).To(Equal("PONG"), "%s-%s", shard, ordinal)
+		It("has the user of the cluster on every node", func() {
+			for _, shard := range []string{"rc-0", "rc-1", "rc-2"} {
+				for _, ordinal := range []string{"0", "1"} {
+					Expect(cli("client", nodeFQDN(shard+"-"+ordinal), "ping")).To(Equal("PONG"), "%s-%s", shard, ordinal)
+				}
 			}
-		}
-	})
+		})
 
-	It("reports shards and slots to Prometheus: the exporter of every node, past the NetworkPolicy, and the operator", func() {
-		Eventually(func(g Gomega) {
-			metrics, err := kubectl("get", "--raw", "/api/v1/namespaces/"+rcNamespace+"/pods/rc-0-0:9121/proxy/metrics")
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(metrics).To(ContainSubstring("redis_up 1"))
-		}).Should(Succeed())
-		Eventually(func(g Gomega) {
-			metrics, err := operatorMetrics()
-			g.Expect(err).NotTo(HaveOccurred())
-			for shard, slots := range []int{5461, 5461, 5462} {
+		It("reports shards and slots to Prometheus: the exporter of every node, past the NetworkPolicy, and the operator", func() {
+			Eventually(func(g Gomega) {
+				metrics, err := kubectl("get", "--raw", "/api/v1/namespaces/"+rcNamespace+"/pods/rc-0-0:9121/proxy/metrics")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(metrics).To(ContainSubstring("redis_up 1"))
+			}).Should(Succeed())
+			Eventually(func(g Gomega) {
+				metrics, err := operatorMetrics()
+				g.Expect(err).NotTo(HaveOccurred())
+				for shard, slots := range []int{5461, 5461, 5462} {
+					g.Expect(metrics).To(ContainSubstring(fmt.Sprintf(
+						`redis_operator_cluster_shard_slots{namespace="%s",redis_cluster="%s",shard="%d"} %d`, rcNamespace, rcName, shard, slots)))
+				}
 				g.Expect(metrics).To(ContainSubstring(fmt.Sprintf(
-					`redis_operator_cluster_shard_slots{namespace="%s",redis_cluster="%s",shard="%d"} %d`, rcNamespace, rcName, shard, slots)))
+					`redis_operator_cluster_slot_block_shard{block="16128-16383",namespace="%s",redis_cluster="%s"} 2`, rcNamespace, rcName)))
+			}).Should(Succeed())
+		})
+
+		It("lets in only the clients of the NetworkPolicy", func() {
+			out, _ := utils.Run(exec.Command("kubectl", "exec", "stranger", "-n", rcNamespace, "--",
+				"timeout", "5", "redis-cli", "-h", seed, "--tls", "--cacert", "/ca/ca.crt", "--user", "app", "--no-auth-warning", "ping"))
+			Expect(out).NotTo(ContainSubstring("PONG"))
+		})
+
+		It("takes back a replica that lost its volume as a new node, and forgets the old one", func() {
+			replica := replicaOf("rc-1")
+			oldID := cli("client", nodeFQDN(replica), "cluster", "myid")
+			Expect(oldID).To(HaveLen(40))
+			_, err := kubectl("annotate", "redisinstance", "rc-1", "-n", rcNamespace, "redis.operator.com/recreate="+replica, "--overwrite")
+			Expect(err).NotTo(HaveOccurred())
+
+			var newID string
+			Eventually(func() string {
+				newID = cli("client", nodeFQDN(replica), "cluster", "myid")
+				return newID
+			}).Should(SatisfyAll(HaveLen(40), Not(Equal(oldID))))
+			masterID := cli("client", nodeFQDN(primaryOf("rc-1")), "cluster", "myid")
+			Eventually(func() string { return cli("client", nodeFQDN(replica), "cluster", "nodes") }).
+				Should(SatisfyAll(MatchRegexp(newID+` \S+ myself,slave `+masterID), Not(ContainSubstring(oldID))))
+			for _, shard := range []string{"rc-0", "rc-2"} {
+				Eventually(func() string { return cli("client", nodeFQDN(primaryOf(shard)), "cluster", "nodes") }).
+					ShouldNot(ContainSubstring(oldID), "the old ID stayed on %s", shard)
 			}
-			g.Expect(metrics).To(ContainSubstring(fmt.Sprintf(
-				`redis_operator_cluster_slot_block_shard{block="16128-16383",namespace="%s",redis_cluster="%s"} 2`, rcNamespace, rcName)))
-		}).Should(Succeed())
-	})
+			Eventually(clusterReady).Should(Equal("ok True"))
+		})
 
-	It("lets in only the clients of the NetworkPolicy", func() {
-		out, _ := utils.Run(exec.Command("kubectl", "exec", "stranger", "-n", rcNamespace, "--",
-			"timeout", "5", "redis-cli", "-h", seed, "--tls", "--cacert", "/ca/ca.crt", "--user", "app", "--no-auth-warning", "ping"))
-		Expect(out).NotTo(ContainSubstring("PONG"))
-	})
+		It("updates every Pod without CLUSTERDOWN", func() {
+			By("writing through the cluster the whole time")
+			// Like a client with a timeout: a node going away may leave a
+			// connection hanging.
+			Expect(kubectlApply(rcClient(rcNamespace, "writer", "client", fmt.Sprintf(`i=0; while true; do i=$((i+1)); `+
+				`out=$(timeout 5 redis-cli -c -h %s --tls --cacert /ca/ca.crt --user app --no-auth-warning set w:$i $i 2>&1) || out="$out exit=$?"; `+
+				`echo "$(date +%%T) $out"; done`, seed)))).To(Succeed())
+			_, err := kubectl("wait", "pod", "writer", "-n", rcNamespace, "--for=condition=Ready", "--timeout=2m")
+			Expect(err).NotTo(HaveOccurred())
 
-	It("takes back a replica that lost its volume as a new node, and forgets the old one", func() {
-		replica := replicaOf("rc-1")
-		oldID := cli("client", nodeFQDN(replica), "cluster", "myid")
-		Expect(oldID).To(HaveLen(40))
-		_, err := kubectl("annotate", "redisinstance", "rc-1", "-n", rcNamespace, "redis.operator.com/recreate="+replica, "--overwrite")
-		Expect(err).NotTo(HaveOccurred())
+			_, err = kubectl("patch", "rediscluster", rcName, "-n", rcNamespace, "--type=merge",
+				"-p", `{"spec":{"resources":{"requests":{"memory":"160Mi"},"limits":{"memory":"160Mi"}}}}`)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() string {
+				out, _ := kubectl("get", "pods", "-n", rcNamespace, "-l", "redis.operator.com/cluster="+rcName, "-o",
+					`jsonpath={range .items[*]}{.spec.containers[0].resources.limits.memory}/{.status.containerStatuses[0].ready} {end}`)
+				return out
+			}, 8*time.Minute).Should(Equal(strings.TrimSpace(strings.Repeat("160Mi/true ", 6))))
+			Eventually(clusterReady).Should(Equal("ok True"))
 
-		var newID string
-		Eventually(func() string {
-			newID = cli("client", nodeFQDN(replica), "cluster", "myid")
-			return newID
-		}).Should(SatisfyAll(HaveLen(40), Not(Equal(oldID))))
-		masterID := cli("client", nodeFQDN(primaryOf("rc-1")), "cluster", "myid")
-		Eventually(func() string { return cli("client", nodeFQDN(replica), "cluster", "nodes") }).
-			Should(SatisfyAll(MatchRegexp(newID+` \S+ myself,slave `+masterID), Not(ContainSubstring(oldID))))
-		for _, shard := range []string{"rc-0", "rc-2"} {
-			Eventually(func() string { return cli("client", nodeFQDN(primaryOf(shard)), "cluster", "nodes") }).
-				ShouldNot(ContainSubstring(oldID), "the old ID stayed on %s", shard)
-		}
-		Eventually(clusterReady).Should(Equal("ok True"))
-	})
-
-	It("updates every Pod without CLUSTERDOWN", func() {
-		By("writing through the cluster the whole time")
-		// Like a client with a timeout: a node going away may leave a
-		// connection hanging.
-		Expect(kubectlApply(rcClient("writer", "client", fmt.Sprintf(`i=0; while true; do i=$((i+1)); `+
-			`out=$(timeout 5 redis-cli -c -h %s --tls --cacert /ca/ca.crt --user app --no-auth-warning set w:$i $i 2>&1) || out="$out exit=$?"; `+
-			`echo "$(date +%%T) $out"; done`, seed)))).To(Succeed())
-		_, err := kubectl("wait", "pod", "writer", "-n", rcNamespace, "--for=condition=Ready", "--timeout=2m")
-		Expect(err).NotTo(HaveOccurred())
-
-		_, err = kubectl("patch", "rediscluster", rcName, "-n", rcNamespace, "--type=merge",
-			"-p", `{"spec":{"resources":{"requests":{"memory":"160Mi"},"limits":{"memory":"160Mi"}}}}`)
-		Expect(err).NotTo(HaveOccurred())
-		Eventually(func() string {
-			out, _ := kubectl("get", "pods", "-n", rcNamespace, "-l", "redis.operator.com/cluster="+rcName, "-o",
-				`jsonpath={range .items[*]}{.spec.containers[0].resources.limits.memory}/{.status.containerStatuses[0].ready} {end}`)
-			return out
-		}, 8*time.Minute).Should(Equal(strings.TrimSpace(strings.Repeat("160Mi/true ", 6))))
-		Eventually(clusterReady).Should(Equal("ok True"))
-
-		writes, err := kubectl("logs", "writer", "-n", rcNamespace)
-		Expect(err).NotTo(HaveOccurred())
-		_, _ = kubectl("delete", "pod", "writer", "-n", rcNamespace, "--wait=false")
-		_, _ = fmt.Fprintf(GinkgoWriter, "Writes other than OK:\n%s\n", strings.Join(slices.DeleteFunc(
-			strings.Split(writes, "\n"), func(line string) bool { return strings.HasSuffix(line, " OK") }), "\n"))
-		Expect(strings.Count(writes, "OK")).To(BeNumerically(">", 50), "the writer barely ran")
-		Expect(writes).NotTo(ContainSubstring("CLUSTERDOWN"))
-	})
+			writes, err := kubectl("logs", "writer", "-n", rcNamespace)
+			Expect(err).NotTo(HaveOccurred())
+			_, _ = kubectl("delete", "pod", "writer", "-n", rcNamespace, "--wait=false")
+			_, _ = fmt.Fprintf(GinkgoWriter, "Writes other than OK:\n%s\n", strings.Join(slices.DeleteFunc(
+				strings.Split(writes, "\n"), func(line string) bool { return strings.HasSuffix(line, " OK") }), "\n"))
+			Expect(strings.Count(writes, "OK")).To(BeNumerically(">", 50), "the writer barely ran")
+			Expect(writes).NotTo(ContainSubstring("CLUSTERDOWN"))
+		})
+		return
+	}
 
 	It("fails over on its own while the operator is down, and the operator follows", func() {
-		master := primaryOf("rc-2")
-		replica := replicaOf("rc-2")
-		Expect(master).NotTo(BeEmpty())
-		Expect(replica).NotTo(BeEmpty())
+		// A cluster that has just come up records its masters within 30 s.
+		Eventually(func() string { return primaryOf("rc-2") }).ShouldNot(BeEmpty())
+		Eventually(func() string { return replicaOf("rc-2") }).ShouldNot(BeEmpty())
+		master, replica := primaryOf("rc-2"), replicaOf("rc-2")
 
 		By("deleting the Pod of the master while no operator recreates it")
 		scaleOperator(0)
@@ -351,7 +363,7 @@ var _ = Describe("RedisCluster", Ordered, func() {
 		for _, shard := range []string{"rc-0", "rc-1", "rc-2"} {
 			before[shard] = slotsOf(primaryOf(shard))
 		}
-		Expect(kubectlApply(rcClient("reshard-writer", "client", fmt.Sprintf(`i=0; while true; do i=$((i+1)); `+
+		Expect(kubectlApply(rcClient(rcNamespace, "reshard-writer", "client", fmt.Sprintf(`i=0; while true; do i=$((i+1)); `+
 			`out=$(timeout 5 %s -c -h %s set write:$i $i 2>&1) || out="$out exit=$?"; echo "$i $out"; done`, rcCLI, seed)) +
 			"---" + sampler("sampler-grow", "rc-3-0"))).To(Succeed())
 
@@ -576,4 +588,4 @@ var _ = Describe("RedisCluster", Ordered, func() {
 		}
 		expectAllKeys()
 	})
-})
+}

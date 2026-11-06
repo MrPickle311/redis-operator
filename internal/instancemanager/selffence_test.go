@@ -1,6 +1,10 @@
 package instancemanager
 
 import (
+	"io"
+	"k8s.io/apimachinery/pkg/types"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,5 +56,23 @@ func TestDecideSelfAction(t *testing.T) {
 				t.Errorf("decideSelfAction() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLogFence(t *testing.T) {
+	r, w, _ := os.Pipe()
+	stderr := os.Stderr
+	os.Stderr = w
+	s := &selfFencing{key: types.NamespacedName{Namespace: "play", Name: "cache"}, pod: "cache-0", fencedAt: time.Now().Add(-time.Second)}
+	s.logFence("lifted", "the API server was out of reach")
+	os.Stderr = stderr
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	// The dashboards find the lines of an instance by this object, as in the log of the operator.
+	for _, want := range []string{"\tINFO\tFinished self-fence\t", `"RedisInstance":{"name":"cache","namespace":"play"}`,
+		`"kind":"self-fence"`, `"outcome":"lifted"`, `"to":"cache-0"`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("%q missing in %s", want, out)
+		}
 	}
 }

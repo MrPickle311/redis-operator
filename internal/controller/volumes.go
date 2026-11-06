@@ -243,11 +243,13 @@ func (r *RedisInstanceReconciler) reconcileRecreate(ctx context.Context, instanc
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return err
 		}
+		endOperation(instance, "recreate", "rejected", "", "", "to", target, "reason", reason)(ctx)
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "RecreateRejected", "Recreate",
 			"Cannot recreate %s: %s", target, reason)
 		return nil
 	}
 
+	startVolumeOperation(ctx, instance, ordinal, "recreate", "asked for with "+redisv1.AnnotationRecreate)
 	if err := r.moveToNewVolume(ctx, instance, ordinal); err != nil {
 		return err
 	}

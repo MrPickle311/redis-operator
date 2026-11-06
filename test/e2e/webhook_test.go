@@ -41,7 +41,7 @@ func applyOutput(manifest string, args ...string) (string, error) {
 // Scenario: the API server calls the webhook of the operator, trusting the CA
 // of the operator, to warn about a missing RedisInstance and to turn away a
 // username that is taken, also after the operator restarts.
-var _ = Describe("RedisUser webhook", Ordered, func() {
+var _ = Describe("RedisUser webhook", Ordered, Serial, func() {
 	SetDefaultEventuallyTimeout(3 * time.Minute)
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
 

@@ -103,7 +103,7 @@ var _ = Describe("RBAC", func() {
 	DescribeTable("extends the built-in roles with RedisInstance permissions",
 		func(builtinRole, verb string, allowed bool) {
 			// can-i with --as checks a fresh user that is bound only to builtinRole.
-			user := "e2e-" + builtinRole
+			user := "e2e-" + builtinRole + "-" + verb
 			_, err := kubectl("create", "clusterrolebinding", user, "--clusterrole="+builtinRole, "--user="+user)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(kubectl, "delete", "clusterrolebinding", user)

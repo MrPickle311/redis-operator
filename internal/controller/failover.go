@@ -142,6 +142,9 @@ func bestCandidate(candidates []candidate) (int32, bool) {
 // primary is the one that failed.
 func (r *RedisInstanceReconciler) startFailover(ctx context.Context, instance *redisv1.RedisInstance, target, reason string) error {
 	if instance.Status.TargetPrimary != "" {
+		endOperation(instance, "switchover", "interrupted", instance.Status.TargetPrimary, redisv1.ConditionSwitchover,
+			"from", instance.Status.CurrentPrimary, "to", instance.Status.TargetPrimary,
+			"reason", "the primary failed during the switchover")(ctx)
 		r.setSwitchoverCondition(instance, metav1.ConditionFalse, "Interrupted", "The primary failed during the switchover")
 	}
 	from := instance.Status.CurrentPrimary
@@ -154,7 +157,7 @@ func (r *RedisInstanceReconciler) startFailover(ctx context.Context, instance *r
 	}
 	r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, "FailoverStarted", "Failover",
 		"Promoting %s: %s", target, reason)
-	startOperation(instance, target)
+	startOperation(instance, target, reason)
 	logf.FromContext(ctx).Info("Started failover", "from", from, "to", target, "epoch", instance.Status.PrimaryEpoch)
 	return nil
 }
@@ -179,7 +182,7 @@ func (r *RedisInstanceReconciler) continueFailover(ctx context.Context, instance
 	if _, err := r.InstanceManager.Promote(ctx, podFQDN(instance, targetOrdinal), epoch); err != nil {
 		return err
 	}
-	logCompleted := operationLog(instance, "failover", redisv1.ConditionFailover, from, to)
+	logCompleted := endOperation(instance, "failover", "completed", to, redisv1.ConditionFailover, "from", from, "to", to)
 	instance.Status.CurrentPrimary = to
 	instance.Status.TargetPrimary = ""
 	// The reason of the failover stays, after "Promoting <target>: ".

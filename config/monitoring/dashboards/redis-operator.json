@@ -76,6 +76,20 @@
     "iconColor": "rgba(0, 211, 255, 1)",
     "name": "Annotations & Alerts",
     "type": "dashboard"
+   },
+   {
+    "name": "Alerts",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "enable": true,
+    "iconColor": "red",
+    "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\",alertname=~\"Redis.*\"})",
+    "step": "15s",
+    "titleFormat": "Alerts",
+    "textFormat": "{{alertname}} ({{severity}})",
+    "useValueForTime": false
    }
   ]
  },
@@ -483,6 +497,78 @@
    }
   },
   {
+   "type": "state-timeline",
+   "title": "Alerts",
+   "description": "Every alert of config/monitoring/prometheusrule.yaml, of every object; hover a bar for the labels. Nothing here: none fired.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (alertname) (ALERTS{alertstate=\"firing\",alertname=~\"Redis.*\"}) or (max by (alertname) (max_over_time((ALERTS{alertstate=\"firing\",alertname=~\"Redis.*\"})[$__range:15s])) * 0 - 1)",
+     "legendFormat": "{{alertname}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "interval": "5s",
+   "options": {
+    "mergeValues": true,
+    "showValue": "auto",
+    "alignValue": "center",
+    "rowHeight": 0.85,
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "firing",
+         "color": "red",
+         "index": 0
+        },
+        "-1": {
+         "text": " ",
+         "color": "transparent",
+         "index": 99
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "insertNulls": 20000,
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 7,
+    "w": 24,
+    "h": 4
+   },
+   "id": 8,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
    "type": "nodeGraph",
    "title": "How the operator talks to its objects",
    "description": "Purple: the operator. Green: RedisInstances, orange: RedisClusters, blue: RedisUsers, with their reconciles per minute. Grey: the Instance Managers of an instance, which the operator calls over HTTP. Hover an arrow: calls per minute, to the Kubernetes API for an object, over HTTP for Instance Managers.",
@@ -551,11 +637,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 7,
+    "y": 11,
     "w": 24,
     "h": 20
    },
-   "id": 8,
+   "id": 9,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -565,10 +651,10 @@
    "type": "row",
    "title": "Controllers (controller-runtime)",
    "collapsed": false,
-   "id": 9,
+   "id": 10,
    "gridPos": {
     "x": 0,
-    "y": 27,
+    "y": 31,
     "w": 24,
     "h": 1
    },
@@ -621,11 +707,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 28,
+    "y": 32,
     "w": 12,
     "h": 8
    },
-   "id": 10,
+   "id": 11,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -695,11 +781,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 28,
+    "y": 32,
     "w": 12,
     "h": 8
    },
-   "id": 11,
+   "id": 12,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -749,11 +835,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 36,
+    "y": 40,
     "w": 8,
     "h": 7
    },
-   "id": 12,
+   "id": 13,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -813,11 +899,11 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 36,
+    "y": 40,
     "w": 8,
     "h": 7
    },
-   "id": 13,
+   "id": 14,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -867,11 +953,11 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 36,
+    "y": 40,
     "w": 8,
     "h": 7
    },
-   "id": 14,
+   "id": 15,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -881,10 +967,10 @@
    "type": "row",
    "title": "Workqueues",
    "collapsed": false,
-   "id": 15,
+   "id": 16,
    "gridPos": {
     "x": 0,
-    "y": 43,
+    "y": 47,
     "w": 24,
     "h": 1
    },
@@ -934,11 +1020,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 44,
+    "y": 48,
     "w": 6,
     "h": 7
    },
-   "id": 16,
+   "id": 17,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -998,11 +1084,11 @@
    },
    "gridPos": {
     "x": 6,
-    "y": 44,
+    "y": 48,
     "w": 6,
     "h": 7
    },
-   "id": 17,
+   "id": 18,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1052,11 +1138,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 44,
+    "y": 48,
     "w": 6,
     "h": 7
    },
-   "id": 18,
+   "id": 19,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1116,11 +1202,11 @@
    },
    "gridPos": {
     "x": 18,
-    "y": 44,
+    "y": 48,
     "w": 6,
     "h": 7
    },
-   "id": 19,
+   "id": 20,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1130,10 +1216,10 @@
    "type": "row",
    "title": "Every object",
    "collapsed": false,
-   "id": 20,
+   "id": 21,
    "gridPos": {
     "x": 0,
-    "y": 51,
+    "y": 55,
     "w": 24,
     "h": 1
    },
@@ -1323,11 +1409,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 52,
+    "y": 56,
     "w": 14,
     "h": 10
    },
-   "id": 21,
+   "id": 22,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1377,11 +1463,11 @@
    },
    "gridPos": {
     "x": 14,
-    "y": 52,
+    "y": 56,
     "w": 10,
     "h": 10
    },
-   "id": 22,
+   "id": 23,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1391,10 +1477,10 @@
    "type": "row",
    "title": "Calls to the Kubernetes API",
    "collapsed": false,
-   "id": 23,
+   "id": 24,
    "gridPos": {
     "x": 0,
-    "y": 62,
+    "y": 66,
     "w": 24,
     "h": 1
    },
@@ -1447,11 +1533,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 63,
+    "y": 67,
     "w": 12,
     "h": 8
    },
-   "id": 24,
+   "id": 25,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1504,11 +1590,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 63,
+    "y": 67,
     "w": 12,
     "h": 8
    },
-   "id": 25,
+   "id": 26,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1561,11 +1647,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 71,
+    "y": 75,
     "w": 12,
     "h": 8
    },
-   "id": 26,
+   "id": 27,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1618,11 +1704,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 71,
+    "y": 75,
     "w": 12,
     "h": 8
    },
-   "id": 27,
+   "id": 28,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1675,11 +1761,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 79,
+    "y": 83,
     "w": 24,
     "h": 8
    },
-   "id": 28,
+   "id": 29,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1689,10 +1775,10 @@
    "type": "row",
    "title": "Calls to the Instance Managers",
    "collapsed": false,
-   "id": 29,
+   "id": 30,
    "gridPos": {
     "x": 0,
-    "y": 87,
+    "y": 91,
     "w": 24,
     "h": 1
    },
@@ -1745,11 +1831,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 88,
+    "y": 92,
     "w": 12,
     "h": 8
    },
-   "id": 30,
+   "id": 31,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1802,11 +1888,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 88,
+    "y": 92,
     "w": 12,
     "h": 8
    },
-   "id": 31,
+   "id": 32,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1856,11 +1942,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 96,
+    "y": 100,
     "w": 12,
     "h": 8
    },
-   "id": 32,
+   "id": 33,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1920,11 +2006,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 96,
+    "y": 100,
     "w": 12,
     "h": 8
    },
-   "id": 33,
+   "id": 34,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1934,10 +2020,10 @@
    "type": "row",
    "title": "Decisions",
    "collapsed": false,
-   "id": 34,
+   "id": 35,
    "gridPos": {
     "x": 0,
-    "y": 104,
+    "y": 108,
     "w": 24,
     "h": 1
    },
@@ -1987,11 +2073,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 105,
+    "y": 109,
     "w": 24,
     "h": 8
    },
-   "id": 35,
+   "id": 36,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2011,7 +2097,7 @@
       "type": "loki",
       "uid": "${loki}"
      },
-     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} != `Moved slot` != `Could not configure` |~ `Started|Completed|Approved|Promot|Creating|Replacing|Switching|Deleting|Ran cluster|Updated Pod|Event occurred|Fenc|Demot|Recreat|Scal|Forget|Reconciler error` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:(?P<logger>events)\\t)?(?P<msg>[^\\t]+)\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json | label_format object=`{{ or .RedisInstance_name .RedisCluster_name .RedisUser_name .object_name }}`, what=`{{ or .controllerKind .kind }}`, where=`{{ or .RedisInstance_namespace .RedisCluster_namespace .RedisUser_namespace .object_namespace }}` | label_format decision=`{{ if .logger }}{{ .reason }}{{ else }}{{ .msg }}{{ end }}`, detail=`{{ if .logger }}{{ .note }}{{ else }}{{ if .from }}{{ .from }} \u2192 {{ .to }} {{ end }}{{ if .epoch }}epoch {{ .epoch }} {{ end }}{{ if .durationMs }}{{ .durationMs }} ms {{ end }}{{ if .downMs }}primary down {{ .downMs }} ms {{ end }}{{ if .pod_extracted }}{{ .pod_extracted }} {{ end }}{{ if .command }}{{ .command }} on {{ .node }} {{ end }}{{ if .role }}{{ .name }} is {{ .role }} {{ end }}{{ if and (not .role) (ne .name .object) }}{{ .name }} {{ end }}{{ if .error }}{{ .error }}{{ end }}{{ end }}` | keep what, where, object, decision, detail, level",
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} != `Moved slot` != `Could not configure` |~ `Started|Completed|Finished|Approved|Promot|Creating|Replacing|Switching|Deleting|Ran cluster|Updated Pod|Event occurred|Fenc|Demot|Recreat|Scal|Forget|Reconciler error` | regexp `^\\S+\\t(?P<level>\\S+)\\t(?:(?P<logger>events)\\t)?(?P<msg>[^\\t]+)\\t(?P<fields>\\{.*\\})$` | line_format `{{.fields}}` | json | label_format object=`{{ or .RedisInstance_name .RedisCluster_name .RedisUser_name .object_name }}`, what=`{{ or .controllerKind .kind }}`, where=`{{ or .RedisInstance_namespace .RedisCluster_namespace .RedisUser_namespace .object_namespace }}` | label_format decision=`{{ if .logger }}{{ .reason }}{{ else }}{{ .msg }}{{ end }}`, detail=`{{ if .logger }}{{ .note }}{{ else }}{{ if .outcome }}{{ .outcome }} {{ end }}{{ if .from }}{{ .from }} \u2192 {{ .to }} {{ end }}{{ if .epoch }}epoch {{ .epoch }} {{ end }}{{ if .durationMs }}{{ .durationMs }} ms {{ end }}{{ if .downMs }}primary down {{ .downMs }} ms {{ end }}{{ if .pod_extracted }}{{ .pod_extracted }} {{ end }}{{ if .command }}{{ .command }} on {{ .node }} {{ end }}{{ if .role }}{{ .name }} is {{ .role }} {{ end }}{{ if .reason }}{{ .reason }} {{ end }}{{ if and (not .role) (ne .name .object) }}{{ .name }} {{ end }}{{ if .error }}{{ .error }}{{ end }}{{ end }}` | keep what, where, object, decision, detail, level",
      "refId": "A",
      "queryType": "range"
     }
@@ -2118,7 +2204,7 @@
          {
           "type": "regex",
           "options": {
-           "pattern": "^(Completed.*|Approved.*|Updated.*|.*Completed|.*Balanced)$",
+           "pattern": "^(Completed.*|Finished.*|Approved.*|Updated.*|.*Completed|.*Balanced)$",
            "result": {
             "color": "green",
             "index": 2
@@ -2167,11 +2253,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 113,
+    "y": 117,
     "w": 24,
     "h": 14
    },
-   "id": 36
+   "id": 37
   }
  ]
 }

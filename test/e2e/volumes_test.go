@@ -52,7 +52,7 @@ spec:
 
 var volPassword string
 
-var _ = Describe("RedisInstance volumes", Ordered, func() {
+var _ = Describe("RedisInstance volumes", Ordered, Serial, func() {
 	SetDefaultEventuallyTimeout(3 * time.Minute)
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
 

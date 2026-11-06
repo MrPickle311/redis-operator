@@ -38,7 +38,7 @@ var ndPassword string
 
 // Scenario: three instances on the three workers of Kind, and the node of the
 // primary goes into maintenance.
-var _ = Describe("Nodes", Ordered, func() {
+var _ = Describe("Nodes", Ordered, Serial, func() {
 	SetDefaultEventuallyTimeout(3 * time.Minute)
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
 
@@ -177,7 +177,7 @@ spec:
 // Scenario: the node of the primary stops for good. Kind keeps every node in
 // a Docker container, so stopping the container stops the node; the volumes
 // of the local-path provisioner are local to their node.
-var _ = Describe("Node loss", Ordered, func() {
+var _ = Describe("Node loss", Ordered, Serial, func() {
 	SetDefaultEventuallyTimeout(5 * time.Minute)
 	SetDefaultEventuallyPollingInterval(3 * time.Second)
 

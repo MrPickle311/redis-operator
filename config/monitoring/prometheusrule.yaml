@@ -1,0 +1,161 @@
+# Alerts on the metrics of the operator (redis_operator_*), of the exporters
+# (redis_*), and of kube-state-metrics and the kubelet. The dashboards show the
+# firing ones as a timeline and as red markers.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: redis-operator
+  namespace: redis-operator-system
+  labels:
+    release: kube-prometheus-stack # the ruleSelector of your Prometheus
+spec:
+  groups:
+    - name: redis-instance
+      rules:
+        - alert: RedisPrimaryUnavailable
+          expr: redis_operator_condition{kind="RedisInstance",type="PrimaryAvailable"} == 0
+          for: 30s
+          labels: {severity: critical}
+          annotations:
+            summary: "The primary of {{ $labels.namespace }}/{{ $labels.name }} is unavailable ({{ $labels.reason }})"
+            description: "Writes fail until it is back or a replica takes over after spec.failover.delay."
+        - alert: RedisInstanceNotReady
+          expr: redis_operator_condition{kind="RedisInstance",type="Ready"} == 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.name }} is not Ready for 10 minutes: {{ $labels.reason }}"
+        - alert: RedisReplicaLinkDown
+          expr: max by (namespace, redis_instance, pod) (redis_master_link_up) == 0
+          for: 1m
+          labels: {severity: warning}
+          annotations:
+            summary: "The replica {{ $labels.namespace }}/{{ $labels.pod }} has lost its master"
+            description: "It serves stale reads and cannot take over without losing writes."
+        - alert: RedisFullResyncs
+          expr: sum by (namespace, redis_instance, pod) (increase(redis_replica_resyncs_full[10m])) > 2
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} served {{ $value | humanize }} full resyncs in 10 minutes"
+            description: "Each copies the whole dataset. Under heavy writes the backlog may be too small: raise repl-backlog-size."
+        - alert: RedisMemoryNearMaxmemory
+          expr: |
+            max by (namespace, redis_instance, pod) (redis_memory_used_bytes)
+              / max by (namespace, redis_instance, pod) (redis_memory_max_bytes > 0) > 0.9
+          for: 2m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} uses {{ $value | humanizePercentage }} of maxmemory"
+            description: "With noeviction writes fail with OOM; with an allkeys-* policy keys are evicted."
+        - alert: RedisOOMErrors
+          expr: sum by (namespace, redis_instance, pod) (increase(redis_errors_total{err="OOM"}[2m])) > 0
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} refuses writes: OOM, maxmemory is full"
+        - alert: RedisContainerMemoryNearLimit
+          expr: |
+            max by (namespace, pod) (container_memory_working_set_bytes{container="redis"})
+              / max by (namespace, pod) (kube_pod_container_resource_limits{container="redis",resource="memory"})
+              > 0.9
+            and on (namespace, pod) max by (namespace, pod) (redis_up)
+          for: 1m
+          labels: {severity: critical}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} is at {{ $value | humanizePercentage }} of its memory limit"
+            description: "A fork or the buffers on top of maxmemory end with an OOMKill."
+        - alert: RedisRejectedConnections
+          expr: sum by (namespace, redis_instance, pod) (increase(redis_rejected_connections_total[5m])) > 0
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} rejected connections: maxclients reached"
+        - alert: RedisVolumeNearlyFull
+          expr: |
+            max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes{persistentvolumeclaim=~".+-data"})
+              / max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".+-data"})
+              > 0.85
+            and on (namespace) max by (namespace) (redis_operator_instance_instances)
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "The volume {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
+            description: "An AOF rewrite or an RDB save needs room for a second copy."
+        - alert: RedisStall
+          expr: max by (namespace, redis_instance, pod, event_name) (redis_latency_spike_duration_seconds) > 1
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} stopped for {{ $value | humanizeDuration }} ({{ $labels.event_name }})"
+            description: "Clients wait meanwhile; in a cluster a stall near cluster-node-timeout fails the master over."
+    - name: redis-cluster
+      rules:
+        - alert: RedisClusterSlotsUncovered
+          expr: redis_operator_condition{kind="RedisCluster",type="SlotsCovered"} == 0
+          for: 30s
+          labels: {severity: critical}
+          annotations:
+            summary: "Some slots of {{ $labels.namespace }}/{{ $labels.name }} have no master: their keys fail"
+        - alert: RedisClusterStateFail
+          expr: max by (namespace, redis_cluster, pod) (redis_cluster_state) == 0
+          for: 30s
+          labels: {severity: critical}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} sees the cluster as fail and answers CLUSTERDOWN"
+        - alert: RedisClusterMigrationBlocked
+          expr: redis_operator_condition{kind="RedisCluster",type="Migrating",reason="Blocked"} >= 0
+          for: 1m
+          labels: {severity: warning}
+          annotations:
+            summary: "Slots of {{ $labels.namespace }}/{{ $labels.name }} stopped moving: a key exists on both nodes (BUSYKEY)"
+            description: "See the condition Migrating for the slot, the nodes and the key; delete the wrong copy."
+        - alert: RedisClusterReshardingSlow
+          expr: max by (namespace, redis_cluster) (redis_operator_cluster_slots_to_move) > 0
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.redis_cluster }} has had slots to move for 30 minutes ({{ $value }} left)"
+            description: "The migration waits for every instance Ready and no master moving, see the condition Migrating."
+        - alert: RedisClusterHotShard
+          expr: |
+            max by (namespace, redis_cluster) (sum by (namespace, redis_cluster, redis_instance) (rate(redis_commands_processed_total{role="primary"}[5m])))
+              / avg by (namespace, redis_cluster) (sum by (namespace, redis_cluster, redis_instance) (rate(redis_commands_processed_total{role="primary"}[5m])))
+              > 1.5
+            and on (namespace, redis_cluster) sum by (namespace, redis_cluster) (rate(redis_commands_processed_total{role="primary"}[5m])) > 1000
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "One master of {{ $labels.namespace }}/{{ $labels.redis_cluster }} does {{ $value | humanize }}x the average"
+            description: "Hot keys or a hash tag put the load on one shard; more shards do not help with that."
+        - alert: RedisClusterMastersOnOneMachine
+          expr: |
+            count by (namespace, redis_cluster, node) (
+              max by (namespace, redis_cluster, pod) (redis_operator_cluster_shard_primary == 1)
+              * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info)
+            ) > 1
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $value }} masters of {{ $labels.namespace }}/{{ $labels.redis_cluster }} run on {{ $labels.node }}"
+            description: "Losing that machine takes them all at once, and with them a majority of the cluster."
+    - name: redis-operator
+      rules:
+        - alert: RedisOperatorDown
+          expr: absent(up{job="redis-operator-controller-manager-metrics-service"} == 1)
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "The redis operator is not running: no failover, no new instance, no resharding"
+        - alert: RedisOperatorReconcileErrors
+          expr: |
+            sum by (kind, namespace, name) (rate(redis_operator_reconcile_total{result="error"}[10m]))
+              / sum by (kind, namespace, name) (rate(redis_operator_reconcile_total[10m])) > 0.5
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "Most reconciles of {{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} fail"
+            description: "A conflict now and then is normal; this is not. See the log of the operator."
+        - alert: RedisInstanceManagerUnreachable
+          expr: sum by (namespace, redis_instance, pod) (rate(redis_operator_im_requests_total{code="error"}[5m])) > 0.1
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "The operator cannot reach the Instance Manager of {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "A NetworkPolicy, a Pod that keeps restarting or a node that is gone."

@@ -2,12 +2,14 @@ package instancemanager
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -189,10 +191,20 @@ func Run(ctx context.Context, name string, args ...string) error {
 	return err
 }
 
-// CopySelf copies the running binary to dest. The initContainer uses it to put
-// the manager into a shared emptyDir, so the redis container can run it
-// without the operator image.
+// KeysScript is the Lua script, next to the manager, with which the
+// redis_exporter sidecar samples the keys by type and memory.
+const KeysScript = "keys.lua"
+
+//go:embed keys.lua
+var keysScript []byte
+
+// CopySelf copies the running binary to dest, and KeysScript next to it. The
+// initContainer uses it to put the manager into a shared emptyDir, so the
+// redis container can run it without the operator image.
 func CopySelf(dest string) error {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dest), KeysScript), keysScript, 0o644); err != nil {
+		return err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err

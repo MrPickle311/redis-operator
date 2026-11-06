@@ -1424,11 +1424,71 @@ A `RedisCluster` passes `monitoring` to its shards.
   and the full and partial resyncs;
   *Disk*, the used space of every PVC (kubelet), over time, the AOF size and
   the age of the last RDB save.
+  The volumes, a row per instance with its state as text: Ready green,
+  Terminating orange, Missing or Lost red, Detached grey; a state of a
+  few seconds may fall between two scrapes, the table of operations has
+  every volume replaced. The log lines of the operator show the error
+  of a failed reconcile, mostly a conflict: the status was written by an
+  older version of the object, and the reconcile runs again at once.
 - *Redis Operator / RedisCluster*: slots per shard as bars and over time, slots moved from shard to shard,
   slots to move, the health of the cluster, `Migrating` (orange while slots
   move, grey when balanced, red when blocked), a slot map of 64 rows of 256
   slots coloured by shard, the role of every node, and commands and keys
   per shard.
+- Both: *Inside Redis*, what the exporter reports from Redis itself: the
+  errors it answered by kind (`READONLY` after a switchover, `NOREPLICAS`,
+  `WRONGPASS`, `NOPERM`, `MOVED`/`ASK` while slots move, `CLUSTERDOWN`; the
+  commands of the operator count too), the link of every replica to its
+  master (a replica may be Ready while it is down), the cache hit ratio,
+  evicted and expired keys, the p99 latency by command (without the commands
+  of the operator and the exporter), the slow log, fragmentation, how long
+  the last fork stopped Redis, RDB saves and AOF rewrites, rejected
+  connections and blocked clients; for a cluster also `cluster_state`, the
+  slots in `pfail` or `fail` and the nodes known, as every node sees them.
+  *Keys by type and size*: at every scrape the exporter runs
+  `/controller/keys.lua` (`REDIS_EXPORTER_SCRIPT`), which samples 200 random
+  keys (`RANDOMKEY`, `TYPE`, `MEMORY USAGE`) and counts them by type and
+  memory (`<1KB`, `1-10KB`, `10-100KB`, `100KB-1MB`, `>1MB`), as
+  `redis_script_values{key="hash <1KB"}`. It is a share of the keys, not a
+  count: a rare type or a few big keys may not show (`redis-cli --bigkeys`
+  finds those). The script runs on replicas too (`no-writes`) and in a
+  cluster (`allow-cross-slot-keys`); the `bootstrap` initContainer writes it
+  next to the Instance Manager.
+  *Load and pressure*, where a node runs out of something: how busy the main
+  thread is (Redis runs commands on one thread, so 100 % is the ceiling of a
+  shard), CPU throttled by the limit, commands per second of every master
+  and, for a cluster, the busiest master against the average (a hot shard),
+  memory of every master of `maxmemory` and of the container of its limit
+  (forks and buffers come on top of `maxmemory`), network, the output buffers
+  to replicas and clients against the replica soft limit, how many seconds
+  of writes the replication backlog holds (a replica cut off for longer
+  needs a full resync), changes of the master, stalls (the last fork and
+  `LATENCY LATEST`, with `latency-monitor-threshold` set in
+  `spec.redis.parameters`) against `cluster-node-timeout`, and restarts. A
+  Job with `load` in its name in the namespace shows as a yellow range, e.g.
+  `memtier_benchmark` of `playground-load.yaml`.
+
+**Alerts** (`config/monitoring/prometheusrule.yaml`, label `release` for the
+`ruleSelector` of Prometheus). Every dashboard has a timeline *Alerts* of the
+ones that fire for its object, and red markers where they fired:
+
+| Alert | When |
+|---|---|
+| `RedisPrimaryUnavailable` (critical) | `PrimaryAvailable=False` for 30 s |
+| `RedisInstanceNotReady` | `Ready=False` for 10 min, with the reason |
+| `RedisReplicaLinkDown` | a replica has lost its master for 1 min |
+| `RedisFullResyncs` | more than 2 full resyncs of a Pod in 10 min: the backlog is too small |
+| `RedisMemoryNearMaxmemory`, `RedisOOMErrors` | above 90 % of `maxmemory` for 2 min; writes refused with OOM |
+| `RedisContainerMemoryNearLimit` (critical) | above 90 % of the memory limit of the container for 1 min |
+| `RedisRejectedConnections` | connections over `maxclients` |
+| `RedisVolumeNearlyFull` | a `-data` PVC of a namespace with instances above 85 % |
+| `RedisStall` | a `LATENCY LATEST` spike above 1 s |
+| `RedisClusterSlotsUncovered`, `RedisClusterStateFail` (critical) | slots without a master; a node sees `cluster_state:fail` |
+| `RedisClusterMigrationBlocked` | `Migrating=Blocked` (`BUSYKEY`) |
+| `RedisClusterReshardingSlow` | slots to move for 30 min |
+| `RedisClusterHotShard` | the busiest master does 1.5× the average for 5 min |
+| `RedisClusterMastersOnOneMachine` | two masters on one machine for 10 min; *Masters per machine* on the dashboard |
+| `RedisOperatorDown` (critical), `RedisOperatorReconcileErrors`, `RedisInstanceManagerUnreachable` | the operator, its reconciles, its calls to the Instance Managers |
 - *Redis Operator / Operator*: a node graph of the operator now, with an
   arrow to every RedisInstance, RedisCluster and RedisUser (its calls to the
   Kubernetes API per minute) and to the Instance Managers of every instance
@@ -1468,22 +1528,43 @@ shaded orange. A switchover reads like this:
 22:26:55.165 operator  Updated Pod role label
 ```
 
-**Every switchover and failover as a row.** When one ends, the operator
-logs one line with all of it:
+**Every operation as a row.** When a switchover, a failover, a rolling
+update, a safe start of a restarted primary or a move of a replica to a new
+volume ends, however it ends, the
+operator logs one line with all of it:
 
 ```text
-INFO  Completed failover  {…, "kind": "failover", "from": "cache-2", "to": "cache-0", "epoch": 11, "durationMs": 2005, "downMs": 34211}
+INFO  Finished failover  {…, "kind": "failover", "outcome": "completed", "from": "cache-2", "to": "cache-0", "epoch": 11,
+                          "startMs": 1793746254093, "endMs": 1793746256098, "durationMs": 2005, "downMs": 34211}
 ```
 
-`durationMs` is from its start to the new primary, measured in the
-operator, as conditions keep whole seconds (after a restart of the
-operator, from the condition); `downMs`, of a failover, is since the
-primary became unavailable, `failover.delay` included. A switchover of a
-shard (`CLUSTER FAILOVER`) logs the same. The section *Switchovers and
-failovers* of both dashboards reads these lines from Loki: how many in the
-time range, the slowest of each and the longest outage of a primary, a
-table with a row per operation (when, what, of which instance, from, to,
-epoch, and how long, as a bar), and a point per operation on a log scale.
+| `kind` | `outcome` |
+|---|---|
+| `switchover` | `completed`; `rejected` (the request named no Ready replica of the instance, with `reason`); `failed` (the target did not catch up in a minute); `interrupted` (a failover took over) |
+| `failover` | `completed` |
+| `safe start` | `approved` (the restarted primary keeps its dataset, with `keys`); `failover` (a replica takes over, with `reason`) |
+| `rolling update` | `completed`, once the last Pod has settled |
+| `recreate` | `completed`, once the replica is Ready on its new volume, after its full sync; `rejected` (e.g. the primary, with `reason`) |
+| `volume replaced` | `completed`, the same, after a PVC of a replica was deleted or lost its volume or node (`reason`) |
+| `configuration` | `applied` (Redis took a change of `spec.redis`, `to` the Pods; or the refused options are gone); `rejected` (Redis refused an option, `reason` its error) |
+| `certificate` | `issued` or `updated`: the operator wrote the TLS Secret of Redis, which the Instance Managers reload without a restart |
+| `scale up`, `scale down` | `completed` once every instance is Ready, or none above the count has a volume; `interrupted` when `instances` changed again |
+| `self-fence` | `lifted` (the API server is back) or `demoted` (another Pod became the primary): how long the primary took no writes. The Instance Manager logs it, in the Pod, in the same shape |
+
+`durationMs` is from the start to the end, measured in the operator, as
+conditions keep whole seconds (after a restart of the operator, from the
+condition, so in whole seconds); a rejected request takes none. `downMs`,
+of a failover or a safe start, is since the primary became unavailable,
+`failover.delay` included. A switchover of a shard (`CLUSTER FAILOVER`)
+logs the same. The section *Operations* of both dashboards reads these lines from Loki: how many
+completed, how many were rejected or failed, the slowest switchover and
+failover and the longest outage of a primary, a table with a row per
+operation (when, what, outcome, of which instance, from, to, epoch, how
+long, why: for a switchover or failover what started it, e.g. asked for,
+a rolling update, a cordoned node, a failing volume, a Pod not Ready), and a point per operation on a log scale. The kind of a row is
+a link: it opens the dashboard of that instance on the seconds of the
+operation, 3 s before to 5 s after, where *What happened, to the
+millisecond* shows every log line of it, of the operator and of the Pods.
 
 Without Loki these panels stay empty and the rest works.
 

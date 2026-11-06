@@ -25,6 +25,7 @@ func (r *RedisInstanceReconciler) reconcileConfig(ctx context.Context, instance 
 	req := instancemanager.ConfigFor(instance)
 	rejected := map[string]string{}
 	answered, pending := false, false
+	var changed []string
 
 	for ordinal := range instance.Spec.Instances {
 		var pod corev1.Pod
@@ -43,10 +44,22 @@ func (r *RedisInstanceReconciler) reconcileConfig(ctx context.Context, instance 
 		maps.Copy(rejected, resp.Rejected)
 		if resp.Changed {
 			logger.Info("Configured Redis", "pod", name)
+			changed = append(changed, name)
 		}
 	}
 	if answered {
+		wasRejected := meta.IsStatusConditionFalse(instance.Status.Conditions, redisv1.ConditionParametersApplied)
 		r.setParametersCondition(instance, rejected)
+		// A row of the operations for a change Redis took, or a refusal that is new.
+		if len(rejected) > 0 && (len(changed) > 0 || !wasRejected) {
+			c := meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionParametersApplied)
+			endOperation(instance, "configuration", "rejected", "", "", "to", strings.Join(changed, ","), "reason", c.Message)(ctx)
+		} else if len(changed) > 0 {
+			endOperation(instance, "configuration", "applied", "", "", "to", strings.Join(changed, ","),
+				"reason", "CONFIG SET of spec.redis on the Pods")(ctx)
+		} else if wasRejected && len(rejected) == 0 {
+			endOperation(instance, "configuration", "applied", "", "", "reason", "the refused options are gone")(ctx)
+		}
 	}
 	return pending
 }

@@ -2,6 +2,7 @@ package instancemanager
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -71,6 +72,7 @@ type selfFencing struct {
 	last     *redisv1.RedisInstance
 	lastRead time.Time
 	fenced   bool
+	fencedAt time.Time
 }
 
 // run reads the RedisInstance every instancePollInterval until ctx ends.
@@ -102,6 +104,9 @@ func (s *selfFencing) step(ctx context.Context) error {
 		return err // Redis is not up: nothing to protect
 	}
 	if status.Role != "master" {
+		if s.fenced {
+			s.logFence("demoted", "another Pod became the primary meanwhile")
+		}
 		s.fenced = false // the demotion lifted the pause
 	}
 
@@ -118,11 +123,13 @@ func (s *selfFencing) step(ctx context.Context) error {
 	case selfFence:
 		if !s.fenced {
 			fmt.Fprintln(os.Stderr, "Fencing this primary: the API server has been out of reach since", s.lastRead)
+			s.fencedAt = time.Now()
 		}
 		s.fenced = true
 		return fence(ctx, s.rdb)
 	case selfUnfence:
 		fmt.Fprintln(os.Stderr, "Lifting the fence: the API server is back and this instance is still the primary")
+		s.logFence("lifted", "the API server was out of reach")
 		s.fenced = false
 		return s.rdb.Do(ctx, "CLIENT", "UNPAUSE").Err()
 	}
@@ -138,4 +145,26 @@ func (s *selfFencing) read(ctx context.Context) (*redisv1.RedisInstance, error) 
 		return nil, err
 	}
 	return &instance, nil
+}
+
+// logFence ends a fence of this primary with a line like the "Finished <kind>"
+// of the operator, so the dashboards list it with the operations of the
+// instance: when it took no writes, and why it ended.
+func (s *selfFencing) logFence(outcome, reason string) {
+	end := time.Now()
+	type object struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	}
+	fields, _ := json.Marshal(struct {
+		Instance   object `json:"RedisInstance"`
+		Kind       string `json:"kind"`
+		Outcome    string `json:"outcome"`
+		To         string `json:"to"`
+		Reason     string `json:"reason"`
+		StartMs    int64  `json:"startMs"`
+		EndMs      int64  `json:"endMs"`
+		DurationMs int64  `json:"durationMs"`
+	}{object{s.key.Name, s.key.Namespace}, "self-fence", outcome, s.pod, reason, s.fencedAt.UnixMilli(), end.UnixMilli(), end.Sub(s.fencedAt).Milliseconds()})
+	fmt.Fprintf(os.Stderr, "%s\tINFO\tFinished self-fence\t%s\n", end.UTC().Format(time.RFC3339Nano), fields)
 }
