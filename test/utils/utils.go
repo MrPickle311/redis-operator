@@ -147,7 +147,7 @@ func LoadImageToKindClusterWithName(name string) error {
 	// fails on a multi-platform image such as redis:7.2 ("content digest ... not found"): the
 	// archive lists platforms it does not hold. An archive of the one platform loads fine.
 	if archive, err := saveImageArchive(name); err == nil {
-		defer os.RemoveAll(filepath.Dir(archive))
+		defer func() { _ = os.RemoveAll(filepath.Dir(archive)) }()
 		if _, err := Run(exec.Command(kindBinary, "load", "image-archive", archive, "--name", cluster)); err == nil {
 			return nil
 		}
