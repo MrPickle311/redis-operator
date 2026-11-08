@@ -127,6 +127,8 @@ test-e2e-fast: manifests generate fmt vet ## Run e2e tests against a persistent 
 # Describe has a namespace of its own; the ones that stop the operator or touch
 # the nodes are Serial, so Ginkgo runs them alone, after the others.
 E2E_PROCS ?= 3
+# Specs matching E2E_SKIP are left out (a regex, like E2E_FOCUS); CI uses it for its catch-all shard.
+E2E_SKIP ?=
 
 .PHONY: test-e2e-parallel
 test-e2e-parallel: manifests generate fmt vet ## Run all e2e tests on E2E_PROCS parallel processes against the persistent Kind cluster.
@@ -137,7 +139,7 @@ test-e2e-parallel: manifests generate fmt vet ## Run all e2e tests on E2E_PROCS 
 		trap '$(E2E_RESTORE_KUSTOMIZATION)' EXIT; \
 		KUBECONFIG=$(E2E_KUBECONFIG) KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) \
 		go run github.com/onsi/ginkgo/v2/ginkgo -tags=e2e --procs=$(E2E_PROCS) --timeout=60m -v \
-		$(if $(E2E_FOCUS),--focus="$(E2E_FOCUS)") ./test/e2e/
+		$(if $(E2E_FOCUS),--focus="$(E2E_FOCUS)") $(if $(E2E_SKIP),--skip="$(E2E_SKIP)") ./test/e2e/
 
 .PHONY: test-redis
 test-redis: ## Run the Instance Manager tests that need a real Redis, in Docker.

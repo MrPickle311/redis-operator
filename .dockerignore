@@ -8,6 +8,8 @@
 # See https://github.com/containers/buildah/issues/6417
 !**/*.go
 **/*_test.go
+# Files embedded with go:embed
+!internal/instancemanager/keys.lua
 
 # Re-include Go module files
 !go.mod
