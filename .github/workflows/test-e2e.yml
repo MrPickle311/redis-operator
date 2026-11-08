@@ -34,20 +34,20 @@ jobs:
       matrix:
         include:
           - name: RedisCluster
-            focus: ^RedisCluster\b
-            skip: ^RedisCluster changing shards
+            focus: ^e2e suite RedisCluster\b
+            skip: ^e2e suite RedisCluster changing shards
             procs: 2
           - name: RedisCluster changing shards
-            focus: ^RedisCluster changing shards
+            focus: ^e2e suite RedisCluster changing shards
             procs: 1
           - name: Nodes and volumes
-            focus: ^(Nodes|Node loss|RedisInstance volumes)\b
+            focus: ^e2e suite (Nodes|Node loss|RedisInstance volumes)\b
             procs: 1
           - name: Failover
-            focus: ^(Self-fencing of the Instance Manager|Automatic failover|Network partition)\b
+            focus: ^e2e suite (Self-fencing of the Instance Manager|Automatic failover|Network partition)\b
             procs: 1
           - name: rest
-            skip: ^(RedisCluster|Nodes|Node loss|RedisInstance volumes|Self-fencing of the Instance Manager|Automatic failover|Network partition)\b
+            skip: ^e2e suite (RedisCluster|Nodes|Node loss|RedisInstance volumes|Self-fencing of the Instance Manager|Automatic failover|Network partition)\b
             procs: 3
     steps:
       - name: Clone the code

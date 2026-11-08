@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
@@ -137,14 +139,36 @@ func LoadImageToKindClusterWithName(name string) error {
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
-	cmd := exec.Command(kindBinary, kindOptions...)
-	_, err := Run(cmd)
+	// With the containerd image store (the default of recent Docker), `kind load docker-image`
+	// fails on a multi-platform image such as redis:7.2 ("content digest ... not found"): the
+	// archive lists platforms it does not hold. An archive of the one platform loads fine.
+	if archive, err := saveImageArchive(name); err == nil {
+		defer os.RemoveAll(filepath.Dir(archive))
+		if _, err := Run(exec.Command(kindBinary, "load", "image-archive", archive, "--name", cluster)); err == nil {
+			return nil
+		}
+	}
+	_, err := Run(exec.Command(kindBinary, "load", "docker-image", name, "--name", cluster))
 	return err
+}
+
+// saveImageArchive writes the image for the platform of this machine to a temporary tar file.
+// It needs a Docker that knows `docker save --platform`; the caller then falls back to kind.
+func saveImageArchive(name string) (string, error) {
+	dir, err := os.MkdirTemp("", "kind-image-")
+	if err != nil {
+		return "", err
+	}
+	archive := filepath.Join(dir, "image.tar")
+	_, err = Run(exec.Command("docker", "save", "--platform", "linux/"+runtime.GOARCH, "-o", archive, name))
+	if err != nil {
+		_ = os.RemoveAll(dir)
+	}
+	return archive, err
 }
 
 // GetNonEmptyLines converts given command output string into individual objects
