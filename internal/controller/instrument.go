@@ -14,6 +14,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	labelKind = "kind" // the label, and log key, that names the kind of an object
+	verbGet   = "get"
+)
+
 // What the operator does for every object, which controller-runtime counts
 // per controller only: the reconciles of each RedisInstance, RedisCluster and
 // RedisUser, and the calls to the API server they make.
@@ -21,16 +26,16 @@ var (
 	reconcilesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "redis_operator_reconcile_total",
 		Help: "Reconciles of every object, by result: success, requeue, requeue_after or error.",
-	}, []string{"kind", "namespace", "name", "result"})
+	}, []string{labelKind, "namespace", "name", "result"})
 	reconcileSeconds = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "redis_operator_reconcile_seconds_total",
 		Help: "Time spent reconciling every object.",
-	}, []string{"kind", "namespace", "name"})
+	}, []string{labelKind, "namespace", "name"})
 	apiRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "redis_operator_api_requests_total",
 		Help: "Calls of the client of the reconcile of an object, by verb and the kind they are about; " +
 			"source cache for reads the informers answer, api for writes to the API server.",
-	}, []string{"kind", "namespace", "name", "verb", "resource", "source"})
+	}, []string{labelKind, "namespace", "name", "verb", "resource", "source"})
 )
 
 func init() {
@@ -79,7 +84,7 @@ func (c countingClient) count(ctx context.Context, verb string, obj runtime.Obje
 		resource = gvk.Kind
 	}
 	source := "api"
-	if verb == "get" || verb == "list" {
+	if verb == verbGet || verb == "list" {
 		source = "cache"
 	}
 	apiRequestsTotal.WithLabelValues(target.kind, target.namespace, target.name, verb,
@@ -87,7 +92,7 @@ func (c countingClient) count(ctx context.Context, verb string, obj runtime.Obje
 }
 
 func (c countingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	c.count(ctx, "get", obj)
+	c.count(ctx, verbGet, obj)
 	return c.Client.Get(ctx, key, obj, opts...)
 }
 

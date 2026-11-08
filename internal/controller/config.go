@@ -70,17 +70,17 @@ func (r *RedisInstanceReconciler) setParametersCondition(instance *redisv1.Redis
 	condition := metav1.Condition{
 		Type:               redisv1.ConditionParametersApplied,
 		Status:             metav1.ConditionTrue,
-		Reason:             "Applied",
+		Reason:             reasonApplied,
 		Message:            "Every running instance has the configuration of spec.redis",
 		ObservedGeneration: instance.Generation,
 	}
 	if len(rejected) > 0 {
-		var refusals []string
+		refusals := make([]string, 0, len(rejected))
 		for _, name := range slices.Sorted(maps.Keys(rejected)) {
 			refusals = append(refusals, fmt.Sprintf("%s: %s", name, rejected[name]))
 		}
 		condition.Status = metav1.ConditionFalse
-		condition.Reason = "Rejected"
+		condition.Reason = reasonRejected
 		condition.Message = "Redis refused " + strings.Join(refusals, "; ")
 
 		if !meta.IsStatusConditionFalse(instance.Status.Conditions, redisv1.ConditionParametersApplied) {

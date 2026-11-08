@@ -91,7 +91,7 @@ func foreignPolicies(instance *redisv1.RedisInstance, policies []networkingv1.Ne
 func (r *RedisInstanceReconciler) setNetworkPolicyCondition(instance *redisv1.RedisInstance, foreign []string) {
 	condition := metav1.Condition{
 		Type: redisv1.ConditionNetworkPolicyReady, Status: metav1.ConditionTrue, ObservedGeneration: instance.Generation,
-		Reason: "Applied", Message: "Only the NetworkPolicy of the operator lets traffic in to the instances",
+		Reason: reasonApplied, Message: "Only the NetworkPolicy of the operator lets traffic in to the instances",
 	}
 	if len(foreign) > 0 {
 		condition.Status, condition.Reason = metav1.ConditionFalse, "ForeignPolicy"

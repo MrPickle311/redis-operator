@@ -345,7 +345,7 @@ func clusterFailover(ctx context.Context, rdb *redis.Client, _ ClusterRequest) (
 	if err != nil {
 		return false, err
 	}
-	if status.Role == "master" {
+	if status.Role == RoleMaster {
 		return false, nil
 	}
 	return true, rdb.ClusterFailover(ctx).Err()

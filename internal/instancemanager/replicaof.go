@@ -174,7 +174,7 @@ func promote(ctx context.Context, rdb *redis.Client) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	changed := status.Role != "master"
+	changed := status.Role != RoleMaster
 	if changed {
 		if err := rdb.ReplicaOf(ctx, "NO", "ONE").Err(); err != nil {
 			return false, err

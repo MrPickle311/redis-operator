@@ -126,7 +126,7 @@ func userPasswords(ctx context.Context, c client.Reader, user *redisv1.RedisUser
 // aclLine returns the line of a user in the format of a Redis ACL file. Redis
 // gets only the SHA-256 of each password.
 func aclLine(username string, passwords []string, rules []redisv1.ACLRule) string {
-	parts := []string{"user", username, "on"}
+	parts := append(make([]string, 0, 3+len(passwords)+len(rules)), "user", username, "on")
 	for _, password := range passwords {
 		parts = append(parts, fmt.Sprintf("#%x", sha256.Sum256([]byte(password))))
 	}
@@ -341,17 +341,17 @@ func (r *RedisInstanceReconciler) setACLCondition(instance *redisv1.RedisInstanc
 		condition.Reason = "InvalidExternalACL"
 		condition.Message = "The instances keep the users of the last good file. " + acl.ExternalError
 	case len(acl.Rejected) > 0:
-		var refusals []string
+		refusals := make([]string, 0, len(acl.Rejected))
 		for _, name := range slices.Sorted(maps.Keys(acl.Rejected)) {
 			refusals = append(refusals, fmt.Sprintf("%s: %s", name, acl.Rejected[name]))
 		}
-		condition.Reason = "Rejected"
+		condition.Reason = reasonRejected
 		condition.Message = "Redis refused the rules of " + strings.Join(refusals, "; ")
 	case !acl.Applied:
 		condition.Reason = "Pending"
 		condition.Message = "Waiting for the running instances to apply the users"
 	default:
-		condition.Status, condition.Reason, condition.Message = metav1.ConditionTrue, "Applied", "Every running instance has the users"
+		condition.Status, condition.Reason, condition.Message = metav1.ConditionTrue, reasonApplied, "Every running instance has the users"
 	}
 	previous := meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionACLReady)
 	if condition.Reason == "InvalidExternalACL" && (previous == nil || previous.Message != condition.Message) {

@@ -235,7 +235,7 @@ func (r *RedisClusterReconciler) ensureSeedService(ctx context.Context, cluster 
 // clusterNodes returns every node of the first total shards, ordered by shard
 // and ordinal, with the cluster status of those that answer.
 func (r *RedisClusterReconciler) clusterNodes(ctx context.Context, cluster *redisv1.RedisCluster, total int32) []clusterNode {
-	var nodes []clusterNode
+	nodes := make([]clusterNode, 0, int(cluster.Spec.InstancesPerShard*total))
 	for shard := range total {
 		instance := shardName(cluster, shard)
 		for ordinal := range cluster.Spec.InstancesPerShard {
@@ -321,7 +321,7 @@ func setClusterStatus(cluster *redisv1.RedisCluster, nodes []clusterNode, total 
 	case !shardsReady:
 		ready.Reason, ready.Message = "ShardsNotReady", "A RedisInstance of a shard is not Ready"
 	default:
-		ready.Status, ready.Reason, ready.Message = metav1.ConditionTrue, "Ready", "The cluster is ok and every shard is Ready"
+		ready.Status, ready.Reason, ready.Message = metav1.ConditionTrue, reasonReady, "The cluster is ok and every shard is Ready"
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, ready)
 }

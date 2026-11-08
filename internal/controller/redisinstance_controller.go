@@ -436,7 +436,7 @@ func (r *RedisInstanceReconciler) deleteOwnedPVC(ctx context.Context, instance *
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
-func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *RedisInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) { //nolint:gocyclo // one step per mechanism; splitting it is the planned refactor
 	logger := logf.FromContext(ctx)
 
 	var instance redisv1.RedisInstance

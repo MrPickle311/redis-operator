@@ -70,6 +70,8 @@ type ConfigResponse struct {
 }
 
 // option is an option of redis.conf with its value.
+const redisYes = "yes"
+
 type option struct {
 	name, value string
 }
@@ -81,13 +83,13 @@ func liveOptions(req ConfigRequest, memoryLimit int64) []option {
 	if req.Persistence == PersistenceNone {
 		save = ""
 	}
-	options := []option{
-		{"maxmemory", strconv.FormatInt(maxmemoryFor(memoryLimit, req.MaxmemoryRatio), 10)},
-		{"maxmemory-policy", req.MaxmemoryPolicy},
-		{"save", save},
-		{"min-replicas-to-write", strconv.Itoa(req.MinReplicasToWrite)},
-		{"min-replicas-max-lag", strconv.Itoa(req.MinReplicasMaxLag)},
-	}
+	options := append(make([]option, 0, 5+len(req.Parameters)),
+		option{"maxmemory", strconv.FormatInt(maxmemoryFor(memoryLimit, req.MaxmemoryRatio), 10)},
+		option{"maxmemory-policy", req.MaxmemoryPolicy},
+		option{"save", save},
+		option{"min-replicas-to-write", strconv.Itoa(req.MinReplicasToWrite)},
+		option{"min-replicas-max-lag", strconv.Itoa(req.MinReplicasMaxLag)},
+	)
 	for _, name := range slices.Sorted(maps.Keys(req.Parameters)) {
 		options = append(options, option{name, req.Parameters[name]})
 	}
@@ -101,8 +103,7 @@ func applyConfig(ctx context.Context, rdb *redis.Client, req ConfigRequest, memo
 	var resp ConfigResponse
 	for _, o := range liveOptions(req, memoryLimit) {
 		changed, err := setOption(ctx, rdb, o)
-		var refused redis.Error
-		if errors.As(err, &refused) {
+		if refused, ok := errors.AsType[redis.Error](err); ok {
 			if resp.Rejected == nil {
 				resp.Rejected = map[string]string{}
 			}
@@ -149,17 +150,17 @@ func applyPersistence(ctx context.Context, rdb *redis.Client, isAof bool, aofDir
 		return false, err
 	}
 	if isAof {
-		if current == "yes" {
+		if current == redisYes {
 			return false, nil
 		}
-		return true, rdb.ConfigSet(ctx, "appendonly", "yes").Err()
+		return true, rdb.ConfigSet(ctx, "appendonly", redisYes).Err()
 	}
 
 	// Also after a crash between the steps below: the AOF is off, its files are not.
 	if _, err := os.Stat(aofDir); current == "no" && errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
-	if current == "yes" {
+	if current == redisYes {
 		if err := rdb.ConfigSet(ctx, "appendonly", "no").Err(); err != nil {
 			return false, err
 		}

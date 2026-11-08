@@ -215,7 +215,7 @@ func (r *RedisInstanceReconciler) setPrimaryAvailableCondition(instance *redisv1
 	condition := metav1.Condition{
 		Type:               redisv1.ConditionPrimaryAvailable,
 		Status:             metav1.ConditionTrue,
-		Reason:             "Ready",
+		Reason:             reasonReady,
 		Message:            "The primary " + instance.Status.CurrentPrimary + " is Ready",
 		ObservedGeneration: instance.Generation,
 	}

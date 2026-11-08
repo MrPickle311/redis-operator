@@ -84,7 +84,7 @@ var _ = Describe("RedisInstance rolling update", func() {
 		})
 
 		It("replaces one replica at a time, and only while every instance is Ready", func() {
-			setImage(name, "redis:7.4")
+			setImage(name)
 
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 			Expect(existingPodNames(name, 3)).To(ConsistOf(name+"-0", name+"-2"), "the first replica goes first")
@@ -176,7 +176,7 @@ var _ = Describe("RedisInstance rolling update", func() {
 			// move to a new one; the rollout must not take another one down.
 			Expect(existingPodNames(name, 3)).To(ConsistOf(name+"-0", name+"-1"))
 
-			setImage(name, "redis:7.4")
+			setImage(name)
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 			Expect(existingPodNames(name, 3)).To(ConsistOf(name+"-0", name+"-1"), "the rollout replaced a Pod while a volume is not Ready")
 			Expect(podImage(name + "-1")).To(Equal("redis:7.2"))
@@ -208,7 +208,7 @@ var _ = Describe("RedisInstance rolling update", func() {
 		AfterAll(func() { deleteInstance(name) })
 
 		It("waits until it has been Ready for a while before it replaces anything", func() {
-			setImage(name, "redis:7.4")
+			setImage(name)
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 			Expect(existingPodNames(name, 2)).To(ConsistOf(name+"-0", name+"-1"),
 				"a Pod went while a replica had been Ready for less than %s", rolloutSettleTime)
@@ -229,7 +229,7 @@ var _ = Describe("RedisInstance rolling update", func() {
 		AfterAll(func() { deleteInstance(name) })
 
 		It("restarts the primary, as there is no replica to take over", func() {
-			setImage(name, "redis:7.4")
+			setImage(name)
 			Expect(reconcileOnce(objectKey(name))).To(Succeed())
 			Expect(podExistsNow(name + "-0")).To(BeFalse())
 
@@ -273,9 +273,9 @@ func podImage(name string) string {
 	return pod.Spec.Containers[0].Image
 }
 
-func setImage(name, image string) {
+func setImage(name string) {
 	instance := getInstance(name)
-	instance.Spec.Image = image
+	instance.Spec.Image = "redis:7.4"
 	Expect(k8sClient.Update(ctx, instance)).To(Succeed())
 }
 

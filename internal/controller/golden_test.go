@@ -11,7 +11,6 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	redisv1 "github.com/MrPickle311/redis-operator/api/v1"
 )
@@ -37,10 +36,10 @@ func TestGoldenObjects(t *testing.T) {
 					Persistence: redisv1.PersistenceAOF, MaxmemoryPolicy: "noeviction", MaxmemoryRatio: 75,
 					Startup: redisv1.RedisStartupSpec{Databases: 16, IOThreads: 1},
 				},
-				Failover:    redisv1.FailoverSpec{Delay: metav1.Duration{Duration: 30e9}, FenceOnAPILoss: ptr.To(true)},
+				Failover:    redisv1.FailoverSpec{Delay: metav1.Duration{Duration: 30e9}, FenceOnAPILoss: new(true)},
 				Replication: redisv1.ReplicationSpec{MinReplicasMaxLag: 10},
 				Affinity:    redisv1.AffinitySpec{PodAntiAffinityType: redisv1.PodAntiAffinityRequired},
-				TLS:         redisv1.TLSSpec{Enabled: ptr.To(true), ClientAuth: redisv1.TLSClientAuthNone},
+				TLS:         redisv1.TLSSpec{Enabled: new(true), ClientAuth: redisv1.TLSClientAuthNone},
 				ACL:         redisv1.ACLSpec{DefaultUser: redisv1.DefaultUserDisabled},
 			},
 			Status: redisv1.RedisInstanceStatus{CurrentPrimary: "cache-0"},
@@ -49,7 +48,7 @@ func TestGoldenObjects(t *testing.T) {
 	cases := map[string]func(*redisv1.RedisInstance){
 		"defaults": func(*redisv1.RedisInstance) {},
 		"no-tls-preferred-default-user": func(i *redisv1.RedisInstance) {
-			i.Spec.TLS.Enabled = ptr.To(false)
+			i.Spec.TLS.Enabled = new(false)
 			i.Spec.Affinity.PodAntiAffinityType = redisv1.PodAntiAffinityPreferred
 			i.Spec.ACL.DefaultUser = redisv1.DefaultUserEnabled
 		},
@@ -65,7 +64,7 @@ func TestGoldenObjects(t *testing.T) {
 		"shard-of-a-cluster": func(i *redisv1.RedisInstance) {
 			i.Name = "store-1"
 			i.OwnerReferences = []metav1.OwnerReference{{APIVersion: redisv1.GroupVersion.String(), Kind: kindRedisCluster,
-				Name: "store", UID: "uid-c", Controller: ptr.To(true)}}
+				Name: "store", UID: "uid-c", Controller: new(true)}}
 			i.Spec.Instances = 2
 			i.Status.CurrentPrimary = ""
 		},

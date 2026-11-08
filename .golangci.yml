@@ -25,6 +25,10 @@ linters:
     - unused
     - logcheck
   settings:
+    goconst:
+      # Names of metric labels and of RBAC subjects, repeated on purpose.
+      ignore-string-values:
+        - ^(namespace|name|user|redis_cluster|redis_instance)$
     custom:
       logcheck:
         type: "module"
@@ -52,6 +56,9 @@ linters:
           - dupl
           - lll
         path: internal/*
+      - linters:
+          - goconst
+        path: _test\.go
     paths:
       - third_party$
       - builtin$

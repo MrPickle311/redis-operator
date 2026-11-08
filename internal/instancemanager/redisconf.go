@@ -80,7 +80,8 @@ func redisConfig(auth internalAuth, opts Options, maxmemory int64, maxmemoryPoli
 	if opts.DefaultUser {
 		defaultACL = "user default on nopass ~* &* +@all"
 	}
-	conf := fmt.Sprintf(`%s
+	var conf strings.Builder
+	fmt.Fprintf(&conf, `%s
 user %s on >%s ~* &* +@all
 user %s %s >%s +psync +replconf +ping
 masteruser %s
@@ -104,19 +105,19 @@ unixsocketperm 700
 	if opts.TLS {
 		// Only TLS on 6379; the Instance Manager keeps the unix socket.
 		// Replicas connect to the primary over TLS too.
-		conf += fmt.Sprintf("port 0\ntls-port %d\ntls-replication yes\ntls-auth-clients %s\n",
+		fmt.Fprintf(&conf, "port 0\ntls-port %d\ntls-replication yes\ntls-auth-clients %s\n",
 			redisPort, tlsAuthClients(opts.TLSClientAuth))
 		for _, option := range tlsFileOptions {
-			conf += fmt.Sprintf("%s %s\n", option.name, option.value)
+			fmt.Fprintf(&conf, "%s %s\n", option.name, option.value)
 		}
 	}
 	if opts.Cluster {
-		conf += clusterConfig(PodFQDN(opts.PodName, opts.Instance, opts.Namespace), opts.TLS)
+		conf.WriteString(clusterConfig(PodFQDN(opts.PodName, opts.Instance, opts.Namespace), opts.TLS))
 	}
 	if replicaOf != "" {
-		conf += fmt.Sprintf("replicaof %s %d\n", replicaOf, redisPort)
+		fmt.Fprintf(&conf, "replicaof %s %d\n", replicaOf, redisPort)
 	}
-	return conf
+	return conf.String()
 }
 
 func onOff(b bool) string {
@@ -128,7 +129,7 @@ func onOff(b bool) string {
 
 func yesNo(b bool) string {
 	if b {
-		return "yes"
+		return redisYes
 	}
 	return "no"
 }
@@ -147,7 +148,7 @@ var tlsFileOptions = []option{
 func tlsAuthClients(clientAuth string) string {
 	switch clientAuth {
 	case "required":
-		return "yes"
+		return redisYes
 	case "optional":
 		return "optional"
 	}

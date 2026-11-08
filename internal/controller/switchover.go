@@ -66,7 +66,7 @@ func (r *RedisInstanceReconciler) reconcileSwitchover(ctx context.Context, insta
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if target.Role == "master" {
+	if target.Role == instancemanager.RoleMaster {
 		// Promoted by an earlier pass that stopped before writing the status.
 		return ctrl.Result{}, r.finishSwitchover(ctx, instance)
 	}
@@ -179,7 +179,7 @@ func (r *RedisInstanceReconciler) setSwitchoverCondition(instance *redisv1.Redis
 // caughtUp reports whether the target holds every write of the fenced
 // primary, or was already promoted by an earlier pass.
 func caughtUp(primary, target instancemanager.InstanceStatus) bool {
-	if target.Role == "master" {
+	if target.Role == instancemanager.RoleMaster {
 		return true
 	}
 	return target.ReplID == primary.ReplID && target.Offset >= primary.Offset

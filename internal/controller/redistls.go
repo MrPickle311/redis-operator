@@ -193,7 +193,7 @@ func (r *RedisInstanceReconciler) serverCertificate(ctx context.Context, instanc
 // requiredDNSNames returns the names a certificate of the user must cover:
 // the client Services, qualified, and every Pod, which replicas connect to.
 func requiredDNSNames(instance *redisv1.RedisInstance) []string {
-	var names []string
+	names := make([]string, 0, 3+int(instance.Spec.Instances))
 	for _, suffix := range []string{"rw", "ro", "r"} {
 		names = append(names, instance.Name+"-"+suffix+"."+instance.Namespace+".svc")
 	}

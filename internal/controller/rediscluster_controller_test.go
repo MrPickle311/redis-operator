@@ -374,7 +374,7 @@ func clusterNodeStatus(id string, known []string, master string, slots ...string
 func TestPlanCluster(t *testing.T) {
 	// Two shards of two nodes: a-0, a-1 in shard 0, b-0, b-1 in shard 1.
 	nodes := func(statuses ...*instancemanager.ClusterStatus) []clusterNode {
-		var nodes []clusterNode
+		nodes := make([]clusterNode, 0, len(statuses))
 		for i, status := range statuses {
 			pod := []string{"a-0", "a-1", "b-0", "b-1"}[i]
 			nodes = append(nodes, clusterNode{shard: int32(i / 2), pod: pod, host: pod + ".svc", status: status})
@@ -505,7 +505,7 @@ func TestPlanCluster(t *testing.T) {
 }
 
 func TestSlotRangeCoversEverySlotOnce(t *testing.T) {
-	var ranges []string
+	ranges := make([]string, 0, 5)
 	for shard := range int32(5) {
 		ranges = append(ranges, slotRange(shard, 5))
 	}
@@ -520,7 +520,7 @@ func TestSlotRangeCoversEverySlotOnce(t *testing.T) {
 func TestNextSlotMove(t *testing.T) {
 	// One node per shard: s0, s1, ... with the slots and flags given.
 	nodes := func(statuses ...*instancemanager.ClusterStatus) []clusterNode {
-		var nodes []clusterNode
+		nodes := make([]clusterNode, 0, len(statuses))
 		for i, status := range statuses {
 			pod := fmt.Sprintf("s%d", i)
 			nodes = append(nodes, clusterNode{shard: int32(i), pod: pod, host: pod + ".svc", status: status})
@@ -639,8 +639,9 @@ func TestSlotMovesAreMinimal(t *testing.T) {
 	reshard := func(owners []int32, shards int32) ([]int32, int) {
 		moves := 0
 		for {
-			var nodes []clusterNode
-			for shard := range max(shards, slices.Max(owners)+1) {
+			count := max(shards, slices.Max(owners)+1)
+			nodes := make([]clusterNode, 0, count)
+			for shard := range count {
 				var slots []string
 				for s := 0; s < clusterSlots; s++ {
 					if owners[s] == shard {

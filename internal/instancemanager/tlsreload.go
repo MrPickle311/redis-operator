@@ -62,7 +62,7 @@ func watchTLS(ctx context.Context, rdb *redis.Client) {
 // reloadTLS sets every TLS file option in one CONFIG SET, which Redis applies
 // all or none: a certificate never goes without its key.
 func reloadTLS(ctx context.Context, rdb *redis.Client) error {
-	args := []any{"CONFIG", "SET"}
+	args := append(make([]any, 0, 2+2*len(tlsFileOptions)), "CONFIG", "SET")
 	for _, option := range tlsFileOptions {
 		args = append(args, option.name, option.value)
 	}

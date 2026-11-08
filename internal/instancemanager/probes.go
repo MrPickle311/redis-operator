@@ -84,7 +84,7 @@ func (r *readiness) check(ctx context.Context) error {
 		return err
 	}
 	replication := info["Replication"]
-	if replication["role"] == "master" {
+	if replication["role"] == RoleMaster {
 		// Not remembered: a demoted primary must sync before serving again.
 		if !r.approved.Load() {
 			return errAwaitingApproval

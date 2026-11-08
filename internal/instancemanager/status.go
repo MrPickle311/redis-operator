@@ -24,6 +24,9 @@ const StatusPort = 8000
 // OperatorCommonName is the only client certificate name the API accepts.
 const OperatorCommonName = "redis-operator"
 
+// RoleMaster is how Redis calls its primary, in INFO and CLUSTER NODES.
+const RoleMaster = "master"
+
 // InstanceStatus is what GET /status returns: the replication state of Redis
 // as INFO replication reports it.
 type InstanceStatus struct {
@@ -59,7 +62,7 @@ func apiHandler(rdb *redis.Client, guard *epochGuard, ready *readiness) http.Han
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		status.AwaitingApproval = status.Role == "master" && !ready.approved.Load()
+		status.AwaitingApproval = status.Role == RoleMaster && !ready.approved.Load()
 		if acl := ready.acl.Load(); acl != nil {
 			status.ACLDigest, status.ACLRejected = acl.Digest, acl.Rejected
 		}

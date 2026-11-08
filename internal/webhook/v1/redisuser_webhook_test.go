@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -89,7 +88,7 @@ var _ = Describe("RedisUser Webhook", func() {
 		cluster := &redisv1.RedisCluster{ObjectMeta: metav1.ObjectMeta{Name: "store", Namespace: "default", UID: "store-uid"}}
 		shard := newInstance("store-1")
 		shard.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion: redisv1.GroupVersion.String(), Kind: "RedisCluster", Name: "store", UID: cluster.UID, Controller: ptr.To(true),
+			APIVersion: redisv1.GroupVersion.String(), Kind: "RedisCluster", Name: "store", UID: cluster.UID, Controller: new(true),
 		}}
 		_, err = validator(cluster, newInstance("store-0"), shard, clusterUser("first")).ValidateCreate(ctx, clusterUser("second"))
 		Expect(err).To(MatchError(ContainSubstring("RedisUser first also claims the username app")))

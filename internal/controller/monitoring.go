@@ -81,7 +81,7 @@ var (
 		[]string{"namespace", "redis_instance", "ordinal", "state"}, nil)
 	conditionDesc = prometheus.NewDesc("redis_operator_condition",
 		"A condition of a RedisInstance or RedisCluster with its reason: 1 when True, 0 when False.",
-		[]string{"namespace", "kind", "name", "type", "reason"}, nil)
+		[]string{"namespace", labelKind, "name", "type", "reason"}, nil)
 	shardSlotsDesc = prometheus.NewDesc("redis_operator_cluster_shard_slots",
 		"Slots the master of the shard serves.", []string{"namespace", "redis_cluster", "shard"}, nil)
 	shardPrimaryDesc = prometheus.NewDesc("redis_operator_cluster_shard_primary",
@@ -101,7 +101,7 @@ var (
 	eventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "redis_operator_events_total",
 		Help: "Events the operator emitted, by the object they are about and their reason.",
-	}, []string{"namespace", "kind", "name", "type", "reason"})
+	}, []string{"namespace", labelKind, "name", "type", "reason"})
 	slotsMovedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "redis_operator_slots_moved_total",
 		Help: "Slots moved between the shards of a RedisCluster.",
@@ -288,7 +288,7 @@ func endOperation(instance *redisv1.RedisInstance, kind, outcome, key, condition
 	} else if c := meta.FindStatusCondition(instance.Status.Conditions, conditionType); c != nil {
 		start = c.LastTransitionTime.Time
 	}
-	values = append(values, "kind", kind, "outcome", outcome, "epoch", instance.Status.PrimaryEpoch,
+	values = append(values, labelKind, kind, "outcome", outcome, "epoch", instance.Status.PrimaryEpoch,
 		"startMs", start.UnixMilli(), "endMs", end.UnixMilli(), "durationMs", end.Sub(start).Milliseconds())
 	if c := meta.FindStatusCondition(instance.Status.Conditions, redisv1.ConditionPrimaryAvailable); (kind == "failover" || kind == "safe start") &&
 		c != nil && c.Status == metav1.ConditionFalse {

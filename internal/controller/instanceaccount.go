@@ -38,14 +38,14 @@ func (r *RedisInstanceReconciler) ensureInstanceAccount(ctx context.Context, ins
 				APIGroups:     []string{redisv1.GroupVersion.Group},
 				Resources:     []string{"redisinstances"},
 				ResourceNames: []string{instance.Name},
-				Verbs:         []string{"get"},
+				Verbs:         []string{verbGet},
 			}, {
 				// The users of RedisUsers, as hashes; see the aclSync of the
 				// Instance Manager.
 				APIGroups:     []string{""},
 				Resources:     []string{"secrets"},
 				ResourceNames: []string{instancemanager.ACLSecretName(instance.Name)},
-				Verbs:         []string{"get"},
+				Verbs:         []string{verbGet},
 			}}
 		}},
 		{binding, func() {

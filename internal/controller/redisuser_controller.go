@@ -99,8 +99,8 @@ func (r *RedisUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	// Redis keeps the previous rules of a user it refused, or has no such
 	// user at all, so say it once where people look, not only in the status.
-	if previous := meta.FindStatusCondition(user.Status.Conditions, "Ready"); condition.Reason == "Rejected" &&
-		(previous == nil || previous.Reason != "Rejected" || previous.Message != condition.Message) {
+	if previous := meta.FindStatusCondition(user.Status.Conditions, redisv1.ConditionReady); condition.Reason == reasonRejected &&
+		(previous == nil || previous.Reason != reasonRejected || previous.Message != condition.Message) {
 		r.Recorder.Eventf(&user, nil, corev1.EventTypeWarning, "RulesRejected", "Configure", condition.Message)
 	}
 	meta.SetStatusCondition(&user.Status.Conditions, condition)
@@ -136,7 +136,7 @@ func (r *RedisUserReconciler) ensureGeneratedPassword(ctx context.Context, user 
 // every shard for a RedisCluster, has the user as specified, or why not.
 func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.RedisUser) (metav1.Condition, error) {
 	condition := func(status metav1.ConditionStatus, reason, message string) metav1.Condition {
-		return metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: user.Generation}
+		return metav1.Condition{Type: redisv1.ConditionReady, Status: status, Reason: reason, Message: message, ObservedGeneration: user.Generation}
 	}
 	username := redisUserName(user)
 	target := user.Spec.TargetRef.Name
@@ -170,7 +170,7 @@ func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.
 	line := aclLine(username, passwords, user.Spec.ACL.Rules)
 	for _, instance := range instances {
 		if reason, rejected := aclRejection(&instance, username); rejected {
-			return condition(metav1.ConditionFalse, "Rejected",
+			return condition(metav1.ConditionFalse, reasonRejected,
 				"Redis refused the rules, so it keeps the previous ones of the user, if any: "+reason), nil
 		}
 		applied, err := r.appliedWithLine(ctx, &instance, line)
@@ -181,7 +181,7 @@ func (r *RedisUserReconciler) readyCondition(ctx context.Context, user *redisv1.
 			return condition(metav1.ConditionFalse, "Pending", "Waiting for the instances of "+instance.Name+" to apply the user"), nil
 		}
 	}
-	return condition(metav1.ConditionTrue, "Applied", "Every running instance of "+target+" has the user"), nil
+	return condition(metav1.ConditionTrue, reasonApplied, "Every running instance of "+target+" has the user"), nil
 }
 
 // UsernameConflict says which other source of users of the instance has the

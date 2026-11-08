@@ -39,7 +39,7 @@ func (r *RedisInstanceReconciler) reconcileSafeStart(ctx context.Context, instan
 	callCtx, cancel := context.WithTimeout(ctx, failoverCallTimeout)
 	primary, err := r.InstanceManager.Status(callCtx, host)
 	cancel()
-	if err != nil || primary.Role != "master" || !primary.AwaitingApproval {
+	if err != nil || primary.Role != instancemanager.RoleMaster || !primary.AwaitingApproval {
 		return safeStartPollInterval, nil // still starting
 	}
 

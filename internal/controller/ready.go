@@ -35,7 +35,7 @@ func readyCondition(instance *redisv1.RedisInstance, readyCount int32, outdated 
 	case readyCount < instances:
 		reason, message = "InstancesNotReady", fmt.Sprintf("%d of %d instances are Ready", readyCount, instances)
 	default:
-		status, reason, message = metav1.ConditionTrue, "Ready", fmt.Sprintf("All %d instances are Ready and up to date", instances)
+		status, reason, message = metav1.ConditionTrue, reasonReady, fmt.Sprintf("All %d instances are Ready and up to date", instances)
 	}
 	return metav1.Condition{
 		Type:               redisv1.ConditionReady,

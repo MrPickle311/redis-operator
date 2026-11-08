@@ -2,11 +2,12 @@ package instancemanager
 
 import (
 	"io"
-	"k8s.io/apimachinery/pkg/types"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 

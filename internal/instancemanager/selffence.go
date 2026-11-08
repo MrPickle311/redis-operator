@@ -38,7 +38,7 @@ const (
 // could not be read; last is the RedisInstance read last, for its spec.
 // fenced tells whether the Instance Manager paused writes itself.
 func decideSelfAction(instance, last *redisv1.RedisInstance, sinceRead time.Duration, role, pod string, fenced bool) selfAction {
-	if role != "master" {
+	if role != RoleMaster {
 		return keepRole // a replica takes no writes; the operator manages it
 	}
 	if instance == nil {
@@ -103,7 +103,7 @@ func (s *selfFencing) step(ctx context.Context) error {
 	if err != nil {
 		return err // Redis is not up: nothing to protect
 	}
-	if status.Role != "master" {
+	if status.Role != RoleMaster {
 		if s.fenced {
 			s.logFence("demoted", "another Pod became the primary meanwhile")
 		}

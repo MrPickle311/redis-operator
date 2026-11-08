@@ -9,6 +9,13 @@ import (
 
 const redisPort = 6379
 
+// Reasons shared by the conditions of the operator.
+const (
+	reasonReady    = "Ready"
+	reasonApplied  = "Applied"
+	reasonRejected = "Rejected"
+)
+
 // Labels set on every Pod. Services select Pods by them, and users can rely on
 // them in their own NetworkPolicies, so they are part of the public contract.
 const (

@@ -94,7 +94,7 @@ var _ = Describe("RedisInstance Ready condition", Ordered, func() {
 	})
 
 	It("is False with RollingUpdate after a change of the spec, for the new generation", func() {
-		setImage(name, "redis:7.4")
+		setImage(name)
 		Expect(reconcileOnce(objectKey(name))).To(Succeed())
 		Expect(readyReason()).To(Equal("RollingUpdate"))
 	})
