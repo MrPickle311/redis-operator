@@ -2,16 +2,50 @@ name: Tests
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # Unit tests and envtest (a real API server and etcd), including the golden files.
+  unit:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: Unit and envtest
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check that go.mod is tidy
+        run: go mod tidy -diff
+
+      - name: Running Tests
+        run: make test
+
+      - name: Check that generated files are committed
+        run: git diff --exit-code
+
+  # The Instance Manager tests that need a real Redis (*OnRedis), in Docker.
+  redis:
+    permissions:
+      contents: read
+    name: Instance Manager on Redis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -24,6 +58,4 @@ jobs:
           go-version-file: go.mod
 
       - name: Running Tests
-        run: |
-          go mod tidy
-          make test
+        run: make test-redis

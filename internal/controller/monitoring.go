@@ -141,8 +141,8 @@ func (c StatusCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c StatusCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	gauge := func(d *prometheus.Desc, v float64, labels ...string) {
-		ch <- prometheus.MustNewConstMetric(d, prometheus.GaugeValue, v, labels...)
+	gauge := func(desc *prometheus.Desc, value float64, labels ...string) {
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value, labels...)
 	}
 
 	var instances redisv1.RedisInstanceList
