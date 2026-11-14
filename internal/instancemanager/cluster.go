@@ -80,6 +80,9 @@ type ClusterRequest struct {
 	NodeID string `json:"nodeID,omitempty"`
 	// Slot is the slot of /cluster/importing, /cluster/migrate and /cluster/setnode.
 	Slot int `json:"slot"`
+	// Batch is how many keys one MIGRATE of /cluster/migrate moves; 0 is
+	// migrateBatch. A knob of the resharding-cost experiment.
+	Batch int `json:"batch,omitempty"`
 }
 
 // MigrateResponse is the answer of /cluster/migrate.
@@ -415,9 +418,13 @@ func clusterMigrate(ctx context.Context, rdb *redis.Client, req ClusterRequest, 
 		}
 		return rdb.Do(ctx, args...).Err()
 	}
+	batch := migrateBatch
+	if req.Batch > 0 {
+		batch = req.Batch
+	}
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
-		keys, err := rdb.ClusterGetKeysInSlot(ctx, req.Slot, migrateBatch).Result()
+		keys, err := rdb.ClusterGetKeysInSlot(ctx, req.Slot, batch).Result()
 		if err != nil {
 			return response, err
 		}

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -235,25 +236,53 @@ func (r *RedisClusterReconciler) ensureSeedService(ctx context.Context, cluster 
 // clusterNodes returns every node of the first total shards, ordered by shard
 // and ordinal, with the cluster status of those that answer.
 func (r *RedisClusterReconciler) clusterNodes(ctx context.Context, cluster *redisv1.RedisCluster, total int32) []clusterNode {
+	nodes := shardNodeList(cluster, total)
+	for i := range nodes {
+		nodes[i].status = r.nodeStatus(ctx, cluster, nodes[i])
+	}
+	return nodes
+}
+
+// clusterNodesParallel is clusterNodes with every status read at once.
+func (r *RedisClusterReconciler) clusterNodesParallel(ctx context.Context, cluster *redisv1.RedisCluster, total int32) []clusterNode {
+	nodes := shardNodeList(cluster, total)
+	var wg sync.WaitGroup
+	for i := range nodes {
+		wg.Go(func() { nodes[i].status = r.nodeStatus(ctx, cluster, nodes[i]) })
+	}
+	wg.Wait()
+	return nodes
+}
+
+// shardNodeList returns every node of the first total shards, ordered by
+// shard and ordinal, without their status.
+func shardNodeList(cluster *redisv1.RedisCluster, total int32) []clusterNode {
 	nodes := make([]clusterNode, 0, int(cluster.Spec.InstancesPerShard*total))
 	for shard := range total {
 		instance := shardName(cluster, shard)
 		for ordinal := range cluster.Spec.InstancesPerShard {
 			node := clusterNode{shard: shard, pod: fmt.Sprintf("%s-%d", instance, ordinal)}
 			node.host = instancemanager.PodFQDN(node.pod, instance, cluster.Namespace)
-			var pod corev1.Pod
-			err := r.Get(ctx, types.NamespacedName{Name: node.pod, Namespace: cluster.Namespace}, &pod)
-			if err == nil && pod.Status.Phase == corev1.PodRunning && pod.Status.PodIP != "" && pod.DeletionTimestamp.IsZero() {
-				if status, err := r.InstanceManager.Status(ctx, node.host); err == nil {
-					node.status = status.Cluster
-				} else {
-					logf.FromContext(ctx).V(1).Info("Instance Manager not reachable yet", "pod", node.pod, "reason", err.Error())
-				}
-			}
 			nodes = append(nodes, node)
 		}
 	}
 	return nodes
+}
+
+// nodeStatus returns the cluster status of the node, nil while its Pod does
+// not run or its Instance Manager does not answer.
+func (r *RedisClusterReconciler) nodeStatus(ctx context.Context, cluster *redisv1.RedisCluster, node clusterNode) *instancemanager.ClusterStatus {
+	var pod corev1.Pod
+	err := r.Get(ctx, types.NamespacedName{Name: node.pod, Namespace: cluster.Namespace}, &pod)
+	if err != nil || pod.Status.Phase != corev1.PodRunning || pod.Status.PodIP == "" || !pod.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	status, err := r.InstanceManager.Status(ctx, node.host)
+	if err != nil {
+		logf.FromContext(ctx).V(1).Info("Instance Manager not reachable yet", "pod", node.pod, "reason", err.Error())
+		return nil
+	}
+	return status.Cluster
 }
 
 // assignedShards returns the shards that had slots once, by status.shards.

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,19 @@ const reshardBudget = 5 * time.Second
 
 // reshardRequeue is when the next reconcile goes on with the slots.
 const reshardRequeue = time.Second
+
+// Knobs of the resharding-cost experiment (docs/experiments/resharding-cost.md),
+// read once at start from the environment of the operator:
+//   - RESHARD_REFRESH: after a slot, read the status of "all" nodes one by one
+//     (default), only the source and target ("pair"), or all at once
+//     ("parallel");
+//   - MIGRATE_BATCH: keys per MIGRATE, 0 for the default of the Instance Manager.
+//
+// ponytail: experiment knobs, not API; drop or promote to spec after the results.
+var (
+	reshardRefresh     = os.Getenv("RESHARD_REFRESH")
+	migrateBatchEnv, _ = strconv.Atoi(os.Getenv("MIGRATE_BATCH"))
+)
 
 // shardsIdle reports whether a slot may move while the first total shards
 // are as they are: every instance Ready and no master moving. Ready of a
@@ -101,8 +115,26 @@ func (r *RedisClusterReconciler) moveSlots(ctx context.Context, cluster *redisv1
 			}
 			return nodes
 		}
-		nodes = r.clusterNodes(ctx, cluster, total)
+		nodes = r.refreshAfterMove(ctx, cluster, nodes, move, total)
 	}
+}
+
+// refreshAfterMove reads the nodes again after a moved slot, as RESHARD_REFRESH
+// says. Only the source and the target change their slots with a move.
+func (r *RedisClusterReconciler) refreshAfterMove(ctx context.Context, cluster *redisv1.RedisCluster,
+	nodes []clusterNode, move slotMove, total int32) []clusterNode {
+	switch reshardRefresh {
+	case "pair":
+		for i := range nodes {
+			if nodes[i].pod == move.from.pod || nodes[i].pod == move.to.pod {
+				nodes[i].status = r.nodeStatus(ctx, cluster, nodes[i])
+			}
+		}
+		return nodes
+	case "parallel":
+		return r.clusterNodesParallel(ctx, cluster, total)
+	}
+	return r.clusterNodes(ctx, cluster, total)
 }
 
 // moveSlot moves the keys of the slot and hands it over: the target imports
@@ -118,7 +150,7 @@ func (r *RedisClusterReconciler) moveSlot(ctx context.Context, cluster *redisv1.
 	}
 	for {
 		result, err := im.Migrate(ctx, from.host,
-			instancemanager.ClusterRequest{Slot: move.slot, NodeID: to.status.NodeID, Host: to.host})
+			instancemanager.ClusterRequest{Slot: move.slot, NodeID: to.status.NodeID, Host: to.host, Batch: migrateBatchEnv})
 		if err != nil {
 			return err
 		}
