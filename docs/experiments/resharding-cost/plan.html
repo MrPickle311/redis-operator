@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eksperyment: ile kosztuje resharding Redis Cluster</title>
+<style>
+:root{color-scheme:light dark;--fg:#1f2328;--bg:#fff;--muted:#59636e;--line:#d1d9e0;--code:#f6f8fa}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--fg:#e6edf3;--bg:#0d1117;--muted:#9198a1;--line:#3d444d;--code:#161b22}}
+:root[data-theme="dark"]{--fg:#e6edf3;--bg:#0d1117;--muted:#9198a1;--line:#3d444d;--code:#161b22}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:1.9em;line-height:1.25;margin:0 0 .6em}
+h2{font-size:1.35em;margin:2em 0 .6em;padding-bottom:.3em;border-bottom:1px solid var(--line)}
+code{font:.88em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);padding:.15em .35em;border-radius:4px;overflow-wrap:anywhere}
+pre{background:var(--code);padding:14px 16px;border-radius:8px;overflow-x:auto}
+pre code{padding:0;background:none;overflow-wrap:normal}
+.tw{overflow-x:auto;margin:1em 0}
+table{border-collapse:collapse;width:100%;font-size:.93em}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--code)}
+li{margin:.25em 0}
+.note{color:var(--muted);font-size:.93em}
+</style></head>
+<body><main>
+<h1>Eksperyment: ile kosztuje resharding Redis Cluster</h1>
+<p>Cel: zmierzyć <code>T ≈ sloty × c_slot + bajty / B</code> (+ przerwy operatora) dla
+naszego operatora, jego wariantów i <code>redis-cli</code>. Bez opóźnień po stronie
+klienta (osobny post). Kopia w repo: <code>docs/experiments/resharding-cost/plan.html</code>;
+wnioski po etapach: <code>findings.md</code>.</p>
+<h2>Hipotezy</h2>
+<ul>
+<li><strong>H1.</strong> Przy małych danych czas zależy od liczby slotów i węzłów, nie od
+  danych: na slot 4 wywołania IM (<code>importing</code>, <code>migrate</code>, 2× <code>setnode</code>)
+  + <code>/status</code> po kolei z <em>każdego</em> węzła klastra (~1,3 ms każde, z kalibracji).
+  Obalona, jeśli <code>c_slot</code> nie rośnie z liczbą węzłów. <strong>Potwierdzona (etap 1).</strong></li>
+<li><strong>H2.</strong> Dane dokładają składnik <code>bajty / B</code>. Obalona, jeśli czas rośnie z
+  liczbą kluczy, a nie bajtów (P3 vs P4). <strong>Obalona (etap 4b): liczą się klucze</strong>
+  (~33 µs na klucz + ~7 µs na KB).</li>
+<li><strong>H3.</strong> Odczyt <code>/status</code> tylko ze źródła i celu (albo równolegle) skraca
+  slot do ~10–15 ms. <strong>Potwierdzona dla V1 (etap 2); V2 ma długi ogon.</strong></li>
+<li><strong>H4</strong> (dodana po etapie 3). Przy danych limitem jest synchroniczny <code>MIGRATE</code> z jedną
+  partią w locie, więc większa partia (V4, 1000 kluczy) podnosi <code>B</code> z ~21 MB/s co najmniej ~2×,
+  a jedno <code>MIGRATE</code> (blokada głównego wątku źródła) rośnie z ~3,6 ms do kilkudziesięciu ms.
+  Obalona, jeśli <code>B</code> prawie się nie zmieni: wtedy limitem jest coś innego (np. RESTORE i AOF na celu).
+  Sprawdzana w etapie 5 (V3, V0, V4: partia 10 / 100 / 1000). Uzasadnienie: sekcja „Dlaczego V4”.
+  <strong>Potwierdzona co do kierunku, nie skali (etap 5):</strong> <code>B</code> 11 → 21 → 32 MB/s
+  (1,5× między 100 i 1000), <code>MIGRATE</code> 3,5 → 11,7 ms (p99 8 → 27 ms); zostaje ~34 µs na klucz.</li>
+</ul>
+<h2>Przygotowanie (raz)</h2>
+<ol>
+<li><strong>Klaster:</strong> <code>docs/experiments/resharding-cost/bulk.yaml</code> w <code>redis-play</code>:
+  <code>RedisCluster bulk</code> 3 shardy × 2 instancje, Redis 7.2, TLS, <code>monitoring.enabled</code>,
+  <code>requests</code> = <code>limits</code> (bez overcommitu pamięci), oraz <code>RedisUser bulk-load</code>.
+  Faza 1 (P0, P5): pamięć 1Gi. Faza 2 (P1–P4): patch na 5–6Gi (rolling update).</li>
+<li><strong>Dysk:</strong> 20Gi na Pod, klasa <code>longhorn-nvme-local</code> (NVMe, 1 replika,
+  <code>dataLocality: best-effort</code>): replika woluminu na węźle Poda, więc zapisy AOF nie
+  dzielą sieci z <code>MIGRATE</code>. 20Gi = ~3× zbioru mastera po 4→3 (przepisywanie AOF).
+  Rozmiar ustalany przy tworzeniu.</li>
+<li><strong>Rozmiar klucza:</strong> <code>hack/reshard-cost.py prefill 100000 1000</code> wypisuje
+  bajty na klucz (<code>Δused_memory / ΔDBSIZE</code>). Wartość <code>1000</code>, nie 1024 (1024 B + nagłówek
+  sds trafia w klasę 1280 B jemalloca). Z tego liczba kluczy w punktach tak, żeby master
+  miał ≥ 25% zapasu do <code>maxmemory</code>.</li>
+<li><strong>Metryki co 1 s:</strong> <code>servicemonitor.yaml</code> i <code>podmonitor.yaml</code> z
+  <code>interval: 1s</code> (zaaplikowane). Metryki węzłów i kontenerów (cadvisor) zostają co 30 s:
+  sieć i CPU liczyć w oknach ≥ 1 min.</li>
+<li><strong>Port-forwardy:</strong> Prometheus <code>9090</code> i Loki <code>3100</code> (skrypt czyta z Loki
+  czasy linii <code>Moved slot</code> i zapisuje tam znaczniki przebiegów). Reset laptopa je zabija.</li>
+<li><strong>Retencja:</strong> Prometheus 368 h, Loki 360 h: dane etapu 1 znikną ~30 listopada.
+  Przed tym wydłużyć retencję albo wyeksportować okna przebiegów.</li>
+</ol>
+<h2>Punkty pomiarowe</h2>
+<div class="tw"><table>
+<thead><tr><th>Punkt</th><th>Dane</th><th>Wartość</th><th>Pamięć</th><th>Po co</th></tr></thead>
+<tbody>
+<tr><td>P0</td><td>0</td><td>–</td><td>1Gi</td><td>sam koszt koordynacji, <code>c_slot</code></td></tr>
+<tr><td>P5</td><td>0</td><td>–</td><td>1Gi</td><td>3→6 i 3→9: <code>c_slot</code> względem liczby węzłów (H1)</td></tr>
+<tr><td>P1</td><td>~1 GB</td><td>1000 B</td><td>5–6Gi</td><td></td></tr>
+<tr><td>P2</td><td>~5 GB</td><td>1000 B</td><td>5–6Gi</td><td></td></tr>
+<tr><td>P3</td><td>~8–10 GB (ile się zmieści z zapasem)</td><td>1000 B</td><td>5–6Gi</td><td></td></tr>
+<tr><td>P4</td><td>te same bajty co P3 (<code>flush</code> przed)</td><td>10 000 B</td><td>5–6Gi</td><td>bajty czy klucze (H2)</td></tr>
+<tr><td>P6</td><td>dane P3</td><td>1000 B</td><td>5Gi</td><td>3→6 i z powrotem: 8192 sloty, połowa danych w ruchu, <code>B</code> na większej próbce</td></tr>
+</tbody></table></div>
+<h2>Umiejscowienie masterów (P3, P4, P6)</h2>
+<div class="tw"><table>
+<thead><tr><th>Układ</th><th>Jak ustawić</th><th><code>MIGRATE</code> idzie</th><th>Co mierzy <code>B</code></th></tr></thead>
+<tbody>
+<tr><td>L (lokalnie)</td><td>źródła i cel na jednym węźle</td><td>wewnątrz maszyny</td><td>koszt samego Redisa: DUMP, RESTORE, blokada wątku</td></tr>
+<tr><td>N (przez sieć)</td><td>źródła i cel na różnych węzłach; switchover po jednym shardzie:
+<code>kubectl -n redis-play annotate redisinstance bulk-0 redis.operator.com/promote=bulk-0-0</code></td><td>przez sieć (0,7–0,9 Gbit/s z kalibracji)</td><td>realny transfer z siecią i RTT na partię</td></tr>
+</tbody></table></div>
+<ul>
+<li>Różnica <code>B</code> między L i N to cena sieci.</li>
+<li>Bez danych umiejscowienie nie zmienia <code>c_slot</code> (etap 1: P0 lokalnie i przez sieć tak samo).</li>
+<li>W N zmienia się też CPU (<code>u0c-uk3</code> ma wolniejsze rdzenie niż <code>wdp-fwu</code>):
+  sprawdzać <em>Main thread busy</em> źródła.</li>
+<li>Master nowego sharda ląduje tam, gdzie zdecyduje scheduler: skrypt zapisuje rozkład Podów
+  i trasy slotów (<code>local_slots</code>) w każdym przebiegu. Switchover nie ruszy w trakcie migracji.</li>
+</ul>
+<h2>Warianty</h2>
+<div class="tw"><table>
+<thead><tr><th>Wariant</th><th>Co zmienia</th><th>Gdzie w kodzie</th><th>Punkty</th></tr></thead>
+<tbody>
+<tr><td>V0</td><td>operator bez zmian</td><td>–</td><td>wszystkie</td></tr>
+<tr><td>V1</td><td><code>/status</code> tylko źródła i celu po slocie</td><td>kontroler</td><td>P0, P5, P3</td></tr>
+<tr><td>V2</td><td><code>/status</code> wszystkich węzłów równolegle</td><td>kontroler</td><td>P0, P5</td></tr>
+<tr><td>V3</td><td><code>migrateBatch = 10</code></td><td>Instance Manager</td><td>P3, P4</td></tr>
+<tr><td>V4</td><td><code>migrateBatch = 1000</code> (dodany po etapie 3)</td><td>Instance Manager</td><td>P3, P4</td></tr>
+<tr><td>R100</td><td><code>redis-cli --cluster rebalance --cluster-pipeline 100</code>, operator zatrzymany</td><td>–</td><td>P0, P3</td></tr>
+<tr><td>R10</td><td>to samo z domyślnym <code>--cluster-pipeline 10</code> (porównanie z V3)</td><td>–</td><td>P3</td></tr>
+</tbody></table></div>
+<p><strong>Dlaczego V4 (dodany po etapie 3).</strong> Etap 3 pokazał, że przy danych wąskim gardłem
+nie jest CPU, dysk ani sieć, tylko synchroniczny <code>MIGRATE</code>: jedna partia 100 kluczy w locie,
+~3,6 ms na partię, a Redis źródła i celu zajęty ≤ 0,2 rdzenia, bo głównie czeka na odpowiedź celu.
+Jeśli tak, większa partia powinna podnieść <code>B</code>: ten sam narzut na round trip rozkłada się na
+10× więcej kluczy. Cena: <code>MIGRATE</code> blokuje główny wątek źródła na czas całej partii, więc
+każde wywołanie trwa dłużej i klienci źródła czekają dłużej.</p>
+<ul>
+<li><strong>Sprawdza H4</strong> (lista hipotez na górze).</li>
+<li><strong>V3 i V4 razem</strong> dają krzywą: partia 10 / 100 / 1000 kluczy względem <code>B</code>
+  i czasu blokady źródła (panele <em>MIGRATE: time per call</em> i slowlog: partia &gt; 10 ms trafi do slowlogu).</li>
+<li><strong>Co to doda do bloga:</strong> konkretne pokrętło z kompromisem, a nie tylko „jest wolno”.
+  Czytelnik dostaje odpowiedź, ile kluczy w partii wybrać: szybszy resharding kosztem dłuższych
+  przerw dla klientów źródła. To samo pokrętło ma <code>redis-cli --cluster --cluster-pipeline</code>
+  (domyślnie 10) i inne operatory, więc wniosek przenosi się poza nasz operator. Łączy też ten post
+  z następnym (duże klucze i opóźnienia): blokada źródła rośnie z rozmiarem partii tak, jak z rozmiarem klucza.</li>
+</ul>
+<p><strong>Przełączanie wariantów.</strong> Wszystkie warianty są w jednym obrazie
+(commit <code>903b195</code>, <code>:latest</code>), wybierane zmiennymi środowiskowymi operatora;
+bez nich operator działa jak V0. Zmiana zmiennej restartuje tylko operatora, Pody Redisa nie.
+<code>hack/reshard-stages.sh</code> robi to sam (funkcja <code>variant</code>) i na końcu wraca do V0.</p>
+<pre><code>D="-n redis-operator-system deploy/redis-operator-controller-manager"
+kubectl set env $D RESHARD_REFRESH=pair        # V1
+kubectl set env $D RESHARD_REFRESH=parallel    # V2
+kubectl set env $D RESHARD_REFRESH- MIGRATE_BATCH=10   # V3
+kubectl set env $D RESHARD_REFRESH- MIGRATE_BATCH-     # V0
+kubectl -n redis-operator-system rollout status deploy/redis-operator-controller-manager</code></pre>
+<p><strong>R krok po kroku</strong> (operator nie może działać, bo wyrówna sloty po swojemu):</p>
+<ol>
+<li>Klaster 4 × 2 zbalansowany operatorem, dane wczytane.</li>
+<li>Zatrzymać operator: <code>kubectl -n redis-operator-system scale deploy redis-operator-controller-manager --replicas=0</code>
+  (nie zarządza nim ArgoCD).</li>
+<li>Z wnętrza Poda Redisa (NetworkPolicy), hasło z pliku, nie w poleceniu:
+<pre><code>export REDISCLI_AUTH=$(cat /internal-auth/operator-password)
+redis-cli --tls --cacert /tls/ca.crt --user _operator --no-auth-warning \
+  --cluster rebalance &lt;host&gt;:6379 --cluster-weight &lt;id shardu 3&gt;=0 \
+  --cluster-pipeline 100</code></pre>
+  → pomiar 4→3.</li>
+<li>To samo z <code>--cluster-use-empty-masters</code> zamiast <code>--cluster-weight</code> → pomiar 3→4.</li>
+<li>Włączyć operator. Zanotować, ile slotów przeniesie, żeby wyrównać
+  liczby do swoich udziałów (próg 2% <code>redis-cli</code>).</li>
+</ol>
+<h2>Przebieg jednego pomiaru</h2>
+<ol>
+<li><strong>Przed:</strong> <code>hack/reshard-cost.py check</code>: <code>Ready=True</code>,
+  <code>Migrating=False/Balanced</code> dla bieżącej generacji, <code>evicted_keys = 0</code>,
+  repliki z linkiem <code>up</code>, każdy węzeł zna swoje własne IP.</li>
+<li><code>hack/reshard-cost.py move N STAGE POINT VARIANT REP</code> (np. <code>move 4 1 P0 V0 2</code>):
+  zapisuje <code>t0</code> i znacznik START w Loki, ustawia <code>spec.shards</code>, czeka na <code>Balanced</code>,
+  czyta z Loki czas każdej linii <code>Moved slot</code>, zapisuje znacznik END i wiersz wyniku.</li>
+<li>1 min przerwy, potem powrót do 3 shardów tym samym poleceniem.</li>
+<li><strong>Powtórzenia:</strong> etap 1 zrobiony 3–4× (rozrzut &lt; 5%), od etapu 2: 2× każdy punkt,
+  trzecie gdy rozrzut dwóch przebiegów &gt; 10%. Warianty na przemian, z kontrolą V0 w każdym powtórzeniu.</li>
+</ol>
+<p><strong>Identyfikator przebiegu:</strong> <code>S&lt;etap&gt;-&lt;punkt&gt;-&lt;wariant&gt;-r&lt;powtórzenie&gt;-&lt;z&gt;to&lt;do&gt;</code>,
+np. <code>S1-P0-V0-r2-3to4</code>; punkt z układem: <code>P3-L</code>, <code>P3-N</code>. W Grafanie: adnotacja
+„Experiment runs” (START/END) i tabela „Every run” na dashboardzie RedisCluster (klik otwiera okno
+przebiegu ±1 min). W repo: <code>results.md</code> (wiersz z linkiem do okna) i <code>results.tsv</code>.</p>
+<p><strong>Czas dzielony na części:</strong></p>
+<ul>
+<li><code>total</code>: od zmiany <code>spec.shards</code> do <code>Balanced</code>.</li>
+<li><code>wait</code>: od zmiany do pierwszego przeniesionego slotu: nowe Pody, woluminy, MEET.
+  To nie jest resharding; przy 3→4 ~31 s.</li>
+<li><code>move</code>: od pierwszego do ostatniego slotu. <strong>Ten czas idzie do wzoru.</strong></li>
+<li><code>c_slot</code> (mediana odstępu), p90, przerwy (odstępy &gt; 500 ms) i ich suma.</li>
+</ul>
+<p>Ładowanie danych: <code>hack/reshard-cost.py prefill &lt;N&gt; &lt;bajty&gt;</code> (Job memtier,
+<code>--tls</code>, użytkownik <code>bulk-load</code>, <code>--key-pattern=P:P -n allkeys -t 4 -c 8</code>).
+Między punktami <code>flush</code>.</p>
+<h2>Co zebrać z dashboardów</h2>
+<p>Za okno przebiegu (link z tabeli „Every run”), eksport CSV (Inspect → Data):</p>
+<div class="tw"><table>
+<thead><tr><th>Dane</th><th>Skąd</th></tr></thead>
+<tbody>
+<tr><td>Czas każdego slotu</td><td><em>Every moved slot</em>, <em>Time per moved slot</em> (RedisCluster)</td></tr>
+<tr><td>Klucze i bajty na slot</td><td><em>Keys and bytes per slot</em></td></tr>
+<tr><td>Czas <code>MIGRATE</code> / blokada źródła</td><td><em>MIGRATE: time per call</em>, <em>MIGRATE calls per second</em>, slowlog</td></tr>
+<tr><td>Sloty przeniesione</td><td><em>Slots moved, from shard to shard</em></td></tr>
+<tr><td>Wywołania IM wg ścieżki i ich latencja</td><td><em>Calls to the Instance Managers</em> (redis-operator)</td></tr>
+<tr><td>Czas rekoncyliacji</td><td><em>Reconcile duration</em>, <em>Longest running reconcile</em></td></tr>
+<tr><td>Główny wątek źródła i celu</td><td><em>Main thread busy</em></td></tr>
+<tr><td>Ruch sieciowy (→ <code>B</code>)</td><td><em>Network of every node</em>, wyjście źródeł (okna ≥ 1 min)</td></tr>
+<tr><td>Pamięć i klucze masterów</td><td><em>Memory of every master</em>, <em>Keys per shard</em></td></tr>
+<tr><td>MOVED / ASK / TRYAGAIN / BUSYKEY</td><td><em>Errors Redis answered, by error</em></td></tr>
+<tr><td>Mapa slotów po</td><td><em>Which shard serves the slots</em> (zrzut)</td></tr>
+</tbody></table></div>
+<h2>Jak policzyć</h2>
+<ul>
+<li><code>c_slot</code> = mediana odstępu między slotami.</li>
+<li>Przerwy: z kolumny <code>pauses_s</code>. W etapach 1–2 nie było żadnej: zapis statusu po 5 s
+  budżetu od razu wywołuje kolejną rekoncyliację.</li>
+<li><code>c_slot</code> ≈ wywołania IM × czas wywołania: V0 = 4 + liczba węzłów, V1 = 4 + 2.
+  Czas wywołania z kalibracji (~1,3–2,3 ms).</li>
+<li>Wyniki także jako udziały sprzętu z kalibracji: <code>B</code> / iperf3, <code>c_slot</code> / czas wywołania IM.</li>
+<li><code>B = bajty_przeniesione / (move − sloty × c_slot − pauses_s)</code>;
+  porównać z ruchem sieciowym źródeł.</li>
+<li>H2: P3 vs P4 (te same bajty, 10× mniej kluczy). V3 vs R10 i V0 vs R100: ta sama partia, różne narzędzia.</li>
+</ul>
+<h2>Etapy</h2>
+<p>Po kolei (<code>hack/reshard-stages.sh &lt;etap&gt;</code>), każdy w tle, z przeglądem wyników i wpisem do
+<code>findings.md</code> przed następnym. Przed i po każdym pomiarze skrypt wypisuje rozkład Podów.</p>
+<div class="tw"><table>
+<thead><tr><th>Etap</th><th>Co</th><th>Czas</th><th>Stan</th></tr></thead>
+<tbody>
+<tr><td>0. Pilot</td><td>P0 V0, 3→4 i 4→3, raz</td><td>~10 min</td><td>zrobiony: <code>c_slot</code> 19,5 ms (8 węzłów)</td></tr>
+<tr><td>0b. Kalibracja</td><td><code>hack/calibrate.py</code>: iperf3, ping, redis-benchmark, fio, czas wywołań IM → <code>calibration.md</code></td><td>~15 min</td><td>zrobiony: sieć 0,7–0,9 Gbit/s (po naprawie karty <code>u0c-uk3</code>), model <code>c_slot</code> 18,6 vs 19,5 ms</td></tr>
+<tr><td>1. Bez danych, V0</td><td>P0 4×; P5 3↔6 i 3↔9, po 3×</td><td>~2 h</td><td>zrobiony (20): <code>c_slot</code> 19,6 / 25,2 / 36,0 ms przy 8 / 12 / 18 węzłach</td></tr>
+<tr><td>2. Bez danych, V1 i V2</td><td>P0 i P5, na przemian z kontrolą V0, 2×</td><td>~2 h</td><td>zrobiony (28): V1 ~11–12 ms niezależnie od węzłów (3,2× szybciej przy 18); V2 mediana 12–14 ms, ale p90 do 51 ms</td></tr>
+<tr><td>3. Dane, układ L</td><td>pamięć 5Gi, rozmiar klucza, P1 1 GB, P2 5 GB, P3 8 GB, P6 3↔6, po 2×</td><td>~1,7 h</td><td>zrobiony (16): <code>c_slot</code> = koordynacja + ~50 µs/klucz; <code>B</code> ~21 MB/s bez sieci; wąskie gardło: synchroniczny <code>MIGRATE</code> (3,6 ms na 100 kluczy), Redis zajęty ≤ 0,2 rdzenia</td></tr>
+<tr><td>4a. Dane, układ N</td><td>switchover, P3-N 2×, P6-N 1×</td><td>~40 min</td><td>zrobiony (6 ważnych): N nie wolniejszy od L, raczej 1–9% szybszy; sieć nie ogranicza</td></tr>
+<tr><td>4b. Dane, układ N i L</td><td>P6-N r2; <code>flush</code>; P4 (10 KB) N 2×, L 2×</td><td>~55 min</td><td>zrobiony (10): H2 obalona: P4 (te same bajty, 9× mniej kluczy) ~3× szybszy transfer, <code>B</code> ~60–70 MB/s; model ~33 µs/klucz + ~7 µs/KB</td></tr>
+<tr><td>6. Uzupełnienie</td><td>V1 z danymi (P3) 2×, <code>redis-cli</code> r1 (R100, R10)</td><td>~45 min</td><td>zrobiony (10): V1 z danymi −23% względem V0 (0,77 kontroli), <code>redis-cli</code> R100 0,68; dryf klastra między sesjami ~7–9%</td></tr>
+<tr><td>5. Narzędzia</td><td>V3, V4, R100, R10 na P3, po 2× (R po 1×); operator zatrzymany na czas R</td><td>~1,7 h</td><td>zrobiony (16): partia 10/100/1000 → <code>move</code> 263/170/141 s; <code>redis-cli</code> przy tej samej partii 15–35% szybszy (mniej koordynacji)</td></tr>
+</tbody></table></div>
+<p><strong>Pojemność:</strong> <code>sie-ons</code> to control-plane z taintem <code>NoSchedule</code>.
+Przy 6Gi mieści się 10 Podów (sad 1, u0c 7, wdp 2): P3 (8 Podów) tak, P6 (12) nie.
+Przed etapem 3 decyzja: P3 i P6 z ~8 GB i limitem 5Gi (12 miejsc, 28% zapasu).</p>
+<h2>Tabela wyników (mediany)</h2>
+<div class="tw"><table>
+<thead><tr><th>Punkt</th><th>Węzły</th><th>Wariant</th><th><code>wait</code></th><th><code>move</code></th><th><code>c_slot</code></th><th>p90</th><th><code>B</code></th></tr></thead>
+<tbody>
+<tr><td>P0</td><td>8</td><td>V0</td><td>31 s</td><td>90 s</td><td>19,6 ms</td><td>25,2 ms</td><td>–</td></tr>
+<tr><td>P0</td><td>8</td><td>V1</td><td>31 s</td><td>51 s</td><td>11,1 ms</td><td>14,6 ms</td><td>–</td></tr>
+<tr><td>P0</td><td>8</td><td>V2</td><td>31 s</td><td>62 s</td><td>12,1 ms</td><td>22,0 ms</td><td>–</td></tr>
+<tr><td>P5 3↔6</td><td>12</td><td>V0</td><td>43 s</td><td>231 s</td><td>25,2 ms</td><td>34,7 ms</td><td>–</td></tr>
+<tr><td>P5 3↔6</td><td>12</td><td>V1</td><td>43 s</td><td>106 s</td><td>11,7 ms</td><td>14,9 ms</td><td>–</td></tr>
+<tr><td>P5 3↔6</td><td>12</td><td>V2</td><td>45 s</td><td>149 s</td><td>12,9 ms</td><td>33,4 ms</td><td>–</td></tr>
+<tr><td>P5 3↔9</td><td>18</td><td>V0</td><td>82 s</td><td>430 s</td><td>36,0 ms</td><td>48,5 ms</td><td>–</td></tr>
+<tr><td>P5 3↔9</td><td>18</td><td>V1</td><td>83 s</td><td>136 s</td><td>11,6 ms</td><td>14,9 ms</td><td>–</td></tr>
+<tr><td>P5 3↔9</td><td>18</td><td>V2</td><td>78 s</td><td>242 s</td><td>14,3 ms</td><td>51,0 ms</td><td>–</td></tr>
+<tr><td>P1 L (1 GB)</td><td>8</td><td>V0</td><td>36 s</td><td>100 s</td><td>23,2 ms</td><td>29 ms</td><td>~12 MB/s</td></tr>
+<tr><td>P2 L (5 GB)</td><td>8</td><td>V0</td><td>40 s</td><td>140 s</td><td>33,4 ms</td><td>40 ms</td><td>~20 MB/s</td></tr>
+<tr><td>P3 L (8 GB)</td><td>8</td><td>V0</td><td>34 s</td><td>172 s</td><td>41,4 ms</td><td>49 ms</td><td>~21 MB/s</td></tr>
+<tr><td>P6 L (8 GB, 3↔6)</td><td>12</td><td>V0</td><td>58 s</td><td>392 s</td><td>47,4 ms</td><td>57 ms</td><td>~21 MB/s</td></tr>
+<tr><td>P3 N (8 GB)</td><td>8</td><td>V0</td><td>34 s</td><td>157 / 165 s</td><td>37,1 / 39,5 ms</td><td>47 ms</td><td>–</td></tr>
+<tr><td>P6 N (8 GB, 3↔6)</td><td>12</td><td>V0</td><td>51 s</td><td>366 / 387 s</td><td>43,1 / 46,2 ms</td><td>55 ms</td><td>–</td></tr>
+<tr><td>P4 N (8 GB, 10 KB)</td><td>8</td><td>V0</td><td>35 s</td><td>108 / 110 s</td><td>24,7 / 25,2 ms</td><td>32 ms</td><td>~70 MB/s</td></tr>
+<tr><td>P4 L (8 GB, 10 KB)</td><td>8</td><td>V0</td><td>36 s</td><td>113 / 112 s</td><td>26,4 / 26,2 ms</td><td>32 ms</td><td>~60 MB/s</td></tr>
+<tr><td>P3 L</td><td>8</td><td>V3 (partia 10)</td><td>37 s</td><td>264 / 262 s</td><td>65,4 ms</td><td>75 ms</td><td>~11 MB/s</td></tr>
+<tr><td>P3 L</td><td>8</td><td>V4 (partia 1000)</td><td>34 s</td><td>141 / 142 s</td><td>34,2 ms</td><td>40 ms</td><td>~32 MB/s</td></tr>
+<tr><td>P3 L</td><td>8</td><td>V1 (etap 6)</td><td>37 s</td><td>121 / 121 s</td><td>29,9 ms</td><td>36 ms</td><td>–</td></tr>
+<tr><td>P3 L</td><td>8</td><td>R100 / R10 (<code>redis-cli</code>)</td><td>–</td><td>114 / 224 s</td><td>27,8 / 54,5 ms (średnio)</td><td>–</td><td>–</td></tr>
+</tbody></table></div>
+<p class="note"><code>wait</code> to mediana z kierunku „w górę”; przy powrocie ~0,3 s.</p>
+</main></body></html>

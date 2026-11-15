@@ -1,0 +1,630 @@
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V0: OPERATOR_IMAGE POD_NAMESPACE
+bulk-0-0 OK
+bulk-1-0 OK
+bulk-2-0 OK
+8         Connections per thread
+3125      Requests per client
+
+
+ALL STATS
+======================================================================================================================================================
+Type         Ops/sec     Hits/sec   Misses/sec    MOVED/sec      ASK/sec    Avg. Latency     p50 Latency     p99 Latency   p99.9 Latency       KB/sec 
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Sets        34037.71          ---          ---         0.00         0.00         1.76099         1.59100         3.85500        12.54300     34798.53 
+Gets            0.00         0.00         0.00         0.00         0.00             ---             ---             ---             ---         0.00 
+Waits           0.00          ---          ---          ---          ---             ---             ---             ---             ---          --- 
+Totals      34037.71         0.00         0.00         0.00         0.00         1.76099         1.59100         3.85500        12.54300     34798.53 
+
+masters: 100000 keys (+100000), 0.11 GiB used (+0.11); 1147 bytes per key
+key size: 1147 bytes per key of 1000 B
+bulk-0-0 OK
+bulk-1-0 OK
+bulk-2-0 OK
+8         Connections per thread
+27245     Requests per client
+
+
+ALL STATS
+======================================================================================================================================================
+Type         Ops/sec     Hits/sec   Misses/sec    MOVED/sec      ASK/sec    Avg. Latency     p50 Latency     p99 Latency   p99.9 Latency       KB/sec 
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Sets        54254.93          ---          ---         0.00         0.00         1.68694         1.55900         3.59900        12.28700     55519.78 
+Gets            0.00         0.00         0.00         0.00         0.00             ---             ---             ---             ---         0.00 
+Waits           0.00          ---          ---          ---          ---             ---             ---             ---             ---          --- 
+Totals      54254.93         0.00         0.00         0.00         0.00         1.68694         1.55900         3.59900        12.28700     55519.78 
+
+masters: 871839 keys (+871839), 0.91 GiB used (+0.90); 1110 bytes per key
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 4 shards, 871839 keys, 0.91 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P1-L-V0-r1-3to4	stage=3	point=P1-L	variant=V0	rep=1	start=15:29:31	shards=3->4	keys=871839	GiB=0.91	slots=4096	local_slots=4096	total_s=140	wait_s=39.6	move_s=101.0	c_slot_ms=23.3	p90_ms=28.9	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794756511974&to=1794756772000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+4 -> 3 shards, 871839 keys, 0.92 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P1-L-V0-r1-4to3	stage=3	point=P1-L	variant=V0	rep=1	start=15:34:02	shards=4->3	keys=871839	GiB=0.92	slots=4096	local_slots=4096	total_s=101	wait_s=0.4	move_s=100.5	c_slot_ms=23.3	p90_ms=29.1	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794756782414&to=1794757003000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 4 shards, 871839 keys, 0.91 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P1-L-V0-r2-3to4	stage=3	point=P1-L	variant=V0	rep=2	start=15:37:37	shards=3->4	keys=871839	GiB=0.91	slots=4096	local_slots=4096	total_s=133	wait_s=33.0	move_s=100.9	c_slot_ms=23.2	p90_ms=29.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794756997761&to=1794757251000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+4 -> 3 shards, 871839 keys, 0.92 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P1-L-V0-r2-4to3	stage=3	point=P1-L	variant=V0	rep=2	start=15:42:01	shards=4->3	keys=871839	GiB=0.92	slots=4096	local_slots=4096	total_s=98	wait_s=0.5	move_s=98.7	c_slot_ms=22.8	p90_ms=28.8	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794757261601&to=1794757480000
+8         Connections per thread
+136225    Requests per client
+
+
+ALL STATS
+======================================================================================================================================================
+Type         Ops/sec     Hits/sec   Misses/sec    MOVED/sec      ASK/sec    Avg. Latency     p50 Latency     p99 Latency   p99.9 Latency       KB/sec 
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Sets        56557.41          ---          ---         0.00         0.00         1.66904         1.55100         3.51900        12.35100     57924.13 
+Gets            0.00         0.00         0.00         0.00         0.00             ---             ---             ---             ---         0.00 
+Waits           0.00          ---          ---          ---          ---             ---             ---             ---             ---          --- 
+Totals      56557.41         0.00         0.00         0.00         0.00         1.66904         1.55100         3.51900        12.35100     57924.13 
+
+masters: 4359197 keys (+3487358), 4.53 GiB used (+3.62); 1115 bytes per key
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 4 shards, 4359197 keys, 4.53 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P2-L-V0-r1-3to4	stage=3	point=P2-L	variant=V0	rep=1	start=15:47:24	shards=3->4	keys=4359197	GiB=4.53	slots=4096	local_slots=4096	total_s=189	wait_s=46.5	move_s=142.2	c_slot_ms=33.8	p90_ms=41.4	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794757584316&to=1794757893000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+4 -> 3 shards, 4359197 keys, 4.55 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P2-L-V0-r1-4to3	stage=3	point=P2-L	variant=V0	rep=1	start=15:52:44	shards=4->3	keys=4359197	GiB=4.55	slots=4096	local_slots=4096	total_s=142	wait_s=0.4	move_s=141.5	c_slot_ms=33.6	p90_ms=40.6	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794757904216&to=1794758166000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 4 shards, 4359197 keys, 4.53 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P2-L-V0-r2-3to4	stage=3	point=P2-L	variant=V0	rep=2	start=15:57:01	shards=3->4	keys=4359197	GiB=4.53	slots=4096	local_slots=4096	total_s=172	wait_s=34.0	move_s=138.3	c_slot_ms=33.1	p90_ms=39.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794758161361&to=1794758453000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+4 -> 3 shards, 4359197 keys, 4.55 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P2-L-V0-r2-4to3	stage=3	point=P2-L	variant=V0	rep=2	start=16:02:02	shards=4->3	keys=4359197	GiB=4.55	slots=4096	local_slots=4096	total_s=138	wait_s=0.3	move_s=138.2	c_slot_ms=32.8	p90_ms=39.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794758462741&to=1794758721000
+8         Connections per thread
+217960    Requests per client
+
+
+ALL STATS
+======================================================================================================================================================
+Type         Ops/sec     Hits/sec   Misses/sec    MOVED/sec      ASK/sec    Avg. Latency     p50 Latency     p99 Latency   p99.9 Latency       KB/sec 
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Sets        55374.22          ---          ---         0.00         0.00         1.71227         1.59100         3.59900        12.09500     56717.51 
+Gets            0.00         0.00         0.00         0.00         0.00             ---             ---             ---             ---         0.00 
+Waits           0.00          ---          ---          ---          ---             ---             ---             ---             ---          --- 
+Totals      55374.22         0.00         0.00         0.00         0.00         1.71227         1.59100         3.59900        12.09500     56717.51 
+
+masters: 6974716 keys (+2615519), 7.31 GiB used (+2.78); 1142 bytes per key
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 4 shards, 6974716 keys, 7.27 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P3-L-V0-r1-3to4	stage=3	point=P3-L	variant=V0	rep=1	start=16:08:54	shards=3->4	keys=6974716	GiB=7.27	slots=4096	local_slots=4096	total_s=208	wait_s=34.3	move_s=173.5	c_slot_ms=41.8	p90_ms=49.9	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794758874306&to=1794759202000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+4 -> 3 shards, 6974716 keys, 7.29 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P3-L-V0-r1-4to3	stage=3	point=P3-L	variant=V0	rep=1	start=16:14:35	shards=4->3	keys=6974716	GiB=7.29	slots=4096	local_slots=4096	total_s=175	wait_s=0.4	move_s=175.4	c_slot_ms=42.2	p90_ms=50.0	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794759215824&to=1794759511000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 4 shards, 6974716 keys, 7.27 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P3-L-V0-r2-3to4	stage=3	point=P3-L	variant=V0	rep=2	start=16:19:30	shards=3->4	keys=6974716	GiB=7.27	slots=4096	local_slots=4096	total_s=204	wait_s=34.1	move_s=170.0	c_slot_ms=40.9	p90_ms=48.4	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794759510028&to=1794759834000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=4
+4 -> 3 shards, 6974716 keys, 7.29 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=4096
+run=S3-P3-L-V0-r2-4to3	stage=3	point=P3-L	variant=V0	rep=2	start=16:25:30	shards=4->3	keys=6974716	GiB=7.29	slots=4096	local_slots=4096	total_s=169	wait_s=0.6	move_s=168.9	c_slot_ms=40.9	p90_ms=48.1	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794759870176&to=1794760159000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 6 shards, 6974716 keys, 7.27 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=6
+slots by node route: u0c-uk3->u0c-uk3=8192
+run=S3-P6-L-V0-r1-3to6	stage=3	point=P6-L	variant=V0	rep=1	start=16:30:15	shards=3->6	keys=6974716	GiB=7.27	slots=8192	local_slots=8192	total_s=456	wait_s=57.5	move_s=399.2	c_slot_ms=48.1	p90_ms=57.8	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3 bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794760155047&to=1794760731000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+bulk-4: master bulk-4-0@talos-u0c-uk3 ok
+bulk-5: master bulk-5-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=6
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=6
+6 -> 3 shards, 6974716 keys, 7.33 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=8192
+run=S3-P6-L-V0-r1-6to3	stage=3	point=P6-L	variant=V0	rep=1	start=16:40:29	shards=6->3	keys=6974716	GiB=7.33	slots=8192	local_slots=8192	total_s=394	wait_s=0.6	move_s=393.5	c_slot_ms=47.4	p90_ms=56.0	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3 bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794760769117&to=1794761283000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+3 -> 6 shards, 6974716 keys, 7.27 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=6
+slots by node route: u0c-uk3->u0c-uk3=8192
+run=S3-P6-L-V0-r2-3to6	stage=3	point=P6-L	variant=V0	rep=2	start=16:49:01	shards=3->6	keys=6974716	GiB=7.27	slots=8192	local_slots=8192	total_s=446	wait_s=57.4	move_s=389.1	c_slot_ms=47.1	p90_ms=55.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3 bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794761281217&to=1794761847000
+bulk-0: master bulk-0-0@talos-u0c-uk3 ok
+bulk-1: master bulk-1-0@talos-u0c-uk3 ok
+bulk-2: master bulk-2-0@talos-u0c-uk3 ok
+bulk-3: master bulk-3-0@talos-u0c-uk3 ok
+bulk-4: master bulk-4-0@talos-u0c-uk3 ok
+bulk-5: master bulk-5-0@talos-u0c-uk3 ok
+Layout L:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=6
+Pods before:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=6
+6 -> 3 shards, 6974716 keys, 7.33 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     master  talos-u0c-uk3
+  bulk-0-1     slave   talos-wdp-fwu
+  bulk-1-0     master  talos-u0c-uk3
+  bulk-1-1     slave   talos-sad-s24
+  bulk-2-0     master  talos-u0c-uk3
+  bulk-2-1     slave   talos-u0c-uk3
+  masters per node: talos-u0c-uk3=3
+slots by node route: u0c-uk3->u0c-uk3=8192
+run=S3-P6-L-V0-r2-6to3	stage=3	point=P6-L	variant=V0	rep=2	start=16:59:05	shards=6->3	keys=6974716	GiB=7.33	slots=8192	local_slots=8192	total_s=387	wait_s=0.5	move_s=387.6	c_slot_ms=47.0	p90_ms=55.3	pauses=0	pauses_s=0.0	masters_before=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3 bulk-3-0@u0c-uk3 bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	masters_after=bulk-0-0@u0c-uk3 bulk-1-0@u0c-uk3 bulk-2-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794761885689&to=1794762393000
+stage 3 done

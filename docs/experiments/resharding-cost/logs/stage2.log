@@ -1,0 +1,773 @@
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V0: OPERATOR_IMAGE POD_NAMESPACE
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 4 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-wdp-fwu=1
+slots by node route: sad-s24->wdp-fwu=4096
+run=S2-P0-V0-r1-3to4	stage=2	point=P0	variant=V0	rep=1	start=12:56:06	shards=3->4	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=116	wait_s=30.8	move_s=85.9	c_slot_ms=18.5	p90_ms=24.1	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794747306058&to=1794747542000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-wdp-fwu=1
+4 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: wdp-fwu->sad-s24=4096
+run=S2-P0-V0-r1-4to3	stage=2	point=P0	variant=V0	rep=1	start=12:59:47	shards=4->3	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=82	wait_s=0.5	move_s=82.7	c_slot_ms=17.8	p90_ms=24.1	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794747527583&to=1794747730000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V1: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 4 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+slots by node route: sad-s24->u0c-uk3=4096
+run=S2-P0-V1-r1-3to4	stage=2	point=P0	variant=V1	rep=1	start=13:03:22	shards=3->4	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=83	wait_s=30.6	move_s=52.8	c_slot_ms=11.6	p90_ms=14.2	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794747742767&to=1794747946000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+4 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=4096
+run=S2-P0-V1-r1-4to3	stage=2	point=P0	variant=V1	rep=1	start=13:06:26	shards=4->3	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=56	wait_s=0.4	move_s=56.2	c_slot_ms=12.5	p90_ms=14.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794747926922&to=1794748103000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V2: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 4 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+slots by node route: sad-s24->u0c-uk3=4096
+run=S2-P0-V2-r1-3to4	stage=2	point=P0	variant=V2	rep=1	start=13:09:34	shards=3->4	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=93	wait_s=30.9	move_s=62.3	c_slot_ms=11.7	p90_ms=21.6	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794748114245&to=1794748327000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+4 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=4096
+run=S2-P0-V2-r1-4to3	stage=2	point=P0	variant=V2	rep=1	start=13:12:50	shards=4->3	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=62	wait_s=0.3	move_s=62.0	c_slot_ms=12.3	p90_ms=20.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794748310308&to=1794748492000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V1: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 6 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=2, talos-wdp-fwu=1
+slots by node route: sad-s24->u0c-uk3=5462, sad-s24->wdp-fwu=2730
+run=S2-P5-V1-r1-3to6	stage=2	point=P5	variant=V1	rep=1	start=13:16:03	shards=3->6	keys=0	GiB=0.01	slots=8192	local_slots=0	total_s=145	wait_s=37.1	move_s=107.7	c_slot_ms=12.0	p90_ms=15.0	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794748503410&to=1794748768000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=2, talos-wdp-fwu=1
+6 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=5462, wdp-fwu->sad-s24=2730
+run=S2-P5-V1-r1-6to3	stage=2	point=P5	variant=V1	rep=1	start=13:20:30	shards=6->3	keys=0	GiB=0.01	slots=8192	local_slots=0	total_s=107	wait_s=0.3	move_s=107.0	c_slot_ms=12.2	p90_ms=14.8	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794748770463&to=1794748997000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V2: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 6 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=4, talos-u0c-uk3=2
+slots by node route: sad-s24->sad-s24=2731, sad-s24->u0c-uk3=5461
+run=S2-P5-V2-r1-3to6	stage=2	point=P5	variant=V2	rep=1	start=13:24:31	shards=3->6	keys=0	GiB=0.01	slots=8192	local_slots=2731	total_s=194	wait_s=45.0	move_s=149.9	c_slot_ms=12.7	p90_ms=33.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3 bulk-4-0@sad-s24 bulk-5-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794749011921&to=1794749326000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=4, talos-u0c-uk3=2
+6 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: sad-s24->sad-s24=2731, u0c-uk3->sad-s24=5461
+run=S2-P5-V2-r1-6to3	stage=2	point=P5	variant=V2	rep=1	start=13:29:45	shards=6->3	keys=0	GiB=0.01	slots=8192	local_slots=2731	total_s=148	wait_s=0.5	move_s=148.0	c_slot_ms=13.1	p90_ms=31.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3 bulk-4-0@sad-s24 bulk-5-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794749325881&to=1794749594000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V1: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 9 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=4, talos-u0c-uk3=4, talos-wdp-fwu=1
+slots by node route: sad-s24->sad-s24=1821, sad-s24->u0c-uk3=7282, sad-s24->wdp-fwu=1820
+run=S2-P5-V1-r1-3to9	stage=2	point=P5	variant=V1	rep=1	start=13:34:26	shards=3->9	keys=0	GiB=0.01	slots=10923	local_slots=1821	total_s=220	wait_s=87.6	move_s=132.7	c_slot_ms=11.0	p90_ms=14.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@sad-s24 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794749606152&to=1794749946000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=4, talos-u0c-uk3=4, talos-wdp-fwu=1
+9 -> 3 shards, 0 keys, 0.02 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: sad-s24->sad-s24=1821, u0c-uk3->sad-s24=7282, wdp-fwu->sad-s24=1820
+run=S2-P5-V1-r1-9to3	stage=2	point=P5	variant=V1	rep=1	start=13:40:28	shards=9->3	keys=0	GiB=0.02	slots=10923	local_slots=1821	total_s=138	wait_s=0.4	move_s=138.9	c_slot_ms=12.1	p90_ms=15.1	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@sad-s24 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794749968562&to=1794750227000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V2: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 9 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=6
+slots by node route: sad-s24->u0c-uk3=10923
+run=S2-P5-V2-r1-3to9	stage=2	point=P5	variant=V2	rep=1	start=13:45:02	shards=3->9	keys=0	GiB=0.01	slots=10923	local_slots=0	total_s=321	wait_s=73.7	move_s=247.3	c_slot_ms=13.9	p90_ms=54.8	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3 bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794750242396&to=1794750683000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=6
+9 -> 3 shards, 0 keys, 0.02 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=10923
+run=S2-P5-V2-r1-9to3	stage=2	point=P5	variant=V2	rep=1	start=13:52:47	shards=9->3	keys=0	GiB=0.02	slots=10923	local_slots=0	total_s=239	wait_s=0.3	move_s=239.9	c_slot_ms=14.8	p90_ms=48.4	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3 bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794750707518&to=1794751067000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V0: OPERATOR_IMAGE POD_NAMESPACE
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 4 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+slots by node route: sad-s24->u0c-uk3=4096
+run=S2-P0-V0-r2-3to4	stage=2	point=P0	variant=V0	rep=2	start=13:59:02	shards=3->4	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=117	wait_s=30.7	move_s=87.3	c_slot_ms=19.4	p90_ms=24.9	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794751082619&to=1794751320000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+4 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=4096
+run=S2-P0-V0-r2-4to3	stage=2	point=P0	variant=V0	rep=2	start=14:02:48	shards=4->3	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=89	wait_s=0.3	move_s=88.6	c_slot_ms=19.9	p90_ms=25.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794751308110&to=1794751517000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V1: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 4 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-wdp-fwu=1
+slots by node route: sad-s24->wdp-fwu=4096
+run=S2-P0-V1-r2-3to4	stage=2	point=P0	variant=V1	rep=2	start=14:06:28	shards=3->4	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=79	wait_s=31.1	move_s=49.3	c_slot_ms=10.6	p90_ms=14.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794751528583&to=1794751728000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-wdp-fwu=1
+4 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: wdp-fwu->sad-s24=4096
+run=S2-P0-V1-r2-4to3	stage=2	point=P0	variant=V1	rep=2	start=14:09:35	shards=4->3	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=48	wait_s=0.3	move_s=48.5	c_slot_ms=10.0	p90_ms=15.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794751715569&to=1794751884000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V2: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 4 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+slots by node route: sad-s24->u0c-uk3=4096
+run=S2-P0-V2-r2-3to4	stage=2	point=P0	variant=V2	rep=2	start=14:12:39	shards=3->4	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=93	wait_s=30.7	move_s=62.6	c_slot_ms=11.8	p90_ms=23.5	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794751899372&to=1794752112000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=1
+4 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=4096
+run=S2-P0-V2-r2-4to3	stage=2	point=P0	variant=V2	rep=2	start=14:15:57	shards=4->3	keys=0	GiB=0.01	slots=4096	local_slots=0	total_s=62	wait_s=0.4	move_s=61.9	c_slot_ms=12.3	p90_ms=22.3	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794752097402&to=1794752279000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V1: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 6 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-wdp-fwu
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=4, talos-wdp-fwu=2
+slots by node route: sad-s24->sad-s24=2731, sad-s24->wdp-fwu=5461
+run=S2-P5-V1-r2-3to6	stage=2	point=P5	variant=V1	rep=2	start=14:19:11	shards=3->6	keys=0	GiB=0.01	slots=8192	local_slots=2731	total_s=152	wait_s=48.7	move_s=104.1	c_slot_ms=11.4	p90_ms=15.0	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@sad-s24 bulk-5-0@wdp-fwu	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794752291143&to=1794752563000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-wdp-fwu
+  bulk-5-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=4, talos-wdp-fwu=2
+6 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: sad-s24->sad-s24=2731, wdp-fwu->sad-s24=5461
+run=S2-P5-V1-r2-6to3	stage=2	point=P5	variant=V1	rep=2	start=14:23:42	shards=6->3	keys=0	GiB=0.01	slots=8192	local_slots=2731	total_s=98	wait_s=0.4	move_s=98.2	c_slot_ms=10.7	p90_ms=14.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@sad-s24 bulk-5-0@wdp-fwu	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794752562182&to=1794752780000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V2: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 6 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=2, talos-wdp-fwu=1
+slots by node route: sad-s24->u0c-uk3=5462, sad-s24->wdp-fwu=2730
+run=S2-P5-V2-r2-3to6	stage=2	point=P5	variant=V2	rep=2	start=14:27:33	shards=3->6	keys=0	GiB=0.01	slots=8192	local_slots=0	total_s=193	wait_s=44.3	move_s=149.4	c_slot_ms=12.9	p90_ms=33.2	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794752793296&to=1794753106000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=2, talos-wdp-fwu=1
+6 -> 3 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=5462, wdp-fwu->sad-s24=2730
+run=S2-P5-V2-r2-6to3	stage=2	point=P5	variant=V2	rep=2	start=14:32:45	shards=6->3	keys=0	GiB=0.01	slots=8192	local_slots=0	total_s=148	wait_s=0.4	move_s=147.7	c_slot_ms=12.9	p90_ms=33.9	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794753105309&to=1794753373000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V1: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 9 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=4, talos-u0c-uk3=5
+slots by node route: sad-s24->sad-s24=1821, sad-s24->u0c-uk3=9102
+run=S2-P5-V1-r2-3to9	stage=2	point=P5	variant=V1	rep=2	start=14:37:24	shards=3->9	keys=0	GiB=0.01	slots=10923	local_slots=1821	total_s=211	wait_s=78.3	move_s=133.3	c_slot_ms=11.2	p90_ms=14.4	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3 bulk-4-0@sad-s24 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794753384554&to=1794753716000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-u0c-uk3
+  bulk-3-1     slave   talos-wdp-fwu
+  bulk-4-0     master  talos-sad-s24
+  bulk-4-1     slave   talos-u0c-uk3
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=4, talos-u0c-uk3=5
+9 -> 3 shards, 0 keys, 0.02 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: sad-s24->sad-s24=1821, u0c-uk3->sad-s24=9102
+run=S2-P5-V1-r2-9to3	stage=2	point=P5	variant=V1	rep=2	start=14:43:15	shards=9->3	keys=0	GiB=0.02	slots=10923	local_slots=1821	total_s=139	wait_s=0.7	move_s=138.8	c_slot_ms=12.1	p90_ms=15.2	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@u0c-uk3 bulk-4-0@sad-s24 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794753735276&to=1794753994000
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V2: OPERATOR_IMAGE POD_NAMESPACE RESHARD_REFRESH
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+3 -> 9 shards, 0 keys, 0.01 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=5, talos-wdp-fwu=1
+slots by node route: sad-s24->u0c-uk3=9103, sad-s24->wdp-fwu=1820
+run=S2-P5-V2-r2-3to9	stage=2	point=P5	variant=V2	rep=2	start=14:47:48	shards=3->9	keys=0	GiB=0.01	slots=10923	local_slots=0	total_s=325	wait_s=82.1	move_s=243.1	c_slot_ms=13.9	p90_ms=52.2	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794754008992&to=1794754454000
+Pods before:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  bulk-3-0     master  talos-wdp-fwu
+  bulk-3-1     slave   talos-u0c-uk3
+  bulk-4-0     master  talos-u0c-uk3
+  bulk-4-1     slave   talos-sad-s24
+  bulk-5-0     master  talos-u0c-uk3
+  bulk-5-1     slave   talos-wdp-fwu
+  bulk-6-0     master  talos-u0c-uk3
+  bulk-6-1     slave   talos-u0c-uk3
+  bulk-7-0     master  talos-u0c-uk3
+  bulk-7-1     slave   talos-u0c-uk3
+  bulk-8-0     master  talos-u0c-uk3
+  bulk-8-1     slave   talos-u0c-uk3
+  masters per node: talos-sad-s24=3, talos-u0c-uk3=5, talos-wdp-fwu=1
+9 -> 3 shards, 0 keys, 0.02 GiB; waiting for Balanced
+Pods after:
+  bulk-0-0     slave   talos-u0c-uk3
+  bulk-0-1     master  talos-sad-s24
+  bulk-1-0     slave   talos-u0c-uk3
+  bulk-1-1     master  talos-sad-s24
+  bulk-2-0     slave   talos-u0c-uk3
+  bulk-2-1     master  talos-sad-s24
+  masters per node: talos-sad-s24=3
+slots by node route: u0c-uk3->sad-s24=9103, wdp-fwu->sad-s24=1820
+run=S2-P5-V2-r2-9to3	stage=2	point=P5	variant=V2	rep=2	start=14:55:38	shards=9->3	keys=0	GiB=0.02	slots=10923	local_slots=0	total_s=240	wait_s=0.4	move_s=240.4	c_slot_ms=14.7	p90_ms=49.7	pauses=0	pauses_s=0.0	masters_before=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24 bulk-3-0@wdp-fwu bulk-4-0@u0c-uk3 bulk-5-0@u0c-uk3 bulk-6-0@u0c-uk3 bulk-7-0@u0c-uk3 bulk-8-0@u0c-uk3	masters_after=bulk-0-1@sad-s24 bulk-1-1@sad-s24 bulk-2-1@sad-s24	grafana=http://localhost:3000/d/redis-operator-cluster?var-namespace=redis-play&var-cluster=bulk&from=1794754478097&to=1794754838000
+stage 2 done
+deployment.apps/redis-operator-controller-manager env updated
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "redis-operator-controller-manager" rollout to finish: 1 old replicas are pending termination...
+deployment "redis-operator-controller-manager" successfully rolled out
+variant V0: OPERATOR_IMAGE POD_NAMESPACE

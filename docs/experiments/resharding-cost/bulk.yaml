@@ -1,0 +1,60 @@
+# The cluster of the resharding-cost experiment, apart from store.
+# Phase 1 (P0, P5, no data): memory 1Gi. Phase 2 (P1-P4, P6): 5Gi (now),
+# a rolling update: 8 GB of data on 3 masters is ~2.7 GB
+# each, maxmemory 75 % of 5Gi = ~3.75 GB, so ~28 % room; 12 Pods fit for P6.
+# requests = limits: the scheduler reserves the memory, no OOM from overcommit.
+apiVersion: redis.operator.com/v1
+kind: RedisCluster
+metadata:
+  name: bulk
+  namespace: redis-play
+spec:
+  shards: 3
+  instancesPerShard: 2
+  image: registry.homelab/library/redis:7.2
+  affinity:
+    podAntiAffinityType: preferred
+  acl:
+    defaultUser: disabled
+  monitoring:
+    enabled: true
+    image: registry.homelab/library/redis_exporter:v1.94.0
+  networkPolicy: {}
+  redis:
+    maxmemoryPolicy: noeviction
+    maxmemoryRatio: 75
+    persistence: aof
+    parameters:
+      latency-monitor-threshold: "100"
+  resources:
+    # requests.cpu also restarts every Pod when changed (a new Instance
+    # Manager from the operator image): parameters do not, CONFIG SET applies them.
+    requests: {cpu: "1", memory: 5Gi}
+    limits: {memory: 5Gi}
+  # NVMe only. 20Gi per Pod: a master of P3/P4 holds ~3.3 GB (~5 GB after
+  # 4->3); during an AOF rewrite the old base + incremental files + the new
+  # base take up to ~3x the dataset, so ~10-15 GB at worst. Set at creation:
+  # the PVCs do not grow with the template. 18 Pods (P5, 3->9) x 20Gi = 360Gi
+  # of ~1 TiB schedulable on the nvme disks. longhorn-nvme-local keeps the one
+  # replica on the node of the Pod: AOF writes do not share 1 GbE with MIGRATE.
+  storage:
+    volumeClaimTemplate:
+      size: 20Gi
+      storageClassName: longhorn-nvme-local
+  tls:
+    enabled: true
+    clientAuth: none
+---
+apiVersion: redis.operator.com/v1
+kind: RedisUser
+metadata:
+  name: bulk-load
+  namespace: redis-play
+spec:
+  targetRef:
+    kind: RedisCluster
+    name: bulk
+  authentication:
+    generate: true
+  acl:
+    rules: ["~*", "+@all", "-@dangerous"]

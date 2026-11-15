@@ -3316,17 +3316,27 @@
   },
   {
    "type": "timeseries",
-   "title": "Slow log entries",
-   "description": "Commands slower than slowlog-log-slower-than (10 ms); read them with SLOWLOG GET",
+   "title": "Slow log: new entries and the last one",
+   "description": "Commands slower than slowlog-log-slower-than (10 ms): how many were added when, and how long the newest one took. The command and its arguments: SLOWLOG GET",
    "targets": [
     {
      "datasource": {
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max by (pod) (redis_slowlog_length{namespace=\"$namespace\",redis_instance=\"$instance\"})",
-     "legendFormat": "{{pod}}",
+     "expr": "sum by (pod) (increase(redis_slowlog_last_id{namespace=\"$namespace\",redis_instance=\"$instance\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}} new entries",
      "refId": "A",
+     "range": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_last_slow_execution_duration_seconds{namespace=\"$namespace\",redis_instance=\"$instance\"}) * 1000",
+     "legendFormat": "{{pod}} last took (ms)",
+     "refId": "B",
      "range": true
     }
    ],

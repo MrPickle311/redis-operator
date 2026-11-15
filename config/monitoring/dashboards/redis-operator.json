@@ -90,6 +90,20 @@
     "titleFormat": "Alerts",
     "textFormat": "{{alertname}} ({{severity}})",
     "useValueForTime": false
+   },
+   {
+    "name": "Experiment runs",
+    "datasource": {
+     "type": "loki",
+     "uid": "${loki}"
+    },
+    "enable": true,
+    "iconColor": "#ff9830",
+    "expr": "{job=\"reshard-cost\"} | logfmt | line_format `{{.event}} {{.run}} {{.note}}`",
+    "target": {
+     "expr": "{job=\"reshard-cost\"} | logfmt | line_format `{{.event}} {{.run}} {{.note}}`",
+     "refId": "Anno"
+    }
    }
   ]
  },

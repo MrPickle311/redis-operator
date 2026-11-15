@@ -16,7 +16,7 @@ spec:
   podMetricsEndpoints:
   - port: metrics
     # Often enough for the dashboards to show a switchover, which takes seconds.
-    interval: 5s
+    interval: 1s
     relabelings:
     # instance is the address of the target in Prometheus, so other names.
     - sourceLabels: [__meta_kubernetes_pod_label_redis_operator_com_instance]

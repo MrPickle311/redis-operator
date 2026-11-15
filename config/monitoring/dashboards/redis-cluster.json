@@ -166,6 +166,20 @@
     "titleFormat": "Slots move",
     "textFormat": "Slots move",
     "useValueForTime": false
+   },
+   {
+    "name": "Experiment runs",
+    "datasource": {
+     "type": "loki",
+     "uid": "${loki}"
+    },
+    "enable": true,
+    "iconColor": "#ff9830",
+    "expr": "{job=\"reshard-cost\", namespace=\"$namespace\", cluster=\"$cluster\"} | logfmt | line_format `{{.event}} {{.run}} {{.note}}`",
+    "target": {
+     "expr": "{job=\"reshard-cost\", namespace=\"$namespace\", cluster=\"$cluster\"} | logfmt | line_format `{{.event}} {{.run}} {{.note}}`",
+     "refId": "Anno"
+    }
    }
   ]
  },
@@ -540,12 +554,199 @@
   },
   {
    "type": "row",
-   "title": "Resharding",
+   "title": "Experiment runs (hack/reshard-cost.py)",
    "collapsed": false,
    "id": 7,
    "gridPos": {
     "x": 0,
     "y": 11,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "type": "table",
+   "title": "Every run (click its id to open its window, \u00b11 min)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "timeFrom": "30d",
+   "description": "One row per run of hack/reshard-cost.py move: stage, point (P3-L: layout L), variant of the operator, repetition, shards, and what it measured. The run id opens this dashboard on the window of the run; the markers START and END are the annotation Experiment runs. Event INVALID (red): a run that must be left out, and why (Note): a duplicate runner, an interrupted run, a resharding that was not measured.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "refId": "A",
+     "queryType": "range",
+     "expr": "{job=\"reshard-cost\", namespace=\"$namespace\", cluster=\"$cluster\"} |~ \"event=(END|INVALID)\" | logfmt"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels"
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "labels": true,
+       "Line": true,
+       "tsNs": true,
+       "id": true,
+       "job": true,
+       "cluster": true,
+       "namespace": true,
+       "detected_level": true,
+       "service_name": true
+      },
+      "indexByName": {
+       "Time": 0,
+       "event": 1,
+       "run": 2,
+       "stage": 3,
+       "point": 4,
+       "variant": 5,
+       "rep": 6,
+       "shards": 7,
+       "wait_s": 8,
+       "move_s": 9,
+       "c_slot_ms": 10,
+       "local_slots": 11,
+       "masters": 12,
+       "note": 13
+      },
+      "renameByName": {
+       "Time": "End",
+       "run": "Run",
+       "stage": "Stage",
+       "point": "Point",
+       "variant": "Variant",
+       "rep": "Rep",
+       "shards": "Shards",
+       "wait_s": "Wait s",
+       "move_s": "Move s",
+       "c_slot_ms": "c_slot ms",
+       "local_slots": "Slots local",
+       "masters": "Masters before",
+       "event": "Event",
+       "note": "Note"
+      }
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "field": "End",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Run"
+      },
+      "properties": [
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Open the window of this run",
+          "url": "/d/redis-operator-cluster/?var-datasource=${datasource}&var-loki=${loki}&var-namespace=${namespace}&var-cluster=${cluster}&from=${__data.fields.from_ms}&to=${__data.fields.to_ms}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "from_ms|to_ms"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Event"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "END": {
+            "text": "ok",
+            "color": "green",
+            "index": 0
+           },
+           "INVALID": {
+            "text": "INVALID",
+            "color": "red",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 24,
+    "h": 9
+   },
+   "id": 8
+  },
+  {
+   "type": "row",
+   "title": "Resharding",
+   "collapsed": false,
+   "id": 9,
+   "gridPos": {
+    "x": 0,
+    "y": 21,
     "w": 24,
     "h": 1
    },
@@ -596,11 +797,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 12,
+    "y": 22,
     "w": 8,
     "h": 8
    },
-   "id": 8
+   "id": 10
   },
   {
    "type": "timeseries",
@@ -646,11 +847,11 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 12,
+    "y": 22,
     "w": 16,
     "h": 8
    },
-   "id": 9,
+   "id": 11,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -707,11 +908,11 @@
    "interval": "5s",
    "gridPos": {
     "x": 0,
-    "y": 20,
+    "y": 30,
     "w": 16,
     "h": 8
    },
-   "id": 10,
+   "id": 12,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -768,11 +969,283 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 20,
+    "y": 30,
     "w": 8,
     "h": 8
    },
-   "id": 11,
+   "id": 13,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Time per moved slot (from the log of the operator)",
+   "description": "1 s divided by the \"Moved slot\" lines of the last minute: everything one slot costs (MIGRATE of its keys, SETSLOT on both nodes, the status of every node read after it). Compare with the keys and bytes per slot on the right.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "refId": "A",
+     "queryType": "range",
+     "legendFormat": "ms per slot",
+     "expr": "1000 / sum(rate({namespace=\"redis-operator-system\", container=\"manager\"} |= `Moved slot` |= `\"RedisCluster\": {\"name\":\"$cluster\",\"namespace\":\"$namespace\"}` [1m]))"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 38,
+    "w": 12,
+    "h": 8
+   },
+   "id": 14
+  },
+  {
+   "type": "timeseries",
+   "title": "Keys and bytes per slot (average of the cluster)",
+   "description": "All keys (and dataset memory) of the masters over 16384: what an average slot carries. A slot of its own may hold more or less.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(redis_db_keys{namespace=\"$namespace\",redis_cluster=\"$cluster\",role=\"primary\"}) / 16384",
+     "legendFormat": "keys per slot",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(redis_memory_used_dataset_bytes{namespace=\"$namespace\",redis_cluster=\"$cluster\",role=\"primary\"}) / 16384 / 1024",
+     "legendFormat": "KiB per slot",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 38,
+    "w": 12,
+    "h": 8
+   },
+   "id": 15,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "logs",
+   "title": "Every moved slot, to the millisecond",
+   "description": "One line per slot, the time it was handed over: the gap to the line before is what that slot cost. The node log below leaves these lines out.",
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "expr": "{namespace=\"redis-operator-system\", container=\"manager\"} |= `Moved slot` |= `\"RedisCluster\": {\"name\":\"$cluster\",\"namespace\":\"$namespace\"}` | regexp `\"slot\": (?P<slot>\\d+), \"from\": \"(?P<from>[^\"]+)\", \"to\": \"(?P<to>[^\"]+)\"` | line_format `slot {{.slot}}  {{.from}} \u2192 {{.to}}`",
+     "refId": "A",
+     "queryType": "range"
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "sortOrder": "Ascending",
+    "wrapLogMessage": true,
+    "enableLogDetails": true,
+    "dedupStrategy": "none",
+    "prettifyLogMessage": false,
+    "showLabels": false
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 46,
+    "w": 24,
+    "h": 10
+   },
+   "id": 16
+  },
+  {
+   "type": "timeseries",
+   "title": "MIGRATE: time per call, on the sources",
+   "description": "One MIGRATE moves up to 100 keys and blocks the main thread of the source meanwhile: clients of that node wait as long. Mean from commandstats; p99 from Redis' latency histogram (buckets are powers of 2, so the p99 steps). Every call counts, not only those above slowlog-log-slower-than.",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "1000 * sum by (pod) (rate(redis_commands_duration_seconds_total{namespace=\"$namespace\",redis_cluster=\"$cluster\",cmd=\"migrate\"}[$__rate_interval])) / sum by (pod) (rate(redis_commands_total{namespace=\"$namespace\",redis_cluster=\"$cluster\",cmd=\"migrate\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}} mean",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "histogram_quantile(0.99, sum by (le, pod) (rate(redis_commands_latencies_usec_bucket{namespace=\"$namespace\",redis_cluster=\"$cluster\",cmd=\"migrate\"}[$__rate_interval]))) / 1000",
+     "legendFormat": "{{pod}} p99",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 56,
+    "w": 12,
+    "h": 8
+   },
+   "id": 17,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "MIGRATE calls per second, on the sources",
+   "description": "Calls per second; keys per second are at most 100 times more",
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (pod) (rate(redis_commands_total{namespace=\"$namespace\",redis_cluster=\"$cluster\",cmd=\"migrate\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 56,
+    "w": 12,
+    "h": 8
+   },
+   "id": 18,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -900,11 +1373,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 28,
+    "y": 64,
     "w": 24,
     "h": 5
    },
-   "id": 12,
+   "id": 19,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -914,10 +1387,10 @@
    "type": "row",
    "title": "Slot map",
    "collapsed": false,
-   "id": 13,
+   "id": 20,
    "gridPos": {
     "x": 0,
-    "y": 33,
+    "y": 69,
     "w": 24,
     "h": 1
    },
@@ -1030,11 +1503,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 34,
+    "y": 70,
     "w": 24,
     "h": 24
    },
-   "id": 14,
+   "id": 21,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -1044,10 +1517,10 @@
    "type": "row",
    "title": "Operations: everything the operator (and the Instance Managers) did to it",
    "collapsed": false,
-   "id": 15,
+   "id": 22,
    "gridPos": {
     "x": 0,
-    "y": 58,
+    "y": 94,
     "w": 24,
     "h": 1
    },
@@ -1107,11 +1580,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 59,
+    "y": 95,
     "w": 4,
     "h": 4
    },
-   "id": 16
+   "id": 23
   },
   {
    "type": "stat",
@@ -1167,11 +1640,11 @@
    },
    "gridPos": {
     "x": 4,
-    "y": 59,
+    "y": 95,
     "w": 4,
     "h": 4
    },
-   "id": 17
+   "id": 24
   },
   {
    "type": "stat",
@@ -1227,11 +1700,11 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 59,
+    "y": 95,
     "w": 4,
     "h": 4
    },
-   "id": 18
+   "id": 25
   },
   {
    "type": "stat",
@@ -1287,11 +1760,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 59,
+    "y": 95,
     "w": 4,
     "h": 4
    },
-   "id": 19
+   "id": 26
   },
   {
    "type": "stat",
@@ -1347,11 +1820,11 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 59,
+    "y": 95,
     "w": 4,
     "h": 4
    },
-   "id": 20
+   "id": 27
   },
   {
    "type": "stat",
@@ -1407,11 +1880,11 @@
    },
    "gridPos": {
     "x": 20,
-    "y": 59,
+    "y": 95,
     "w": 4,
     "h": 4
    },
-   "id": 21
+   "id": 28
   },
   {
    "type": "table",
@@ -1726,11 +2199,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 63,
+    "y": 99,
     "w": 24,
     "h": 10
    },
-   "id": 22
+   "id": 29
   },
   {
    "type": "timeseries",
@@ -1953,20 +2426,20 @@
    "interval": "1s",
    "gridPos": {
     "x": 0,
-    "y": 73,
+    "y": 109,
     "w": 24,
     "h": 7
    },
-   "id": 23
+   "id": 30
   },
   {
    "type": "row",
    "title": "Replication",
    "collapsed": false,
-   "id": 24,
+   "id": 31,
    "gridPos": {
     "x": 0,
-    "y": 80,
+    "y": 116,
     "w": 24,
     "h": 1
    },
@@ -2064,11 +2537,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 81,
+    "y": 117,
     "w": 24,
     "h": 12
    },
-   "id": 25,
+   "id": 32,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2118,11 +2591,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 93,
+    "y": 129,
     "w": 8,
     "h": 8
    },
-   "id": 26,
+   "id": 33,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2172,11 +2645,11 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 93,
+    "y": 129,
     "w": 8,
     "h": 8
    },
-   "id": 27,
+   "id": 34,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2234,11 +2707,11 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 93,
+    "y": 129,
     "w": 8,
     "h": 8
    },
-   "id": 28,
+   "id": 35,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2302,20 +2775,20 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 101,
+    "y": 137,
     "w": 24,
     "h": 5
    },
-   "id": 29
+   "id": 36
   },
   {
    "type": "row",
    "title": "Load and pressure",
    "collapsed": false,
-   "id": 30,
+   "id": 37,
    "gridPos": {
     "x": 0,
-    "y": 106,
+    "y": 142,
     "w": 24,
     "h": 1
    },
@@ -2365,11 +2838,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 107,
+    "y": 143,
     "w": 12,
     "h": 8
    },
-   "id": 31,
+   "id": 38,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2419,11 +2892,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 107,
+    "y": 143,
     "w": 12,
     "h": 8
    },
-   "id": 32,
+   "id": 39,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2473,11 +2946,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 115,
+    "y": 151,
     "w": 18,
     "h": 8
    },
-   "id": 33,
+   "id": 40,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2527,11 +3000,11 @@
    },
    "gridPos": {
     "x": 18,
-    "y": 115,
+    "y": 151,
     "w": 6,
     "h": 8
    },
-   "id": 34,
+   "id": 41,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2581,11 +3054,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 123,
+    "y": 159,
     "w": 12,
     "h": 8
    },
-   "id": 35,
+   "id": 42,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2635,11 +3108,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 123,
+    "y": 159,
     "w": 12,
     "h": 8
    },
-   "id": 36,
+   "id": 43,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2699,11 +3172,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 131,
+    "y": 167,
     "w": 12,
     "h": 8
    },
-   "id": 37,
+   "id": 44,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2773,11 +3246,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 131,
+    "y": 167,
     "w": 12,
     "h": 8
    },
-   "id": 38,
+   "id": 45,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2827,11 +3300,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 139,
+    "y": 175,
     "w": 12,
     "h": 8
    },
-   "id": 39,
+   "id": 46,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2888,11 +3361,11 @@
    "interval": "5s",
    "gridPos": {
     "x": 12,
-    "y": 139,
+    "y": 175,
     "w": 12,
     "h": 8
    },
-   "id": 40,
+   "id": 47,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -2966,11 +3439,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 147,
+    "y": 183,
     "w": 12,
     "h": 8
    },
-   "id": 41,
+   "id": 48,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3027,11 +3500,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 155,
+    "y": 191,
     "w": 24,
     "h": 4
    },
-   "id": 42,
+   "id": 49,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3041,10 +3514,10 @@
    "type": "row",
    "title": "Inside Redis",
    "collapsed": false,
-   "id": 43,
+   "id": 50,
    "gridPos": {
     "x": 0,
-    "y": 159,
+    "y": 195,
     "w": 24,
     "h": 1
    },
@@ -3101,11 +3574,11 @@
    "interval": "5s",
    "gridPos": {
     "x": 0,
-    "y": 160,
+    "y": 196,
     "w": 16,
     "h": 8
    },
-   "id": 44,
+   "id": 51,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3178,11 +3651,11 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 160,
+    "y": 196,
     "w": 8,
     "h": 8
    },
-   "id": 45,
+   "id": 52,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3232,11 +3705,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 168,
+    "y": 204,
     "w": 8,
     "h": 8
    },
-   "id": 46,
+   "id": 53,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3296,11 +3769,11 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 168,
+    "y": 204,
     "w": 8,
     "h": 8
    },
-   "id": 47,
+   "id": 54,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3350,11 +3823,11 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 168,
+    "y": 204,
     "w": 8,
     "h": 8
    },
-   "id": 48,
+   "id": 55,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3362,17 +3835,27 @@
   },
   {
    "type": "timeseries",
-   "title": "Slow log entries",
-   "description": "Commands slower than slowlog-log-slower-than (10 ms); read them with SLOWLOG GET",
+   "title": "Slow log: new entries and the last one",
+   "description": "Commands slower than slowlog-log-slower-than (10 ms): how many were added when, and how long the newest one took. The command and its arguments: SLOWLOG GET",
    "targets": [
     {
      "datasource": {
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "max by (pod) (redis_slowlog_length{namespace=\"$namespace\",redis_cluster=\"$cluster\"})",
-     "legendFormat": "{{pod}}",
+     "expr": "sum by (pod) (increase(redis_slowlog_last_id{namespace=\"$namespace\",redis_cluster=\"$cluster\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}} new entries",
      "refId": "A",
+     "range": true
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max by (pod) (redis_last_slow_execution_duration_seconds{namespace=\"$namespace\",redis_cluster=\"$cluster\"}) * 1000",
+     "legendFormat": "{{pod}} last took (ms)",
+     "refId": "B",
      "range": true
     }
    ],
@@ -3404,11 +3887,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 176,
+    "y": 212,
     "w": 6,
     "h": 8
    },
-   "id": 49,
+   "id": 56,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3458,11 +3941,11 @@
    },
    "gridPos": {
     "x": 6,
-    "y": 176,
+    "y": 212,
     "w": 6,
     "h": 8
    },
-   "id": 50,
+   "id": 57,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3512,11 +3995,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 176,
+    "y": 212,
     "w": 6,
     "h": 8
    },
-   "id": 51,
+   "id": 58,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3579,11 +4062,11 @@
    },
    "gridPos": {
     "x": 18,
-    "y": 176,
+    "y": 212,
     "w": 6,
     "h": 8
    },
-   "id": 52,
+   "id": 59,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3643,11 +4126,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 184,
+    "y": 220,
     "w": 12,
     "h": 8
    },
-   "id": 53,
+   "id": 60,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3720,11 +4203,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 184,
+    "y": 220,
     "w": 12,
     "h": 8
    },
-   "id": 54,
+   "id": 61,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3794,11 +4277,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 192,
+    "y": 228,
     "w": 12,
     "h": 8
    },
-   "id": 55,
+   "id": 62,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3808,10 +4291,10 @@
    "type": "row",
    "title": "Keys by type and size",
    "collapsed": false,
-   "id": 56,
+   "id": 63,
    "gridPos": {
     "x": 0,
-    "y": 200,
+    "y": 236,
     "w": 24,
     "h": 1
    },
@@ -3864,11 +4347,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 201,
+    "y": 237,
     "w": 10,
     "h": 10
    },
-   "id": 57
+   "id": 64
   },
   {
    "type": "timeseries",
@@ -3917,11 +4400,11 @@
    },
    "gridPos": {
     "x": 10,
-    "y": 201,
+    "y": 237,
     "w": 14,
     "h": 10
    },
-   "id": 58,
+   "id": 65,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -3931,10 +4414,10 @@
    "type": "row",
    "title": "Disk",
    "collapsed": false,
-   "id": 59,
+   "id": 66,
    "gridPos": {
     "x": 0,
-    "y": 211,
+    "y": 247,
     "w": 24,
     "h": 1
    },
@@ -3999,11 +4482,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 212,
+    "y": 248,
     "w": 8,
     "h": 8
    },
-   "id": 60,
+   "id": 67,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -4063,11 +4546,11 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 212,
+    "y": 248,
     "w": 8,
     "h": 8
    },
-   "id": 61,
+   "id": 68,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -4117,11 +4600,11 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 212,
+    "y": 248,
     "w": 4,
     "h": 8
    },
-   "id": 62,
+   "id": 69,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -4178,11 +4661,11 @@
    },
    "gridPos": {
     "x": 20,
-    "y": 212,
+    "y": 248,
     "w": 4,
     "h": 8
    },
-   "id": 63,
+   "id": 70,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -4192,10 +4675,10 @@
    "type": "row",
    "title": "Nodes",
    "collapsed": false,
-   "id": 64,
+   "id": 71,
    "gridPos": {
     "x": 0,
-    "y": 220,
+    "y": 256,
     "w": 24,
     "h": 1
    },
@@ -4231,11 +4714,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 221,
+    "y": 257,
     "w": 24,
     "h": 10
    },
-   "id": 65
+   "id": 72
   },
   {
    "type": "state-timeline",
@@ -4309,11 +4792,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 231,
+    "y": 267,
     "w": 24,
     "h": 10
    },
-   "id": 66,
+   "id": 73,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -4363,11 +4846,11 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 241,
+    "y": 277,
     "w": 12,
     "h": 8
    },
-   "id": 67,
+   "id": 74,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"
@@ -4420,11 +4903,11 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 241,
+    "y": 277,
     "w": 12,
     "h": 8
    },
-   "id": 68,
+   "id": 75,
    "datasource": {
     "type": "prometheus",
     "uid": "${datasource}"

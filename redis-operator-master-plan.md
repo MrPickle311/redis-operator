@@ -1172,3 +1172,18 @@ Dopisane 2026-11-02 (obserwacja z e2e 10.7). Raz podczas rolling update klient d
 ### RedisCluster: atomowa migracja slotów
 
 Dopisane 2026-11-02 (poza krokiem 10b). Nowsze Redisy (8.x, wersja do sprawdzenia) przenoszą slot jednym poleceniem po stronie serwera, bez `ASK`/`TRYAGAIN` dla klientów i bez stanu pośredniego, który gubi failover. Krok 10b celuje w 7.2, więc migracja klasyczna; przy podniesieniu minimalnej wersji Redisa IM może wybierać mechanizm po wersji.
+
+### RedisCluster: odzyskanie po zmianie IP wszystkich Podów
+
+Dopisane 2026-11-14 (obserwacja z homelaba). Awaria węzła zrestartowała wszystkie Pody `store` w trakcie reshardingu 12 → 3; każdy dostał nowe IP. Operator ponawiał reconcile bez działania, resharding stał na 685 slotach (`Waiting`), 8 replik nie było Ready. Naprawione ręcznie; potem operator sam dokończył resharding.
+
+Uzupełnienie 2026-11-15 (eksperyment `docs/experiments/resharding-cost`): stare własne IP (`myself` w `CLUSTER NODES` ≠ IP Poda) pojawia się nie tylko po awarii. Po restarcie klastra Kubernetes miał je 1 z 6 węzłów `bulk`, a po **zwykłym rolling update** (zmiana `resources.memory`) 5 z 6. Klaster był `Ready`, `cluster_state:ok`, repliki z linkiem `up`, więc nic tego nie zgłaszało; wyłapał to dopiero `hack/reshard-cost.py check`. Naprawa jak niżej: `CLUSTER MEET <IP Poda>` z węzła z poprawnym IP. Priorytet wyższy: dotyczy każdego rolling update, nie tylko awarii.
+
+Co operator przeoczył:
+1. **Nieaktualne adresy.** Etap MEET w `planCluster` (`internal/controller/clusterbootstrap.go`) rusza tylko, gdy node widzi mniej node'ów albo raportuje żywy node jako nieosiągalny. Nie ruszył, a mimo to: wiele node'ów miało w `CLUSTER NODES` stare własne IP (`myself`), a repliki `master_host` ze starym IP mastera i `master_link_status:down`. Ręcznie: `CLUSTER MEET <prawdziwe IP>` z poprawnego node'a do każdego Poda (naprawia `myself`), potem na każdej replice `CLUSTER REPLICATE <id mastera>` (sam MEET nie zmienia `replicaof`).
+2. **Osierocona flaga `MIGRATING`.** Źródło (`store-11-0`) trzymało `[12063->-<id>]` do ID, którego już nie ma (`fail,noaddr`, stare ID `store-2-0`); slot należał już do innego node'a, źródło miało w nim 0 kluczy. `moveSlots` czekał („a slot on the way to name a node of a shard”). Ręcznie: `CLUSTER SETSLOT 12063 STABLE` na źródle.
+
+**Rozwiązanie:**
+- `/status` IM zgłasza własne IP z `CLUSTER NODES` i stan linku repliki; operator porównuje z IP Poda i robi MEET, a dla repliki z linkiem `down` przy odpowiadającym masterze `CLUSTER REPLICATE`.
+- Flaga `MIGRATING`/`IMPORTING` do nieznanego albo `fail` ID, na slocie, którego node nie posiada (albo posiada z 0 kluczy) → `SETSLOT STABLE`, log i Event.
+- Testy: jednostkowe planowania, e2e w Kind (restart wszystkich Podów naraz z nowymi IP; przerwana migracja z usuniętym celem); akapit w `slot-migration-walkthrough.md` / `docs/architecture.md`.

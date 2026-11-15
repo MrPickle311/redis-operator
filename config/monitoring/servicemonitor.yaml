@@ -11,7 +11,7 @@ spec:
   endpoints:
   - path: /metrics
     # Often enough for the dashboards to show a switchover, which takes seconds.
-    interval: 5s
+    interval: 1s
     port: https
     scheme: https
     # The labels namespace and pod of redis_operator_* name the Redis Pods, not
